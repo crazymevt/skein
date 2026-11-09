@@ -7,7 +7,7 @@ Core IR is the small language left after macro expansion: only the special forms
 - **Every node carries a source location** (`node-location`), copied from the syntax object it came from, so later passes and the runtime can report `file:line:col`.
 - **Locals are alpha-renamed.** Each binding creates a fresh `local` object, and every reference points at that object. Two locals that share a name never share an object, so passes never need to think about shadowing.
 - **Globals are resolved.** A reference to a global is a `var-ref` holding the runtime var itself, not a name.
-- **Phase 0 Core IR is a tree, not ANF** (D-030). Arguments may be arbitrary nodes. An ANF pass that names every intermediate value is added before the C backend in Phase 1, where it pays for itself.
+- **Phase 0 Core IR is a tree, not ANF** (D-030). Arguments may be arbitrary nodes. An ANF pass that names every intermediate value is added before the C backend in Phase 1, where it pays for itself. The C backend (M1.2, D-044) does this as it emits: each node becomes C statements that leave its value in a fresh temporary.
 
 ## Locals
 

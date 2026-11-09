@@ -15,6 +15,14 @@ pub const TypeId = enum(u16) {
     invalid = 0,
     /// A boxed f64: one payload word holding its bits.
     f64 = 1,
+    /// An immutable UTF-8 string: payload word 0 is the byte length, the bytes follow.
+    string = 2,
+    /// An integer outside the fixnum range: payload word 0 is 1 if negative, then the
+    /// magnitude's 64-bit limbs, least significant first, with no leading zero limb.
+    bignum = 3,
+    /// A function: payload word 0 is its code pointer, word 1 its name (a C string).
+    /// Closures add their captured values after these (M1.4).
+    function = 4,
     _,
 };
 

@@ -113,6 +113,8 @@ The demo game, Driftrock, needs [SDL3](https://libsdl.org/) (on macOS: `brew ins
 ./skein dev examples/driftrock/main.skn   # the same, reloading code as you edit it
 ```
 
+`./skein build examples/fib.skn` compiles a program to a native executable with the Phase 1 C backend; so far it handles one-file programs using numbers, strings, functions, `if`, `let` and `loop`.
+
 `skein dev` reloads source files when you save them and serves a REPL on the terminal and on `localhost:5555`. [`docs/EDITORS.md`](docs/EDITORS.md) shows how to connect Emacs or VS Code. `make repl` starts SBCL itself with Skein loaded, for working on the host.
 
 ## File extension

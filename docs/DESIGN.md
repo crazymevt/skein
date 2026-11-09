@@ -753,6 +753,10 @@ Objects of 32 KiB and more live in the large-object space (§18.1), so 24 bits o
 - Global calls load from the var cell and call through it (one indirection). Sealed calls are direct.
 - The calling convention passes the argument count in a register for arity checks. Multiple values come back in registers plus an overflow area.
 
+Phase 1 details (D-044):
+- **Calling convention:** every compiled function has one C entry point, `sk_value f(sk_value self, uint32_t argc, const sk_value *argv)`. It picks the arity by `argc`, and `self` is the function object, through which it calls itself and, later, reaches captured values. A function object is a heap object holding the code pointer and the function's name.
+- **Vars** are C globals that start out `SK_UNBOUND`. A call through a var checks that it is bound. Calls to `skein.core` primitives (`+`, `<`, `println`, …) compile to direct runtime calls, with the fixnum cases inlined from `runtime/include/skein.h`.
+
 ### 17.4 Fibers and scheduler
 - Each fiber has its own fixed-size stack: reserved virtual memory with a guard page, committed by the OS only as pages are touched. The default reservation is 256 KB, configurable per spawn. Overflow signals a `stack-overflow` error in that fiber (§10). Freed stacks are pooled (D-024). Fibers switch stacks with hand-written assembly per architecture (x86_64 SysV, x86_64 Windows, arm64).
 - Each OS worker has a work-stealing deque, plus a global injection queue.
@@ -827,7 +831,7 @@ skein build --target x86_64-windows-gnu --profile release
 | `skein run <file-or-ns>` | run a program |
 | `skein dev` | run with file watching, hot reload and a REPL server (§15) |
 | `skein test` | run tests |
-| `skein build [--target T] [--profile P]` | compile a native executable |
+| `skein build [--target T] [--profile P]` | compile a native executable (Phase 1 so far: `skein build [--release] [--target T] [-o FILE] file.skn`, one file, numbers, strings and functions; D-044) |
 | `skein package` | create distributables |
 | `skein bindgen` | generate FFI bindings from C headers |
 | `skein fmt` | format code (Deferred) |

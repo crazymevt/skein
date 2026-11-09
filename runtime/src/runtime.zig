@@ -1,8 +1,10 @@
 //! The Skein runtime (DESIGN §17, §18), Phase 1. Compiled Skein code (from the C backend,
 //! M1.2) links against it.
 //!
-//! M1.1 provides the foundations: tagged values, the object header, per-thread bump
-//! allocation and the platform layer. The garbage collector, core data structures and
+//! M1.1 provided the foundations: tagged values, the object header, per-thread bump
+//! allocation and the platform layer. M1.2 adds what the first compiled programs need:
+//! strings, bignums and the number tower, printing, functions, and the C ABI in api.zig
+//! (declared in include/skein.h). The garbage collector, core data structures and
 //! conditions follow in M1.3–M1.5.
 
 const std = @import("std");
@@ -11,13 +13,30 @@ pub const platform = @import("platform");
 pub const value = @import("value.zig");
 pub const object = @import("object.zig");
 pub const heap = @import("heap.zig");
+pub const rt = @import("rt.zig");
+pub const num = @import("num.zig");
+pub const string = @import("string.zig");
+pub const func = @import("func.zig");
+pub const print = @import("print.zig");
+pub const api = @import("api.zig");
 
 pub const Value = value.Value;
+
+// Zig compiles only what is referenced; reference every C entry point so the static
+// library exports them all.
+comptime {
+    for (std.meta.declarations(api)) |name| _ = &@field(api, name);
+}
 
 test {
     std.testing.refAllDecls(@This());
     _ = value;
     _ = object;
     _ = heap;
+    _ = num;
+    _ = string;
+    _ = func;
+    _ = print;
+    _ = api;
     _ = @import("platform_test.zig");
 }

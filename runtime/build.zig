@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
         .root_module = runtime,
     });
     b.installArtifact(lib);
+    b.installFile("include/skein.h", "include/skein.h");
 
     const tests = b.addTest(.{ .root_module = runtime });
     const run_tests = b.addRunArtifact(tests);

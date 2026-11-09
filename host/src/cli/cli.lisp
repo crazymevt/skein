@@ -43,6 +43,9 @@ Commands:
           [--lib OS=FILE]... [-I DIR]... [--blocking C_NAME,...]
                    generate Skein FFI bindings from C headers (needs clang;
                    --lib takes macos, linux or windows, e.g. --lib linux=libfoo.so.1)
+  build [--release] [--target T] [-o FILE] [--keep-c] <file.skn>
+                   compile a program to a native executable with the C backend and
+                   Zig 0.17.1 (Phase 1: numbers, strings, functions, if/let/loop)
   repl             start a REPL
   dev [--port N | --no-server] <file.skn> [args...]
                    run a program like `run`, reload source files when they change, and
@@ -70,6 +73,33 @@ Commands:
         (let ((*print-pretty* nil))
           (cli-error +exit-failure+ "error: ~A~:[~;~%available restarts:~{~%  ~A~}~]"
                      condition restarts restarts))))))
+
+(defun command-build (args out)
+  (let ((profile :dev) (target nil) (output nil) (keep-c nil) (file nil))
+    (loop while args
+          do (let ((arg (pop args)))
+               (cond ((string= arg "--release") (setf profile :release))
+                     ((string= arg "--keep-c") (setf keep-c t))
+                     ((member arg '("--target" "-o") :test #'string=)
+                      (let ((v (or (pop args)
+                                   (cli-error +exit-usage+ "skein build: ~A needs a value" arg))))
+                        (if (string= arg "-o") (setf output v) (setf target v))))
+                     ((and (plusp (length arg)) (char= (char arg 0) #\-))
+                      (cli-error +exit-usage+ "skein build: unknown option ~A" arg))
+                     (file (cli-error +exit-usage+ "skein build: expected one file"))
+                     (t (setf file arg)))))
+    (unless file
+      (cli-error +exit-usage+ "skein build: expected a file, e.g. `skein build hello.skn`"))
+    (unless (probe-file file)
+      (cli-error +exit-failure+ "skein build: file not found: ~A" file))
+    (handler-case
+        (let ((exe (skein.backend.c:build-program file :output output :target target
+                                                       :profile profile :keep-c keep-c)))
+          (format out "built ~A~%" (uiop:native-namestring exe))
+          +exit-ok+)
+      (skein.runtime:skein-error (e)
+        (let ((*print-pretty* nil))
+          (cli-error +exit-failure+ "error: ~A" e))))))
 
 (defun command-dev (args out)
   (let ((port 5555))
@@ -183,6 +213,8 @@ see TOPLEVEL."
                (skein.repl:run-repl :in *standard-input* :out out))
               ((string= command "dev")
                (command-dev rest out))
+              ((string= command "build")
+               (command-build rest out))
               ((string= command "bindgen")
                (command-bindgen rest out)
                +exit-ok+)

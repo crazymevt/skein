@@ -367,3 +367,21 @@ Date: 2026-11-09 · Status: Accepted
   - Windows and Linux builds are cross-compiled locally to catch errors, but they only run in CI.
   - Upgrading Zig means updating `build.zig.zon`, the CI checksums and the README, and re-running everything.
   - Platform-specific behavior beyond these primitives (stack guards, signals, fibers) comes with the milestones that need it.
+
+## D-044: The C backend's first slice
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.2 compiles the first Skein programs natively: Core IR from the Phase 0 front end, turned into C11 and compiled with `zig cc` against the runtime.
+- **Decision:**
+  - **Emitter:** `skein.backend.c` (`host/src/backend-c/`) emits each IR node as C statements that leave its value in a fresh temporary. That is the ANF step CORE-IR.md planned, done during emission rather than as a separate IR pass. `if` becomes C `if`/`else`. `let` becomes C locals. `loop*` and `recur` become a label and a `goto` after the new values are computed. Nodes the slice doesn't cover are compile errors with the source location and the milestone that adds them: closures over locals and keywords in M1.4, conditions and non-local exits in M1.5, the rest of `skein.core` in M1.9.
+  - **Functions** use the calling convention of DESIGN §17.3 (`self`, `argc`, `argv`); `fn` forms become static C functions with a function object made at startup. **Vars** are C globals initialized to `SK_UNBOUND`. Strings, f64s and bignum literals are made once at startup. Fixnums, chars, f32s, `nil` and booleans are C constants.
+  - **Primitives:** calls to `skein.core` arithmetic, comparisons, `=`, `inc`/`dec`, predicates and `print`/`println`/`pr`/`prn` compile to runtime calls. `skein.h` inlines their fixnum fast paths on tagged words (overflow promotes to bignum through the runtime). Using a core function as a value is not supported yet.
+  - **Runtime C ABI:** `runtime/src/api.zig`, declared in `runtime/include/skein.h`. It adds strings, bignums (on Zig's `std.math.big.int`, limbs stored in heap objects), the number tower with Phase 0's contagion, printing that matches Phase 0 (including SBCL's float format), and function objects.
+  - **Compile time:** `skein build` runs `ns` and `defmacro` forms on the host at compile time and compiles everything else. Programs are one file, so requiring another namespace is an error until M1.9. A `-main` is called with no arguments after the top-level forms; a rest parameter is `nil` when there are no extra arguments.
+  - **Building:** `zig build` builds the runtime library into `.skein-cache/runtime/<target>-<mode>/` (ReleaseSafe for dev, ReleaseFast for `--release`), then `zig cc -std=c11` links the program against it. `--target` passes a zig target triple.
+  - **Errors:** until conditions exist (M1.5), a runtime error prints `error: <message>` (with the location where known) and exits with status 1.
+- **Alternatives:** a separate ANF IR pass (more code for the same result now); one C function per arity with dispatch tables (faster calls, more machinery than this slice needs); compiling the runtime from source into each program (slower builds).
+- **Consequences:**
+  - Native programs are checked against `skein run`: the tests build programs with `skein build`, run them, and compare their output.
+  - Natively, float overflow gives infinity where Phase 0 signals an error. Division by zero is an error in both.
+  - Mixed integer/float comparisons convert to f64.
+  - `fib 32` runs in 0.09 s natively, against 0.79 s for `skein run`, most of which is startup.

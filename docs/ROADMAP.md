@@ -19,7 +19,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.11 REPL, reload and dev loop | ✅ |
 | M0.12 Demo game | ✅ |
 | M1.1 Zig toolchain and runtime skeleton | ✅ |
-| M1.2 C backend, first slice | ⬜ |
+| M1.2 C backend, first slice | ✅ |
 | M1.3 Garbage collector | ⬜ |
 | M1.4 Core data in the runtime | ⬜ |
 | M1.5 Conditions and unwinding | ⬜ |

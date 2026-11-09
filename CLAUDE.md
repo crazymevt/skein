@@ -74,6 +74,7 @@ These are defined in M0.1; update this section if they change.
 | `make repl` | SBCL with Skein loaded |
 | `./skein run <file.skn> [args]` | run a Skein program (calls its `-main` with the args) |
 | `./skein repl` | start a Skein REPL |
+| `./skein build <file.skn>` | compile a program natively with the C backend (Phase 1; needs Zig) |
 | `./skein dev <file.skn> [args]` | run with file reloading and a REPL (terminal and localhost:5555) |
 | `make bench` | run the benchmarks in `bench/` |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |
