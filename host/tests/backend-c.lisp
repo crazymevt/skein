@@ -74,7 +74,7 @@
 (test native-examples
   (if (not (zig-available-p))
       (skip "zig is not installed")
-      (dolist (name '("hello" "fib" "conditions"))
+      (dolist (name '("hello" "fib" "conditions" "collections" "macros"))
         (let ((file (asdf:system-relative-pathname "skein" (format nil "../examples/~A.skn" name))))
           (with-source-tree (dir ("unused.skn" ""))
             (let ((exe (skein.backend.c:build-program
@@ -342,6 +342,29 @@ referred in place of skein.core's."
   (native-matches (uiop:read-file-string
                    (asdf:system-relative-pathname "skein" "tests/fixtures/native-seqs.skn"))))
 
+(test native-more-of-skein-core
+  ;; Step 3 of M1.8: the runtime's new functions, the library's map functions, calling
+  ;; collections, and multiple values.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein" "tests/fixtures/native-more.skn"))))
+
+(test native-library-maps-match-phase-0
+  (library-matches
+   "(get-in {:a {:b 1}} [:a :b])" "(get-in {:a 1} [:x] :nf)" "(get-in {:a 1} [])"
+   "(get-in [[1 2]] [0 1])" "(get-in nil [:a])" "(get-in {:a nil} [:a] :nf)"
+   "(assoc-in {} [:a :b] 1)" "(assoc-in {:a {:b 1}} [:a :c] 2)" "(assoc-in [1 [2]] [1 0] :x)"
+   "(assoc-in nil [:k] 1)" "(update-in {:a {:b 1}} [:a :b] inc)"
+   "(update-in {:a [1 2]} [:a 0] + 10 20)" "(update-in nil [:x :y] (fnil inc 0))"
+   "(merge {:a 1} {:b 2})" "(merge {:a 1} nil {:a 2})" "(merge)" "(merge nil)"
+   "(merge nil {:a 1})" "(merge {:a 1} [:b 2])" "(merge-with + {:a 1} {:a 2 :b 3})"
+   "(merge-with concat {:a [1]} {:a [2]} nil {:a [3]})" "(merge-with + nil nil)"
+   "(select-keys {:a 1 :b 2} [:a :x])" "(select-keys {} [])" "(select-keys [10 20] [1 5])"
+   "(zipmap [:a :b] [1 2 3])" "(zipmap (range 3) (repeat :x))" "(zipmap nil [1])"
+   "(find {:a 1} :a)" "(find {:a nil} :a)" "(find {} :a)" "(find nil :a)"
+   "(key (first {:a 1}))" "(val (first {:a 1}))" "(empty [1 2])" "(empty {:a 1})"
+   "(empty #{1})" "(empty '(1 2))" "(empty (range 3))" "(empty 5)" "(not-empty [])"
+   "(not-empty [1])" "(not-empty \"\")"))
+
 (test native-library-routing
   (native-matches "(ns libroute)
 (prn (update {:n 1} :n inc) (update [1 2] 1 * 10) (update {} :k (fn [_] :new)))
@@ -455,9 +478,10 @@ referred in place of skein.core's."
 ;;; What the native backend can't compile yet: errors with locations
 
 (test native-unsupported
-  (build-fails "(ns u3) (println (merge {} {}))" "can't use skein.core/merge yet")
-  (build-fails "(ns u4) (def f zipmap)" "can't use skein.core/zipmap yet")
-  (build-fails "(ns u5) (prn (values 1 2))" "multiple values yet (M1.8)")
+  (build-fails "(ns u3) (println (chan))" "can't use skein.core/chan yet")
+  (build-fails "(ns u4) (def f pmap)" "can't use skein.core/pmap yet")
+  (build-fails "(ns u5) (let [^:mutable x 0] (fn [] (set! x 1)))"
+               "can't set! the ^:mutable local x")
   (build-fails "(ns u6) (println (inc 1 2))" "wrong number of arguments (2) passed to skein.core/inc"))
 
 ;;; The command
@@ -471,7 +495,7 @@ referred in place of skein.core's."
     (declare (ignore out))
     (is (= skein.cli:+exit-failure+ code))
     (is (search "file not found" err)))
-  (with-program (file "(ns bc) (println (merge {} {}))")
+  (with-program (file "(ns bc) (println (chan))")
     (multiple-value-bind (code out err) (run-cli "build" (namestring file))
       (declare (ignore out))
       (is (= skein.cli:+exit-failure+ code))

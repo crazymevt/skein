@@ -34,6 +34,18 @@ pub fn call(f: Value, argc: u32, argv: [*]const Value) Value {
         const args = [_]Value{ argv[0], f, if (argc == 2) argv[1] else Value.nil };
         return call(@import("core.zig").function("get").?, 3, &args);
     }
+    // Maps and sets look up their argument; vectors give the element at an index.
+    const coll = @import("coll.zig");
+    if (coll.isMap(f) or coll.isSet(f)) {
+        if (argc < 1 or argc > 2) rt.raise(.arity_error, "a map or set called with {d} arguments; expected 1 or 2", .{argc});
+        const args = [_]Value{ f, argv[0], if (argc == 2) argv[1] else Value.nil };
+        return call(@import("core.zig").function("get").?, 3, &args);
+    }
+    if (coll.isVector(f)) {
+        if (argc != 1) rt.raise(.arity_error, "a vector called with {d} arguments; expected 1", .{argc});
+        const args = [_]Value{ f, argv[0] };
+        return call(@import("core.zig").function("nth").?, 2, &args);
+    }
     if (!f.isObjectOf(.function)) {
         const print = @import("print.zig");
         var buf: std.ArrayList(u8) = .empty;

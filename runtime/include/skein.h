@@ -119,6 +119,23 @@ sk_value sk_builtin_condition_type(const char *name);
 /* A block's token, which closures capture to return from it. */
 #define SK_BLOCK_TOKEN(f) SK_FIXNUM((f).serial)
 
+/* Multiple values (M1.8, D-053), with Common Lisp's rules as in Phase 0. A function's
+ * values are its return value plus this thread's count and buffer: a return through a
+ * values form in tail position sets them, a tail call leaves them to the callee, and
+ * every other return sets the count to SK_MV_SINGLE. let-values* reads them right after
+ * evaluating its init. */
+#define SK_MV_SINGLE (-1)
+#define SK_MV_MAX 64
+extern _Thread_local int32_t sk_mv_count;
+extern _Thread_local sk_value sk_mv_values[SK_MV_MAX];
+sk_value sk_mv_set(uint32_t count, const sk_value *values);
+static inline void sk_mv_reset(void) { sk_mv_count = SK_MV_SINGLE; }
+/* Value i of an init whose primary value is primary, after it ran. */
+static inline sk_value sk_mv_get(int32_t count, sk_value primary, int32_t i) {
+    if (count == SK_MV_SINGLE) return i == 0 ? primary : SK_NIL;
+    return i < count ? sk_mv_values[i] : SK_NIL;
+}
+
 /* An object's payload words, after its header (the pointer is tagged with 1). */
 #define SK_PAYLOAD(v) ((sk_value *)(uintptr_t)((v) - 1) + 1)
 

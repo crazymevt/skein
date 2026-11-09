@@ -25,10 +25,19 @@ comptime {
 }
 
 /// Start the runtime on the calling (main) thread.
+extern fn sk_mv_buffer() [*]Value;
+
 export fn sk_init() void {
     _ = gc.attachThread();
     coll.ensureConstants();
     @import("cond.zig").ensureBuiltins();
+    // The main thread's multiple-values buffer holds values between a return and the
+    // let-values* that reads them. (Threads register theirs in M1.8 step 6.)
+    gc.addRoots(sk_mv_buffer()[0..64]);
+}
+
+export fn sk_too_many_values(count: u32) noreturn {
+    rt.raise(.unsupported_operation_error, "values with {d} values; the native runtime supports at most 64", .{count});
 }
 
 /// Finish normally: print GC statistics if SKEIN_GC_STATS is set.

@@ -821,8 +821,11 @@ has its own x# names."
                 :vector (children)
                 :map (apply hash-map (children))
                 :set (apply hash-set (children)))]
+    ;; The empty list, vector, map and set that every empty collection may share are
+    ;; not tracked (empty gives the shared one); other empty collections are.
     (when (and (or (symbol? value) (string? value)
-                   (and (not= kind :atom) (not (empty? value))))
+                   (and (not= kind :atom)
+                        (not (and (empty? value) (identical? value (empty value))))))
                (nil? (%identity-get origins value)))
       (%identity-put! origins value syntax))
     value))

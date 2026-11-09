@@ -1,5 +1,6 @@
 /* The parts of the condition system that need setjmp and longjmp, which Zig can't call
- * safely (D-047). Compiled into the runtime library by build.zig.
+ * safely (D-047), and the multiple-values registers (D-053), which are C thread-locals.
+ * Compiled into the runtime library by build.zig.
  *
  * On Windows (x86_64-windows-gnu) mingw's longjmp unwinds through RtlUnwindEx, so it
  * walks the SEH unwind tables of every frame it crosses: Skein's C, the runtime's Zig and
@@ -32,3 +33,20 @@ void sk_warn_condition(sk_value condition) {
         sk_frame_pop(&f);
     }
 }
+
+/* Multiple values: see skein.h. */
+_Thread_local int32_t sk_mv_count = SK_MV_SINGLE;
+_Thread_local sk_value sk_mv_values[SK_MV_MAX];
+
+_Noreturn void sk_too_many_values(uint32_t count);
+
+/* (values ...) in a position whose values matter: store them; return the first, or nil. */
+sk_value sk_mv_set(uint32_t count, const sk_value *values) {
+    if (count > SK_MV_MAX) sk_too_many_values(count);
+    for (uint32_t i = 0; i < count; i++) sk_mv_values[i] = values[i];
+    sk_mv_count = (int32_t)count;
+    return count > 0 ? values[0] : SK_NIL;
+}
+
+/* This thread's buffer, which the garbage collector scans. */
+sk_value *sk_mv_buffer(void) { return sk_mv_values; }

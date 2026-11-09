@@ -766,6 +766,11 @@ Phase 1 details (D-044, D-046):
   - Cons cells and lazy seqs are runtime objects; a lazy seq runs its thunk once.
   - `reduce` stops at `reduced`.
   - The seq functions and transducers are written in Skein (`skein.core.native`), as ports of Phase 0's, with the same laziness.
+- **Multiple values** (M1.8, D-053) follow Common Lisp's rules, as in Phase 0.
+  - A function returns its first value as usual, and leaves the count and the values in thread-local registers (`sk_mv_count`, `sk_mv_values`, up to 64).
+  - A `values` in tail position sets them, a call in tail position leaves them to its callee, and any other return marks one value.
+  - Values pass through the tails of `if`, `do`, `let`, loops, blocks and `unwind-protect`, whose cleanup preserves them.
+  - `let-values*` reads them right after its init.
 - **Data:** symbols and keywords are interned, permanent objects. Collections are ports of Phase 0's (vector trie with tail, array maps up to 8 entries, then a HAMT; sets on maps; edit-token transients), with the same hash functions, so maps and sets iterate in the same order natively and on the host. Strings keep their length in characters, so `count` is O(1).
 
 ### 17.4 Fibers and scheduler

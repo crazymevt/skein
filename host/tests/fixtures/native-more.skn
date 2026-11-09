@@ -1,0 +1,58 @@
+(ns native-more)
+
+;; The rest of skein.core natively (M1.8 step 3): the runtime's new functions, the
+;; library's map functions, calling collections, and multiple values. The C backend tests
+;; check that this prints the same natively as with `skein run`.
+
+;; Conversions, numbers and names
+(prn (f64 1) (f64 1.5f) (f32 2) (f32 2.5) (f64 12345678901234567890) (sqrt 16) (sqrt 2.25f))
+(prn (sqrt -1) (boolean nil) (boolean 0) (parse-long "42") (parse-long "-7") (parse-long "+3"))
+(prn (parse-long "4x") (parse-long "") (parse-long "123456789012345678901234567890"))
+(prn (symbol? (gensym)) (not= (gensym) (gensym)) (subs (name (gensym "tmp__")) 0 5))
+(prn (every? (fn [_] (let [x (rand)] (and (>= x 0) (< x 1)))) (range 200))
+     (every? (fn [_] (let [x (rand 2.5)] (and (>= x 0) (< x 2.5)))) (range 200))
+     (= #{0 1 2} (set (repeatedly 300 (fn [] (rand-int 3))))))
+(prn (associative? {}) (associative? [1]) (associative? '(1)) (counted? [1]) (counted? (map inc [1]))
+     (ifn? :k) (ifn? {}) (ifn? #{}) (ifn? [1]) (ifn? "s") (ifn? inc))
+(prn (try (rand -1) (catch error e (condition-message e)))
+     (try (rand-int 0) (catch error e (condition-message e)))
+     (try (parse-long 5) (catch error e (condition-message e))))
+
+;; Maps and nested collections
+(def m {:a {:b {:c 1}} :n [1 2 3]})
+(prn (get-in m [:a :b :c]) (get-in m [:a :x] :none) (get-in m []) (get-in m [:n 1]))
+(prn (assoc-in m [:a :b :d] 2) (assoc-in {} [:x :y] 1) (assoc-in [[1]] [0 0] :z))
+(prn (update-in m [:a :b :c] + 10) (update-in {} [:k] (fnil inc 0)) (update-in m [:n 0] inc))
+(prn (merge {:a 1} {:b 2} nil {:a 3}) (merge) (merge nil nil) (merge {:a 1} [:b 2]))
+(prn (merge-with + {:a 1 :b 2} {:a 10} {:b 20 :c 30}) (merge-with + nil {:a 1}))
+(prn (select-keys {:a 1 :b 2 :c 3} [:a :c :z]) (zipmap [:a :b :c] [1 2]) (zipmap [] [1]))
+(prn (find {:a 1} :a) (find {:a 1} :b) (find nil :a) (key (first {:k :v})) (val (first {:k :v})))
+(prn (empty [1]) (empty {:a 1}) (empty #{1}) (empty '(1)) (empty (map inc [1])) (empty "s"))
+(prn (not-empty [1]) (not-empty []) (not-empty nil))
+
+;; Maps, sets and vectors called as functions
+(prn ({:a 1} :a) ({:a 1} :b :none) (#{1 2} 2) (#{1 2} 3) ([10 20 30] 1) (map {:a 1 :b 2} [:a :b]))
+(prn (try ([1] 5) (catch index-error e :index-error)) (try ({} 1 2 3) (catch arity-error e :arity)))
+
+;; Multiple values (CL's rules, as in Phase 0)
+(defn two [] (values 1 2))
+(defn three [x] (if x (values :a :b :c) (values)))
+(defn via-tail [] (two))
+(defn via-let [] (let [x (two)] x))
+(defn via-do [] (do (values 9 9) (two)))
+(defn one [] 5)
+(defn guarded [] (unwind-protect (values :u :v) (two) (one)))
+(defn blocky [] (block* b (when true (return-from* b (values :r :s))) :never))
+(defn looped [] (loop [i 0] (if (< i 3) (recur (inc i)) (values i (* i 10)))))
+(prn (let-values* [[a b] (two)] [a b]))
+(prn (let-values* [[a b c d] (three true)] [a b c d]) (let-values* [[a b] (three false)] [a b]))
+(prn (let-values* [[a b] (via-tail)] [a b]) (let-values* [[a b] (via-let)] [a b])
+     (let-values* [[a b] (via-do)] [a b]))
+(prn (let-values* [[a b] (one)] [a b]) (let-values* [[a b] 7] [a b]) (let-values* [[a] (values 1 2)] a))
+(prn (let-values* [[a b] (guarded)] [a b]) (let-values* [[a b] (blocky)] [a b])
+     (let-values* [[a b] (looped)] [a b]))
+(prn (let-values* [[a b] (if (two) (values 3 4) 5) [c] (values a)] [a b c]) (two) [(two) (three true)])
+(prn (let-values* [[a b] (try (values 1 2) (catch error e 0))] [a b]))
+(prn (let-values* [[a b] (let-values* [[x y] (two)] (values y x))] [a b]))
+(prn (let-values* [[a b] (identity (two))] [a b]) (let-values* [[a b] (apply two [])] [a b]))
+(prn (let-values* [[a b] ((fn [] (values :f :g)))] [a b]))

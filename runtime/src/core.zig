@@ -265,6 +265,28 @@ fn pred(comptime test_fn: fn (Value) bool) fn (Args) Value {
     }.f;
 }
 
+var gensym_counter = std.atomic.Value(u64).init(0);
+
+var random_lock: platform.Mutex = .{};
+var random_state: ?std.Random.DefaultPrng = null;
+
+fn prng() *std.Random.DefaultPrng {
+    if (random_state == null) random_state = std.Random.DefaultPrng.init(platform.monotonicNanos() ^ 0x5DEECE66D);
+    return &random_state.?;
+}
+
+fn randomFloat() f64 {
+    random_lock.lock();
+    defer random_lock.unlock();
+    return prng().random().float(f64);
+}
+
+fn randomBelow(n: i64) i64 {
+    random_lock.lock();
+    defer random_lock.unlock();
+    return prng().random().intRangeLessThan(i64, 0, n);
+}
+
 fn parity(comptime odd: bool) fn (Args) Value {
     return struct {
         fn f(a: Args) Value {
@@ -758,6 +780,98 @@ const table = [_]Entry{
     e("apply", 2, null, applyFn),
     // Strings and names
     e("str", 0, null, strFn),
+    // Step 3 of M1.8 (D-053): conversions, random numbers, names and predicates
+    e("f64", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!num.isNumber(a[0])) rt.raise(.type_error, "f64 needs a number, not {s}", .{typeName(a[0])});
+            return if (a[0].isObjectOf(.f64)) a[0] else num.boxF64(num.toF64(a[0]));
+        }
+    }.f),
+    e("f32", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!num.isNumber(a[0])) rt.raise(.type_error, "f32 needs a number, not {s}", .{typeName(a[0])});
+            return if (a[0].isF32()) a[0] else Value.fromF32(@floatCast(num.toF64(a[0])));
+        }
+    }.f),
+    e("sqrt", 1, 1, struct {
+        fn f(a: Args) Value {
+            const x = a[0];
+            if (!num.isNumber(x)) rt.raise(.type_error, "sqrt needs a number, not {s}", .{typeName(x)});
+            const d = num.toF64(x);
+            // As Phase 0: a negative number gives NaN, not a complex number.
+            if (d < 0) return num.boxF64(std.math.nan(f64));
+            if (x.isF32()) return Value.fromF32(@sqrt(x.toF32()));
+            return num.boxF64(@sqrt(d));
+        }
+    }.f),
+    e("rand", 0, 1, struct {
+        fn f(a: Args) Value {
+            var limit: f64 = 1.0;
+            if (a.len == 1) {
+                if (!num.isNumber(a[0]) or !(num.toF64(a[0]) > 0))
+                    rt.raise(.@"error", "rand needs a positive number, not {s}", .{typeName(a[0])});
+                limit = num.toF64(a[0]);
+            }
+            return num.boxF64(randomFloat() * limit);
+        }
+    }.f),
+    e("rand-int", 1, 1, struct {
+        fn f(a: Args) Value {
+            const n = a[0];
+            if (!num.isInteger(n) or !(num.toF64(n) > 0))
+                rt.raise(.@"error", "rand-int needs a positive integer, not {s}", .{typeName(n)});
+            if (!n.isFixnum()) rt.raise(.unsupported_operation_error, "rand-int of a bignum is not supported natively yet", .{});
+            return Value.fromFixnum(randomBelow(n.toFixnum()));
+        }
+    }.f),
+    e("gensym", 0, 1, struct {
+        fn f(a: Args) Value {
+            const prefix = if (a.len == 0) "G__" else nameString("gensym", a[0]);
+            const n = gensym_counter.fetchAdd(1, .monotonic) + 1;
+            var buf: [256]u8 = undefined;
+            const text = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, n }) catch
+                rt.raise(.@"error", "gensym prefix is too long", .{});
+            return names.symbol(null, text);
+        }
+    }.f),
+    e("parse-long", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!string.isString(a[0])) rt.raise(.@"error", "parse-long needs a string, not {s}", .{typeName(a[0])});
+            // As Clojure's: an optional sign and decimal digits, else nil.
+            const text = string.bytes(a[0]);
+            const start: usize = if (text.len > 0 and (text[0] == '+' or text[0] == '-')) 1 else 0;
+            if (text.len <= start) return Value.nil;
+            for (text[start..]) |ch| if (ch < '0' or ch > '9') return Value.nil;
+            return num.parseInteger(text);
+        }
+    }.f),
+    e("boolean", 1, 1, pred(struct {
+        fn t(v: Value) bool {
+            return v != Value.nil and v != Value.false;
+        }
+    }.t)),
+    e("associative?", 1, 1, pred(struct {
+        fn t(v: Value) bool {
+            return coll.isMap(v) or coll.isVector(v);
+        }
+    }.t)),
+    e("counted?", 1, 1, pred(struct {
+        fn t(v: Value) bool {
+            if (string.isString(v)) return true;
+            if (!v.isObject()) return false;
+            return switch (v.toObject().type_id) {
+                .list, .empty_list, .vector, .array_map, .hash_map, .hash_set, .vseq,
+                .transient_vector, .transient_map, .transient_set => true,
+                else => false,
+            };
+        }
+    }.t)),
+    e("ifn?", 1, 1, pred(struct {
+        fn t(v: Value) bool {
+            return v.isObjectOf(.function) or names.isKeyword(v) or coll.isMap(v) or
+                coll.isSet(v) or coll.isVector(v);
+        }
+    }.t)),
     e("hash-of", 1, 1, struct {
         fn f(a: Args) Value {
             return Value.fromFixnum(equal.hashOf(a[0]));

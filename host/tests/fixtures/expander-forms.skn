@@ -64,3 +64,8 @@ expander written in Skein with Phase 0's (M1.7). It is expanded, not run."
 (vec2 3.0f 4.0f)
 (:k {:k 1})
 (fn [o] (set! (:slot o) 1))
+
+;; Empty collections through a macro keep their own locations, unless they are the shared
+;; empty values (regression: #{} took the macro form's location).
+(cond false 1 :else #{})
+(when true [#{} [] {} '()])

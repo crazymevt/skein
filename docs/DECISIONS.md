@@ -587,3 +587,27 @@ Date: 2026-11-09 · Status: Accepted
   - A native program (`host/tests/fixtures/native-seqs.skn`) prints exactly what Phase 0 prints. It covers seqs over every collection, equality and hashing of seqs, every library function, laziness, and long and infinite seqs under garbage collection.
   - Zig tests cover the seq layer.
 - **Consequences:** `examples/macros.skn` now runs natively and matches its `.expected` output. `examples/collections.skn` waits for step 3 (`select-keys`).
+
+## D-053: The rest of skein.core natively, and multiple values
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 3 of M1.8: the skein.core functions still missing natively that aren't about objects, structs, arrays or concurrency (steps 4–6) or the compiler itself (M1.9), plus multiple values, which the C backend couldn't compile.
+- **Decision:**
+  - **In the runtime:**
+    - `f32`, `f64`, `sqrt`, `rand`, `rand-int`, `gensym`, `parse-long`, `boolean`, `associative?`, `counted?` and `ifn?`, with Phase 0's results and messages.
+    - `rand` uses a seeded PRNG from Zig's standard library.
+    - Maps, sets and vectors can be called as functions, as in Phase 0.
+  - **In `skein.core.native`:** `get-in`, `assoc-in`, `update-in`, `merge`, `merge-with`, `select-keys`, `zipmap`, `find`, `key`, `val`, `empty` and `not-empty`, ported from Phase 0.
+  - **Multiple values**, with Common Lisp's rules, as Phase 0 compiles `values` to CL's:
+    - A function returns its first value and leaves the count and the values in thread-local registers.
+    - The C backend tracks which nodes' values matter: a function's body, a `let-values*` init, and the tail parts of `if`, `do`, `let`, `letfn`, loops, blocks (including `return-from` values), `unwind-protect`, handler and restart clusters, `the` and `locally`.
+    - In such a position, a `values` sets the registers, and a call resets them before calling, so a compiled callee's values pass through while a runtime function's count as one. Anything else marks one value.
+    - An `unwind-protect` saves the registers across its cleanup, on both the normal path and the unwinding one.
+    - `let-values*` reads them right after its init.
+- **Alternatives:**
+  - Returning a struct of values from every function: a change of calling convention for a rarely used feature.
+  - Boxing multiple values in an object. Every use of a value would then have to unbox it.
+  - Supporting `values` only directly inside `let-values*`, which would differ from Phase 0.
+- **Consequences:**
+  - Every compiled function return that isn't a tail call or a `values` stores to a thread-local. fib(32) is no slower measurably.
+  - Five of the eight examples with `.expected` files now run natively: hello, fib, conditions, collections and macros.
+  - A fixture covering every function above and the multiple-value cases prints the same as Phase 0. The library's new functions are compared with Phase 0's on the host.

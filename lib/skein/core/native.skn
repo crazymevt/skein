@@ -569,3 +569,80 @@ dropped."
   nil)
 
 (defn set "The elements of coll as a set." [coll] (if (set? coll) coll (into #{} coll)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Maps and nested collections (step 3 of M1.8, D-053): ports of Phase 0's.
+
+(defn get-in
+  "The value at the path of keys in nested collections, or not-found."
+  ([m ks] (get-in m ks nil))
+  ([m ks not-found]
+   (loop [x m ks (seq ks)]
+     (if ks
+       (let [v (get x (first ks) ::not-found)]
+         (if (= v ::not-found) not-found (recur v (next ks))))
+       x))))
+
+(defn assoc-in
+  "m with the value at the path of keys set, making maps as needed."
+  [m ks v]
+  (let [k (first ks) more (next ks)]
+    (assoc m k (if more (assoc-in (get m k) more v) v))))
+
+(defn update-in
+  "m with the value at the path of keys replaced by (f old args...)."
+  [m ks f & args]
+  (let [k (first ks) more (next ks)]
+    (assoc m k (if more
+                 (apply update-in (get m k) more f args)
+                 (apply f (get m k) args)))))
+
+(defn merge
+  "The maps merged left to right (later keys win), or nil if all are nil."
+  [& maps]
+  (when (some identity maps)
+    (reduce (fn [acc m] (if m (conj (or acc {}) m) acc)) maps)))
+
+(defn merge-with
+  "The maps merged, combining the values of a key in several with f."
+  [f & maps]
+  (when (some identity maps)
+    (reduce (fn [acc m]
+              (if (nil? m)
+                acc
+                (reduce (fn [result [k v]]
+                          (assoc result k (if (contains? result k) (f (get result k) v) v)))
+                        (or acc {}) m)))
+            maps)))
+
+(defn select-keys
+  "A map of the entries of m whose keys are in ks."
+  [m ks]
+  (reduce (fn [result k] (if (contains? m k) (assoc result k (get m k)) result)) {} ks))
+
+(defn zipmap
+  "A map of keys to vals, pairing them in order."
+  [ks vs]
+  (loop [t (transient {}) ks (seq ks) vs (seq vs)]
+    (if (and ks vs)
+      (recur (assoc! t (first ks) (first vs)) (next ks) (next vs))
+      (persistent! t))))
+
+(defn find
+  "The [key value] entry for key in the map m, or nil."
+  [m k]
+  (when (and m (contains? m k)) [k (get m k)]))
+
+(defn key "The key of a map entry." [entry] (nth entry 0))
+(defn val "The value of a map entry." [entry] (nth entry 1))
+
+(defn empty
+  "An empty collection of the same kind, or nil."
+  [coll]
+  (cond (vector? coll) []
+        (map? coll) {}
+        (set? coll) #{}
+        (seq? coll) '()
+        :else nil))
+
+(defn not-empty "coll, or nil if it is empty." [coll] (when (seq coll) coll))
