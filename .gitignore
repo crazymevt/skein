@@ -1,0 +1,24 @@
+# Common Lisp / SBCL
+*.fasl
+*.fas
+*.lib
+*.dx64fsl
+*.core
+
+# Build output
+build/
+dist/
+.skein-cache/
+
+# Zig (Phase 1+)
+zig-cache/
+.zig-cache/
+zig-out/
+
+# Editors / OS
+.DS_Store
+*~
+\#*\#
+.#*
+.vscode/
+.idea/
