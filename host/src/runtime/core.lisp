@@ -107,6 +107,14 @@
          (every #'digit-char-p (subseq s start))
          (parse-integer s))))
 
+(defcore "%decimal-to-float" (negative mantissa exponent type)
+  ;; Used by the reader in Skein (lib/skein/compiler/reader.skn): the float nearest to
+  ;; mantissa * 10^exponent, negated if NEGATIVE; TYPE is :f64 or :f32. Returns nil when
+  ;; the value is too large for the type.
+  (handler-case (decimal-to-float (truthy-p negative) mantissa exponent
+                                  (if (and (kw-p type) (string= (kw-name type) "f32")) :f32 :f64))
+    (float-out-of-range () nil)))
+
 (defcore "str" (&rest xs)
   (with-output-to-string (s)
     (dolist (x xs)

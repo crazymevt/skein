@@ -474,3 +474,30 @@ Date: 2026-11-09 · Status: Accepted
   - Runtime code that may signal must not hold locks or rely on `defer`, because longjmp skips them (scratch buffers leak).
   - The runtime's scratch allocator is now malloc rather than the page allocator, and looking up an interned name no longer allocates. Both were a system call per error.
   - Natively, no restarts exist outside the program's own: Phase 0's `skein run` adds `abort`, `continue` and `exit`. Some messages differ from Phase 0's, where Phase 0 shows CL's wording (ROADMAP note).
+
+## D-048: The reader in Skein
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.6 ports the reader to Skein, the first piece of the self-hosted front end. It runs on the Phase 0 host for now and must read every file to the same syntax objects as the CL reader. Later it has to compile natively (M1.8), before the rest of skein.core is native (M1.9).
+- **Decision:**
+  - **`skein.compiler.reader`** in `lib/skein/compiler/reader.skn` is a function-by-function port of `host/src/reader/reader.lisp`, with the same messages and locations.
+  - **Data:**
+    - Syntax objects are maps, `{:kind :datum :loc}`, with `:meta` when there is metadata. The datum of a compound form is a vector.
+    - Locations are maps of file, line, column, end line and end column.
+    - The reader reads from a string. Its state (position, line, column, namespace, `#()` arguments) is a map of atoms.
+    - Plain data keeps the reader to the part of skein.core that is closest to native: no records, classes, seqs or laziness.
+  - **Errors:** a `read-error` condition with `message` and `location` slots. It reports as `message at file:line:col`, as the CL reader's does.
+  - **Two additions to skein.core:**
+    - `(int \a)` → 97 and `(char 97)` → `\a`, as in Clojure. Jessie chose these over internal helpers. Both are in Phase 0 and the native runtime.
+    - The internal `%decimal-to-float` exposes Phase 0's correctly rounded float construction to the reader.
+  - **Forward references** use `(def name)`. Skein has no `declare` macro, and `declare` is the name of the body declaration form.
+  - **Testing:**
+    - Every reader test runs twice: once with the CL reader, and once with the Skein reader through a bridge that converts its maps and conditions to the CL reader's syntax objects and `read-error`s. That includes the randomized round-trip and float tests.
+    - A second test reads every `.skn` file in the repository with both readers and compares data, metadata and every location.
+- **Alternatives:**
+  - Records or classes for syntax objects. They would pull the object system into the native compiler before M1.9.
+  - Reading from a stream. Skein has no stream API yet, and whole files are small.
+  - Threading the position through return values instead of atoms. That makes a less direct port.
+- **Consequences:**
+  - The Skein reader matches the CL reader on all 26 `.skn` files and passes the reader tests. A test that shifts one column is caught in every file.
+  - `skein run` and `skein build` still use the CL reader until the front end is self-hosted (M1.8).
+  - M1.7's expander in Skein consumes these maps.

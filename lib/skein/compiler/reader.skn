@@ -1,0 +1,696 @@
+(ns skein.compiler.reader
+  "The Skein reader (DESIGN §3), written in Skein (M1.6, D-048): a port of the Phase 0
+reader (host/src/reader/reader.lisp) that reads text to the same syntax objects.
+
+A syntax object is a map: {:kind k :datum d :loc location}, plus :meta (a :map syntax
+object) when it has metadata. :kind is :atom, :list, :vector, :map or :set; the datum of
+an atom is its value, and of the others a vector of syntax objects in source order. A
+location is a map {:file :line :column :end-line :end-column}: lines and columns are
+1-based, columns count characters, and the end is just after the form.
+
+The reader keeps to a small part of skein.core (no seqs, laziness or objects), so that the
+compiler can be built natively without the rest of it (M1.8).")
+
+;;; ------------------------------------------------------------------------------------
+;;; Errors
+
+(defn format-location
+  "A location as \"file:line:column\", with \"<input>\" for text with no file, or
+\"<unknown location>\" for nil."
+  [loc]
+  (if loc
+    (str (or (:file loc) "<input>") ":" (:line loc) ":" (:column loc))
+    "<unknown location>"))
+
+(defcondition read-error [error]
+  "Malformed Skein source text: a description and the location of the problem."
+  (message :reader read-error-message)
+  (location :reader read-error-location)
+  (:report (fn [c] (str (read-error-message c) " at "
+                        (format-location (read-error-location c))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Reader state
+
+(defn make-reader
+  "A reader over the string text. Options: :file names the source in locations,
+:namespace is the current namespace name (for ::keywords), and :resolve-alias maps an
+alias name to a namespace name or nil (for ::alias/kw)."
+  ([text] (make-reader text {}))
+  ([text opts]
+   (let [n (count text)]
+     {:text text
+      :n n
+      ;; Skip a UTF-8 byte order mark at the start of the input.
+      :pos (atom (if (and (pos? n) (= (nth text 0) (char 0xFEFF))) 1 0))
+      :line (atom 1)
+      :column (atom 1)
+      :file (:file opts)
+      :namespace (atom (:namespace opts))
+      :resolve-alias (:resolve-alias opts)
+      ;; While reading the body of #(...): {:max-arg n :rest? bool}.
+      :fn-literal (atom nil)})))
+
+(defn reader-namespace
+  "The current namespace name used for ::keywords, or nil."
+  [r]
+  @(:namespace r))
+
+(defn set-reader-namespace!
+  "Change the namespace used for ::keywords, as the expander does on entering one."
+  [r ns]
+  (reset! (:namespace r) ns))
+
+(defn- peek-char [r]
+  (let [p @(:pos r)]
+    (when (< p (:n r)) (nth (:text r) p))))
+
+(defn- next-char [r]
+  (let [p @(:pos r)]
+    (when (< p (:n r))
+      (let [c (nth (:text r) p)]
+        (reset! (:pos r) (inc p))
+        (if (= c \newline)
+          (do (swap! (:line r) inc) (reset! (:column r) 1))
+          (swap! (:column r) inc))
+        c))))
+
+(defn- loc [file line column end-line end-column]
+  {:file file :line line :column column :end-line end-line :end-column end-column})
+
+(defn- span
+  "A location from line:column to the reader's current position."
+  [r line column]
+  (loc (:file r) line column @(:line r) @(:column r)))
+
+(defn- point [r line column]
+  (loc (:file r) line column line column))
+
+(defn- fail-at [location & parts]
+  (error read-error :message (apply str parts) :location location))
+
+(defn- fail [r line column & parts]
+  (apply fail-at (point r line column) parts))
+
+;;; ------------------------------------------------------------------------------------
+;;; Character classes
+
+(defn- whitespace?
+  "Space, tab, newline, carriage return, form feed, vertical tab and comma."
+  [c]
+  (and c (or (= c \space) (= c \tab) (= c \newline) (= c \return) (= c \formfeed)
+             (= c \,) (= (int c) 11))))
+
+(def ^:private terminating "\";@^`~()[]{}\\")
+
+(defn- terminating?
+  "Characters that end a token: they always start a new form or delimit one."
+  [c]
+  (loop [i 0]
+    (cond (= i (count terminating)) false
+          (= c (nth terminating i)) true
+          :else (recur (inc i)))))
+
+(defn- token-end? [c]
+  (or (nil? c) (whitespace? c) (terminating? c)))
+
+(defn- digit-value
+  "The value of c as a digit in radix (10, 16 or 2), or nil."
+  [c radix]
+  (when c
+    (let [n (int c)
+          v (cond (and (>= n 48) (<= n 57)) (- n 48)
+                  (and (>= n 97) (<= n 102)) (- n 87)
+                  (and (>= n 65) (<= n 70)) (- n 55)
+                  :else nil)]
+      (when (and v (< v radix)) v))))
+
+(defn- digit? [c] (some? (digit-value c 10)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Syntax objects
+
+(defn- atom-at [value location]
+  {:kind :atom :datum value :loc location})
+
+(defn- compound [kind items location]
+  {:kind kind :datum items :loc location})
+
+(defn- sym-syntax [name ns location]
+  (atom-at (symbol ns name) location))
+
+(def ^:private print-syntax)
+
+(defn- print-items [items sep print-meta?]
+  (loop [i 0 out ""]
+    (if (< i (count items))
+      (recur (inc i) (str out (if (pos? i) sep "") (print-syntax (nth items i) print-meta?)))
+      out)))
+
+(defn- print-map-items [items print-meta?]
+  (loop [i 0 out ""]
+    (if (< i (count items))
+      (recur (+ i 2) (str out (if (pos? i) ", " "") (print-syntax (nth items i) print-meta?) " "
+                          (print-syntax (nth items (inc i)) print-meta?)))
+      out)))
+
+(defn- print-syntax
+  ([s] (print-syntax s false))
+  ([s print-meta?]
+   (str (if (and print-meta? (:meta s)) (str "^" (print-syntax (:meta s) true) " ") "")
+        (let [d (:datum s)]
+          (case (:kind s)
+            :atom (pr-str d)
+            :list (str "(" (print-items d " " print-meta?) ")")
+            :vector (str "[" (print-items d " " print-meta?) "]")
+            :map (str "{" (print-map-items d print-meta?) "}")
+            :set (str "#{" (print-items d " " print-meta?) "}"))))))
+
+(defn syntax-to-string
+  "A syntax object as Skein source text that reads back to an equal form; metadata is
+printed as ^{...} prefixes only when print-meta? is true."
+  ([s] (print-syntax s false))
+  ([s print-meta?] (print-syntax s print-meta?)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Tokens
+
+(defn- read-token-text
+  "first plus the characters up to the next delimiter."
+  [r first]
+  (let [start (dec @(:pos r))]
+    (loop []
+      (when-not (token-end? (peek-char r))
+        (next-char r)
+        (recur)))
+    (subs (:text r) start @(:pos r))))
+
+(defn- index-of [s c from]
+  (loop [i from]
+    (cond (>= i (count s)) nil
+          (= (nth s i) c) i
+          :else (recur (inc i)))))
+
+(defn- contains-text? [s part]
+  (loop [i 0]
+    (cond (> (+ i (count part)) (count s)) false
+          (= (subs s i (+ i (count part))) part) true
+          :else (recur (inc i)))))
+
+(defn- valid-part? [s]
+  (and (pos? (count s))
+       (not= (nth s 0) \:)
+       (not= (nth s (dec (count s))) \:)
+       (not (contains-text? s "::"))))
+
+(defn- split-qualified
+  "[namespace name] for text, or nil if it is not a valid name. A valid name has at most
+one /, and its parts don't start or end with : or contain ::."
+  [text]
+  (let [slash (index-of text \/ 0)]
+    (cond (= text "/") [nil "/"]
+          (nil? slash) (when (valid-part? text) [nil text])
+          :else (let [ns (subs text 0 slash)
+                      name (subs text (inc slash))]
+                  (when (and (valid-part? ns)
+                             (or (= name "/")
+                                 (and (valid-part? name) (nil? (index-of name \/ 0)))))
+                    [ns name])))))
+
+(defn- fn-literal-arg
+  "Handle a %-symbol inside #(): returns the name to use."
+  [r name line column]
+  (let [state (:fn-literal r)
+        digits? (fn [s] (loop [i 1]
+                          (cond (= i (count s)) true
+                                (digit? (nth s i)) (recur (inc i))
+                                :else false)))]
+    (cond (= name "%")
+          (do (swap! state (fn [s] (assoc s :max-arg (max 1 (:max-arg s))))) "%1")
+          (= name "%&")
+          (do (swap! state assoc :rest? true) name)
+          (and (> (count name) 1) (not= (nth name 1) \0) (digits? name))
+          (let [n (parse-long (subs name 1))]
+            (swap! state (fn [s] (assoc s :max-arg (max n (:max-arg s)))))
+            name)
+          :else (fail r line column "invalid argument `" name
+                      "` in #(): use %, %1, %2, ... or %&"))))
+
+(defn- parse-symbol [r token line column]
+  (let [parts (split-qualified token)]
+    (when-not parts
+      (fail r line column "invalid symbol `" token "`"))
+    (let [[ns name] parts
+          name (if (and @(:fn-literal r) (nil? ns) (= (nth name 0) \%))
+                 (fn-literal-arg r name line column)
+                 name)]
+      (symbol ns name))))
+
+(defn- parse-keyword [r token line column]
+  (if (and (> (count token) 1) (= (nth token 1) \:))
+    (let [name (subs token 2)]
+      (if (index-of name \/ 0)
+        (let [[alias kw-name] (split-qualified name)]
+          (when-not (and alias kw-name (not= kw-name "/"))
+            (fail r line column "invalid keyword `" token "`"))
+          (let [resolve (:resolve-alias r)
+                ns (when resolve (resolve alias))]
+            (when-not ns
+              (fail r line column "no namespace alias `" alias "` for `" token "`"))
+            (keyword ns kw-name)))
+        (do (when-not (split-qualified name)
+              (fail r line column "invalid keyword `" token "`"))
+            (when-not (reader-namespace r)
+              (fail r line column "`" token "` needs a current namespace"))
+            (keyword (reader-namespace r) name))))
+    (let [parts (split-qualified (subs token 1))]
+      (when (or (nil? parts) (= (nth parts 1) "/"))
+        (fail r line column "invalid keyword `" token "`"))
+      (keyword (nth parts 0) (nth parts 1)))))
+
+;;; Numbers (D-029): 42 -7 0xFF 0b1010 1_000_000 3.14 1e-9 3.14f 1.0e5f.
+;;; Underscores may only appear between digits. Leading zeros are rejected (no octal),
+;;; a decimal point needs digits on both sides, and the f suffix needs a float.
+
+(defn- number-start? [token]
+  (or (digit? (nth token 0))
+      (and (> (count token) 1)
+           (or (= (nth token 0) \+) (= (nth token 0) \-))
+           (digit? (nth token 1)))))
+
+(defn- digits-value [digits radix]
+  (loop [i 0 v 0]
+    (if (< i (count digits))
+      (recur (inc i) (+ (* v radix) (digit-value (nth digits i) radix)))
+      v)))
+
+(defn- parse-number [r token line column]
+  (let [end (count token)
+        pos (atom 0)
+        bad (fn [& parts] (apply fail r line column parts))
+        invalid (fn [] (bad "invalid number `" token "`"))
+        at? (fn [& cs] (and (< @pos end)
+                            (loop [cs cs]
+                              (cond (nil? cs) false
+                                    (= (first cs) (nth token @pos)) true
+                                    :else (recur (next cs))))))
+        ;; A run of digits and underscores; returns the digits only.
+        digits (fn [radix]
+                 (let [start @pos]
+                   (loop []
+                     (when (and (< @pos end)
+                                (or (digit-value (nth token @pos) radix)
+                                    (= (nth token @pos) \_)))
+                       (swap! pos inc)
+                       (recur)))
+                   (let [run (subs token start @pos)
+                         underscore? (index-of run \_ 0)]
+                     (when (or (zero? (count run))
+                               (= (nth run 0) \_)
+                               (= (nth run (dec (count run))) \_)
+                               (contains-text? run "__"))
+                       (if underscore?
+                         (bad "misplaced underscore in number `" token "`")
+                         (invalid)))
+                     (loop [i 0 out ""]
+                       (if (< i (count run))
+                         (recur (inc i) (if (= (nth run i) \_) out (str out (nth run i))))
+                         out)))))
+        negative? (at? \+ \-)
+        negative? (and negative? (= (nth token 0) \-))]
+    (when (at? \+ \-) (swap! pos inc))
+    (let [radix (when (and (< (inc @pos) end) (= (nth token @pos) \0))
+                  (case (nth token (inc @pos))
+                    (\x \X) 16
+                    (\b \B) 2
+                    nil))]
+      (if radix
+        (do (swap! pos + 2)
+            (let [v (digits-value (digits radix) radix)]
+              (when-not (= @pos end) (invalid))
+              (if negative? (- v) v)))
+        (let [int-digits (digits 10)
+              _ (when (and (> (count int-digits) 1) (= (nth int-digits 0) \0))
+                  (bad "leading zeros are not allowed in `" token
+                       "` (Skein has no octal literals)"))
+              frac-digits (if (at? \.)
+                            (do (swap! pos inc)
+                                (when-not (and (< @pos end) (digit? (nth token @pos)))
+                                  (bad "a digit must follow the decimal point in `" token "`"))
+                                (digits 10))
+                            nil)
+              exponent (if (at? \e \E)
+                         (do (swap! pos inc)
+                             (let [exp-negative? (and (at? \+ \-) (= (nth token @pos) \-))]
+                               (when (at? \+ \-) (swap! pos inc))
+                               (when-not (and (< @pos end) (digit? (nth token @pos))) (invalid))
+                               (let [e (digits-value (digits 10) 10)]
+                                 (if exp-negative? (- e) e))))
+                         nil)
+              float? (or (some? frac-digits) (some? exponent))
+              type (if (at? \f)
+                     (do (when-not float?
+                           (bad "the f suffix needs a float literal such as 1.0f, not `"
+                                token "`"))
+                         (swap! pos inc)
+                         :f32)
+                     :f64)]
+          (when-not (= @pos end) (invalid))
+          (if float?
+            (let [frac (or frac-digits "")
+                  v (%decimal-to-float negative? (digits-value (str int-digits frac) 10)
+                                       (- (or exponent 0) (count frac)) type)]
+              (when (nil? v)
+                (bad "float literal `" token "` is too large for " (name type)))
+              v)
+            (let [v (digits-value int-digits 10)]
+              (if negative? (- v) v))))))))
+
+(defn- parse-token [r token line column]
+  (cond (number-start? token) (parse-number r token line column)
+        (= (nth token 0) \:) (parse-keyword r token line column)
+        (= token "nil") nil
+        (= token "true") true
+        (= token "false") false
+        :else (parse-symbol r token line column)))
+
+(defn- read-token-form [r first line column]
+  (let [token (read-token-text r first)]
+    (atom-at (parse-token r token line column) (span r line column))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Strings and characters
+
+(defn- hex4 [n]
+  (let [digits "0123456789ABCDEF"]
+    (str (nth digits (mod (quot n 4096) 16)) (nth digits (mod (quot n 256) 16))
+         (nth digits (mod (quot n 16) 16)) (nth digits (mod n 16)))))
+
+(defn- high-surrogate? [n] (and (>= n 0xD800) (<= n 0xDBFF)))
+(defn- low-surrogate? [n] (and (>= n 0xDC00) (<= n 0xDFFF)))
+
+(defn- read-hex4 [r line column]
+  (loop [i 0 code 0]
+    (if (= i 4)
+      code
+      (let [d (digit-value (next-char r) 16)]
+        (when-not d
+          (fail r line column "invalid unicode escape: `\\u` needs four hex digits"))
+        (recur (inc i) (+ (* code 16) d))))))
+
+(defn- read-unicode-escape
+  "The XXXX of a \\uXXXX string escape, combining a surrogate pair."
+  [r line column]
+  (let [code (read-hex4 r line column)
+        unpaired (fn [] (fail r line column "unpaired surrogate \\u" (hex4 code) " in string"))]
+    (cond (low-surrogate? code) (unpaired)
+          (high-surrogate? code)
+          (do (when-not (and (= (next-char r) \\) (= (next-char r) (char 117)))
+                (unpaired))
+              (let [low (read-hex4 r line column)]
+                (when-not (low-surrogate? low) (unpaired))
+                (char (+ 0x10000 (* (- code 0xD800) 1024) (- low 0xDC00)))))
+          :else (char code))))
+
+(defn- read-string-literal [r line column]
+  (loop [out (transient [])]
+    (let [c-line @(:line r)
+          c-column @(:column r)
+          c (next-char r)]
+      (cond (nil? c) (fail r line column "unterminated string")
+            (= c \") (atom-at (apply str (persistent! out)) (span r line column))
+            (= c \\)
+            (let [e (next-char r)]
+              (recur (conj! out
+                            (cond (nil? e) (fail r line column "unterminated string")
+                                  (= e \n) \newline
+                                  (= e \t) \tab
+                                  (= e \r) \return
+                                  (= e \b) \backspace
+                                  (= e \f) \formfeed
+                                  (= e \") \"
+                                  (= e \\) \\
+                                  (= e (char 117)) (read-unicode-escape r c-line c-column)
+                                  :else (fail r c-line c-column "unknown escape `\\" e
+                                              "` in string")))))
+            ;; Normalize CRLF line endings in string literals to LF (D-029).
+            (= c \return) (recur (if (= (peek-char r) \newline) out (conj! out c)))
+            :else (recur (conj! out c))))))
+
+(def ^:private char-names
+  {"newline" \newline "space" \space "tab" \tab "backspace" \backspace
+   "formfeed" \formfeed "return" \return})
+
+(defn- read-char-literal [r line column]
+  (let [first (next-char r)]
+    (when-not first
+      (fail r line column "unexpected end of input after `\\`"))
+    (let [token (read-token-text r first)
+          value (cond (= (count token) 1) first
+                      (contains? char-names token) (get char-names token)
+                      (and (= (count token) 5)
+                           (= (nth token 0) (char 117))
+                           (digit-value (nth token 1) 16) (digit-value (nth token 2) 16)
+                           (digit-value (nth token 3) 16) (digit-value (nth token 4) 16))
+                      (let [code (digits-value (subs token 1) 16)]
+                        (when (or (high-surrogate? code) (low-surrogate? code))
+                          (fail r line column "\\" token
+                                " is a surrogate code point, not a character"))
+                        (char code))
+                      :else (fail r line column "unsupported character literal `\\" token "`"))]
+      (atom-at value (span r line column)))))
+
+;;; ------------------------------------------------------------------------------------
+;;; The main dispatch
+
+(def ^:private read-sequence-form)
+(def ^:private read-wrapped)
+(def ^:private read-with-meta)
+(def ^:private read-fn-literal)
+(def ^:private read-required)
+(def ^:private read-symbolic-value)
+
+(defn- skip-line-comment [r]
+  (loop []
+    (let [c (next-char r)]
+      (when-not (or (nil? c) (= c \newline)) (recur)))))
+
+(defn- skip-block-comment [r line column]
+  (loop [depth 1]
+    (let [c (next-char r)]
+      (cond (nil? c) (fail r line column "unterminated block comment")
+            (and (= c \|) (= (peek-char r) \#))
+            (do (next-char r)
+                (when (> depth 1) (recur (dec depth))))
+            (and (= c \#) (= (peek-char r) \|))
+            (do (next-char r) (recur (inc depth)))
+            :else (recur depth)))))
+
+(defn- read-next
+  "The next item: [:form syntax], [:close char line column] for a closing delimiter, or
+[:eof]. Skips whitespace, comments and #_ forms."
+  [r]
+  (loop []
+    (loop [] (when (whitespace? (peek-char r)) (next-char r) (recur)))
+    (let [line @(:line r)
+          column @(:column r)
+          c (next-char r)]
+      (cond
+        (nil? c) [:eof]
+        (= c \;) (do (skip-line-comment r) (recur))
+        (= c \() [:form (read-sequence-form r :list \) line column)]
+        (= c \[) [:form (read-sequence-form r :vector \] line column)]
+        (= c \{) [:form (read-sequence-form r :map \} line column)]
+        (or (= c \)) (= c \]) (= c \})) [:close c line column]
+        (= c \") [:form (read-string-literal r line column)]
+        (= c \\) [:form (read-char-literal r line column)]
+        (= c \') [:form (read-wrapped r "quote" nil "'" line column)]
+        (= c \`) [:form (read-wrapped r "syntax-quote" "skein.core" "`" line column)]
+        (= c \~) [:form (if (= (peek-char r) \@)
+                          (do (next-char r)
+                              (read-wrapped r "unquote-splicing" "skein.core" "~@" line column))
+                          (read-wrapped r "unquote" "skein.core" "~" line column))]
+        (= c \@) [:form (read-wrapped r "deref" "skein.core" "@" line column)]
+        (= c \^) [:form (read-with-meta r line column)]
+        (= c \#)
+        (let [d (next-char r)]
+          (cond (= d \{) [:form (read-sequence-form r :set \} line column)]
+                (= d \() [:form (read-fn-literal r line column)]
+                (= d \_) (do (read-required r "#_" line column) (recur))
+                (= d \|) (do (skip-block-comment r line column) (recur))
+                (nil? d) (fail r line column "unexpected end of input after `#`")
+                (= d \#) [:form (read-symbolic-value r line column)]
+                (token-end? d) (fail r line column "unknown dispatch `#" d "`")
+                :else (fail r line column "tagged literals such as `#" (read-token-text r d)
+                            "` are reserved and not supported yet")))
+        :else [:form (read-token-form r c line column)]))))
+
+(defn- read-required
+  "One form that must follow the prefix after, which started at line:column."
+  [r after line column]
+  (let [[kind x close-line close-column] (read-next r)]
+    (case kind
+      :form x
+      :close (fail r close-line close-column "expected a form after `" after "`, found `" x "`")
+      :eof (fail r line column "expected a form after `" after "`, reached end of input"))))
+
+;;; ##Inf, ##-Inf, ##NaN
+
+(defn- read-symbolic-value [r line column]
+  (let [token (if (token-end? (peek-char r)) "" (read-token-text r (next-char r)))]
+    (atom-at (cond (= token "Inf") ##Inf
+                   (= token "-Inf") ##-Inf
+                   (= token "NaN") ##NaN
+                   :else (fail r line column "unknown symbolic value `##" token
+                               "`; expected ##Inf, ##-Inf or ##NaN"))
+             (span r line column))))
+
+;;; Collections
+
+(defn- kind-name [kind]
+  (case kind :list "list" :vector "vector" :map "map" :set "set"))
+
+(defn- check-distinct [items what where]
+  (loop [i 0 seen #{}]
+    (when (< i (count items))
+      (let [item (nth items i)
+            key (print-syntax item)]
+        (when (contains? seen key)
+          (fail-at (:loc item) "duplicate " what " " key " in " where " literal"))
+        (recur (inc i) (conj seen key))))))
+
+(defn- map-keys [items]
+  (loop [i 0 keys []]
+    (if (< i (count items)) (recur (+ i 2) (conj keys (nth items i))) keys)))
+
+(defn- read-sequence-form [r kind close line column]
+  (let [items (loop [items []]
+                (let [[what x close-line close-column] (read-next r)]
+                  (case what
+                    :form (recur (conj items x))
+                    :close (do (when-not (= x close)
+                                 (fail r close-line close-column "expected `" close
+                                       "` to close the " (kind-name kind) " at "
+                                       (format-location (point r line column))
+                                       ", found `" x "`"))
+                               items)
+                    :eof (fail r line column "unterminated " (kind-name kind)))))]
+    (case kind
+      :map (do (when (odd? (count items))
+                 (fail r line column "map literal has an odd number of forms ("
+                       (count items) ")"))
+               (check-distinct (map-keys items) "key" "map"))
+      :set (check-distinct items "element" "set")
+      nil)
+    (compound kind items (span r line column))))
+
+;;; Prefix forms: 'x `x ~x ~@x @x
+
+(defn- read-wrapped [r name ns prefix line column]
+  (let [head (sym-syntax name ns (loc (:file r) line column line (+ column (count prefix))))
+        form (read-required r prefix line column)]
+    (compound :list [head form] (span r line column))))
+
+;;; Metadata: ^type x, ^:key x, ^{...} x
+
+(defn- meta-map
+  "The form after ^ as a map syntax object."
+  [m]
+  (let [l (:loc m)
+        d (:datum m)
+        tag (fn [] (compound :map [(atom-at (keyword "tag") l) m] l))
+        bad (fn [] (fail-at l "metadata must be a symbol, keyword, string, map or type form, not "
+                            (print-syntax m)))]
+    (case (:kind m)
+      :map m
+      :list (tag)
+      :atom (cond (or (symbol? d) (string? d)) (tag)
+                  (keyword? d) (compound :map [m (atom-at true l)] l)
+                  :else (bad))
+      (bad))))
+
+(defn- merge-meta
+  "Two metadata maps merged; keys in outer win."
+  [outer inner]
+  (if (nil? inner)
+    outer
+    (let [outer-items (:datum outer)
+          outer-keys (loop [i 0 ks #{}]
+                       (if (< i (count outer-items))
+                         (recur (+ i 2) (conj ks (print-syntax (nth outer-items i))))
+                         ks))
+          inner-items (:datum inner)
+          items (loop [i 0 items outer-items]
+                  (if (< i (count inner-items))
+                    (recur (+ i 2)
+                           (if (contains? outer-keys (print-syntax (nth inner-items i)))
+                             items
+                             (conj items (nth inner-items i) (nth inner-items (inc i)))))
+                    items))]
+      (compound :map items (:loc outer)))))
+
+(defn- read-with-meta [r line column]
+  (let [m (meta-map (read-required r "^" line column))
+        target (read-required r "^ metadata" line column)]
+    (when-not (or (not= (:kind target) :atom) (symbol? (:datum target)))
+      (fail-at (:loc target) "metadata can only be attached to symbols and collections, not "
+               (print-syntax target)))
+    (assoc target :meta (merge-meta m (:meta target)))))
+
+;;; #(...) anonymous function shorthand
+
+(defn- read-fn-literal [r line column]
+  (when @(:fn-literal r)
+    (fail r line column "nested #() are not allowed"))
+  (reset! (:fn-literal r) {:max-arg 0 :rest? false})
+  (let [[body state] (try [(read-sequence-form r :list \) line column) @(:fn-literal r)]
+                          (finally (reset! (:fn-literal r) nil)))
+        here (loc (:file r) line column line (+ column 2))
+        params (loop [i 1 params []]
+                 (if (<= i (:max-arg state))
+                   (recur (inc i) (conj params (sym-syntax (str "%" i) nil here)))
+                   (if (:rest? state)
+                     (conj params (sym-syntax "&" nil here) (sym-syntax "%&" nil here))
+                     params)))]
+    (compound :list [(sym-syntax "fn" nil here) (compound :vector params here) body]
+              (span r line column))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Public entry points
+
+(defn read-form
+  "The next form from reader r as a syntax object. At the end of the input, signal a
+read-error if eof-error? is true, else return eof-value."
+  ([r] (read-form r true nil))
+  ([r eof-error? eof-value]
+   (let [[kind x line column] (read-next r)]
+     (case kind
+       :form x
+       :close (fail r line column "unexpected `" x "`")
+       :eof (if eof-error?
+              (fail r @(:line r) @(:column r) "unexpected end of input")
+              eof-value)))))
+
+(defn read-all
+  "Every remaining form from reader r, as a vector of syntax objects."
+  [r]
+  (loop [forms []]
+    (let [form (read-form r false ::eof)]
+      (if (= form ::eof) forms (recur (conj forms form))))))
+
+(defn read-string-forms
+  "Every form in the string text, as a vector of syntax objects. opts are make-reader's."
+  ([text] (read-string-forms text {}))
+  ([text opts] (read-all (make-reader text opts))))
+
+(defn read-string-form
+  "Exactly one form from the string text; a read-error if it holds none or more than
+one. opts are make-reader's."
+  ([text] (read-string-form text {}))
+  ([text opts]
+   (let [r (make-reader text opts)
+         form (read-form r true nil)
+         extra (read-form r false ::eof)]
+     (when-not (= extra ::eof)
+       (fail-at (:loc extra) "expected one form, found more"))
+     form)))

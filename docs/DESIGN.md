@@ -187,7 +187,7 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 
 **Arithmetic:** `+ - *` follow numeric contagion: integer op integer gives an integer; any float makes the result a float; `f32` op `f64` gives `f64`. **`/` on integers always returns `f64`.** Use `quot`, `rem` and `mod` for integer division. There are **no ratios** in v1 (D-026).
 
-**Conversions** are named after the type they produce (D-040): `(f32 x)`, `(f64 x)`, and `(int x)`, which truncates toward zero. `(rand)` and `(rand n)` give an `f64` in [0, n); `(rand-int n)` an integer in [0, n). `(parse-long s)` reads a decimal integer, or returns `nil`.
+**Conversions** are named after the type they produce (D-040): `(f32 x)`, `(f64 x)`, and `(int x)`, which truncates toward zero. As in Clojure, `(int \a)` gives a character's code point (97) and `(char 97)` the character with a code point (D-048). `(rand)` and `(rand n)` give an `f64` in [0, n); `(rand-int n)` an integer in [0, n). `(parse-long s)` reads a decimal integer, or returns `nil`.
 
 **Integer overflow:** arithmetic on values known only to be `integer` always promotes to a bignum on fixnum overflow, at every optimization policy, including `speed 3` (D-023). Fixnum-only arithmetic happens only when operands and result are declared or inferred `fixnum` or a machine integer type; overflow of those follows §12.3.
 
@@ -709,6 +709,7 @@ Backend
 - **Core IR** is a small, fully macro-expanded, alpha-renamed tree, documented in [`docs/CORE-IR.md`](CORE-IR.md). Every node carries a source location. In Phase 0 it is a plain tree; an ANF (A-normal form) pass runs before the C backend in Phase 1 (D-030).
 - **Phase 0:** the front end is written in Common Lisp.
 - **Phase 1:** the front end is ported to Skein (self-hosting), bootstrapped by running the Phase 0 implementation.
+  - The reader is `skein.compiler.reader` (`lib/skein/compiler/reader.skn`, D-048). Its syntax objects are maps: `{:kind :datum :loc}`, plus `:meta` when there is metadata. The datum of a compound form is a vector of syntax objects, and a location is a map `{:file :line :column :end-line :end-column}`.
 - **Compilation unit:** the namespace. Compiled output is cached per namespace, keyed by a source hash plus the hashes of its macro dependencies.
 
 ## 17. Runtime architecture (Phase 1+)

@@ -7,14 +7,109 @@
 
 (in-suite skein.reader)
 
+;;; Which reader the tests use. The suite runs once with the CL reader, and again with
+;;; the reader written in Skein (lib/skein/compiler/reader.skn, M1.6), whose syntax
+;;; objects and errors are converted to the CL reader's.
+
+(defvar *use-skein-reader* nil
+  "True while the reader tests run against the reader written in Skein.")
+
+(defun skein-reader-function (name)
+  "The function skein.compiler.reader/NAME, loading the namespace the first time."
+  (let ((ns (skein.runtime:find-namespace "skein.compiler.reader")))
+    (unless (and ns (skein.runtime:find-own-var ns name))
+      (ev "(ns reader-bridge (:require [skein.compiler.reader]))")
+      (setf ns (skein.runtime:find-namespace "skein.compiler.reader")))
+    (skein.runtime:var-get (skein.runtime:find-own-var ns name) nil)))
+
+(defun skein-get (map key-name)
+  (skein.runtime::map-get map (skein.runtime:intern-kw key-name)))
+
+(defun from-skein-location (loc)
+  (and loc
+       (skein.syntax:make-source-location
+        :file (skein-get loc "file") :line (skein-get loc "line")
+        :column (skein-get loc "column") :end-line (skein-get loc "end-line")
+        :end-column (skein-get loc "end-column"))))
+
+(defun from-skein-syntax (form)
+  "The Skein reader's syntax object FORM (a map) as a CL syntax object."
+  (let ((kind (intern (string-upcase (skein.runtime:kw-name (skein-get form "kind")))
+                      :keyword))
+        (datum (skein-get form "datum"))
+        (meta (skein-get form "meta")))
+    (skein.syntax:make-syntax
+     :kind kind
+     :datum (if (eq kind :atom)
+                datum
+                (mapcar #'from-skein-syntax (skein.runtime:vector-to-list datum)))
+     :location (from-skein-location (skein-get form "loc"))
+     :meta (and meta (from-skein-syntax meta)))))
+
+(defun call-skein-reader (name &rest args)
+  "Call skein.compiler.reader/NAME, turning its read-error into a SKEIN.READER:READ-ERROR."
+  (handler-bind
+      ((error (lambda (c)
+                (let ((type (skein.runtime::defined-type-of c)))
+                  (when (and type (string= (skein.runtime:condition-type-name type)
+                                           "skein.compiler.reader/read-error"))
+                    (error 'skein.reader:read-error
+                           :message (skein.runtime::condition-slot c "message")
+                           :location (from-skein-location
+                                      (skein.runtime::condition-slot c "location"))))))))
+    (apply (skein-reader-function name) args)))
+
+(defun skein-reader-options (&key file namespace resolve-alias)
+  (skein.runtime::map-from-pairs
+   (list (kw "file") file (kw "namespace") namespace (kw "resolve-alias") resolve-alias)))
+
+(defun reader-read-forms-from-string (string &key file namespace)
+  (if *use-skein-reader*
+      (mapcar #'from-skein-syntax
+              (skein.runtime:vector-to-list
+               (call-skein-reader "read-string-forms" string
+                                  (skein-reader-options :file file :namespace namespace))))
+      (skein.reader:read-forms-from-string string :file file :namespace namespace)))
+
+(defun reader-read-form-from-string (string &key file namespace)
+  (if *use-skein-reader*
+      (from-skein-syntax
+       (call-skein-reader "read-string-form" string
+                          (skein-reader-options :file file :namespace namespace)))
+      (skein.reader:read-form-from-string string :file file :namespace namespace)))
+
+(defun reader-make (stream &key namespace resolve-alias)
+  (if *use-skein-reader*
+      (call-skein-reader "make-reader" (uiop:slurp-stream-string stream)
+                         (skein-reader-options :namespace namespace
+                                               :resolve-alias resolve-alias))
+      (skein.reader:make-reader stream :namespace namespace :resolve-alias resolve-alias)))
+
+(defun reader-read-form (r &key eof-value)
+  (if *use-skein-reader*
+      (let ((form (call-skein-reader "read-form" r skein.runtime:+false+ eof-value)))
+        (if (eq form eof-value) form (from-skein-syntax form)))
+      (skein.reader:read-form r :eof-value eof-value)))
+
+(defun set-reader-namespace (r namespace)
+  (if *use-skein-reader*
+      (call-skein-reader "set-reader-namespace!" r namespace)
+      (setf (skein.reader:reader-namespace r) namespace)))
+
+(defun reader-read-file (path)
+  (if *use-skein-reader*
+      (reader-read-forms-from-string
+       (uiop:read-file-string path :external-format :utf-8) :file path)
+      (skein.reader:read-file path)))
+
 ;;; Helpers
 
 (defun rd (string)
   "Read exactly one form from STRING in namespace `user`."
-  (skein.reader:read-form-from-string string :file "t.skn" :namespace "user"))
+  (reader-read-form-from-string string :file "t.skn" :namespace "user"))
 
 (defun rd-all (string)
-  (skein.reader:read-forms-from-string string :file "t.skn" :namespace "user"))
+  (reader-read-forms-from-string string :file "t.skn" :namespace "user"))
 
 (defun rd-str (string)
   "Read STRING and print every form back, with metadata, separated by \" | \"."
@@ -87,7 +182,7 @@ LINE:COLUMN of t.skn."
   (is (eq (kw "kw" "user") (datum "::kw")))
   (is (eq (kw "kw" "game.player")
           (skein.syntax:syntax-datum
-           (skein.reader:read-form-from-string "::kw" :namespace "game.player"))))
+           (reader-read-form-from-string "::kw" :namespace "game.player"))))
   (is (eq (kw "1") (datum ":1")))
   (is (eq (kw "a?") (datum ":a?"))))
 
@@ -248,17 +343,16 @@ x ; trailing
 
 (test alias-keywords
   (with-input-from-string (s "::m/k")
-    (let ((r (skein.reader:make-reader s :resolve-alias (lambda (a) (and (string= a "m")
-                                                                         "skein.math")))))
-      (is (eq (kw "k" "skein.math") (skein.syntax:syntax-datum (skein.reader:read-form r)))))))
+    (let ((r (reader-make s :resolve-alias (lambda (a) (and (string= a "m") "skein.math")))))
+      (is (eq (kw "k" "skein.math") (skein.syntax:syntax-datum (reader-read-form r)))))))
 
 (test reader-namespace-can-change-between-forms
   (with-input-from-string (s "::a ::b")
-    (let ((r (skein.reader:make-reader s :namespace "one")))
-      (is (eq (kw "a" "one") (skein.syntax:syntax-datum (skein.reader:read-form r))))
-      (setf (skein.reader:reader-namespace r) "two")
-      (is (eq (kw "b" "two") (skein.syntax:syntax-datum (skein.reader:read-form r))))
-      (is (eq :done (skein.reader:read-form r :eof-value :done))))))
+    (let ((r (reader-make s :namespace "one")))
+      (is (eq (kw "a" "one") (skein.syntax:syntax-datum (reader-read-form r))))
+      (set-reader-namespace r "two")
+      (is (eq (kw "b" "two") (skein.syntax:syntax-datum (reader-read-form r))))
+      (is (eq :done (reader-read-form r :eof-value :done))))))
 
 ;;; Locations
 
@@ -369,7 +463,7 @@ x ; trailing
   (read-fails ":::a" "invalid keyword" 1 1)
   (read-fails "::a/b" "no namespace alias `a` for `::a/b`" 1 1)
   (read-fails "::a/" "invalid keyword" 1 1)
-  (let ((e (handler-case (skein.reader:read-form-from-string "::k")
+  (let ((e (handler-case (reader-read-form-from-string "::k")
              (skein.reader:read-error (e) e))))
     (is (search "needs a current namespace" (skein.reader:read-error-message e)))))
 
@@ -406,15 +500,15 @@ x ; trailing
     (is (string= "unterminated string at t.skn:2:3" (princ-to-string e)))))
 
 (test read-form-from-string-wants-one-form
-  (signals skein.reader:read-error (skein.reader:read-form-from-string ""))
-  (signals skein.reader:read-error (skein.reader:read-form-from-string "a b")))
+  (signals skein.reader:read-error (reader-read-form-from-string ""))
+  (signals skein.reader:read-error (reader-read-form-from-string "a b")))
 
 (test read-file
   (uiop:with-temporary-file (:pathname path :type "skn")
     (with-open-file (s path :direction :output :if-exists :supersede
                             :external-format :utf-8)
       (format s "(ns demo)~%(def λ \"é\")~%"))
-    (let ((forms (skein.reader:read-file (namestring path))))
+    (let ((forms (reader-read-file (namestring path))))
       (is (= 2 (length forms)))
       (is (string= "(def λ \"é\")" (skein.syntax:syntax-to-string (second forms))))
       (is (equal (namestring path)
@@ -564,3 +658,65 @@ x ; trailing
           (fail "~A: expected ~S, read ~S" text expected actual)
           (return))))
     (pass)))
+
+;;; The reader in Skein (M1.6): the tests above, run against it
+
+(def-suite skein.reader-in-skein :in all
+  :description "The reader written in Skein, checked against the CL reader's tests.")
+
+(in-suite skein.reader-in-skein)
+
+(test reader-in-skein-passes-the-reader-tests
+  (let* ((*use-skein-reader* t)
+         (results (fiveam:run 'skein.reader)))
+    (unless (fiveam:results-status results)
+      (fiveam:explain! results))
+    (is (fiveam:results-status results) "the reader in Skein fails some reader tests")))
+
+(defun same-locations-p (a b)
+  "True if syntax objects A and B, and everything inside them (metadata included), have
+the same locations."
+  (flet ((loc-list (s)
+           (let ((l (skein.syntax:syntax-location s)))
+             (and l (list (skein.syntax:source-location-file l)
+                          (skein.syntax:source-location-line l)
+                          (skein.syntax:source-location-column l)
+                          (skein.syntax:source-location-end-line l)
+                          (skein.syntax:source-location-end-column l))))))
+    (and (equal (loc-list a) (loc-list b))
+         (eq (null (skein.syntax:syntax-meta a)) (null (skein.syntax:syntax-meta b)))
+         (or (null (skein.syntax:syntax-meta a))
+             (same-locations-p (skein.syntax:syntax-meta a) (skein.syntax:syntax-meta b)))
+         (or (eq (skein.syntax:syntax-kind a) :atom)
+             (every #'same-locations-p (skein.syntax:syntax-items a)
+                    (skein.syntax:syntax-items b))))))
+
+(defun repository-skn-files ()
+  (let ((root (truename (asdf:system-relative-pathname "skein" "../"))))
+    (sort (remove-if (lambda (p)
+                       (let ((s (namestring p)))
+                         (or (search ".skein-cache" s) (search "/build/" s)
+                             (search "/dist/" s))))
+                     (directory (merge-pathnames "**/*.skn" root)))
+          #'string< :key #'namestring)))
+
+(test reader-in-skein-reads-every-skn-file
+  ;; The exit criterion of M1.6: the same syntax objects, data and locations, as the CL
+  ;; reader for every .skn file in the repository.
+  (let ((files (repository-skn-files)))
+    (is (> (length files) 20) "found only ~D .skn files" (length files))
+    (dolist (path files)
+      (let* ((name (namestring path))
+             (expected (skein.reader:read-file name :namespace "user"))
+             (actual (let ((*use-skein-reader* t))
+                       (reader-read-forms-from-string
+                        (uiop:read-file-string path :external-format :utf-8)
+                        :file name :namespace "user"))))
+        (is (= (length expected) (length actual)) "~A: ~D forms, the Skein reader read ~D"
+            name (length expected) (length actual))
+        (loop for e in expected
+              for a in actual
+              unless (and (skein.syntax:syntax-equal e a :meta t) (same-locations-p e a))
+                do (fail "~A: the Skein reader differs at ~A" name
+                         (skein.syntax:format-location (skein.syntax:syntax-location e)))
+                   (return))))))
