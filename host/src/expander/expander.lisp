@@ -380,7 +380,9 @@ that is a destructuring pattern gets a fresh local; PATTERNS lists (pattern . lo
 (define-special-form "loop*" (form env tail)
   (check-arg-count form 1 nil)
   (multiple-value-bind (bindings inner) (analyze-sequential-bindings form env "loop*")
-    (let ((node (make-loop-node :location (loc form) :bindings bindings)))
+    ;; Copy: with no bindings, INNER is ENV itself, whose recur target must not change.
+    (let ((node (make-loop-node :location (loc form) :bindings bindings))
+          (inner (copy-env inner)))
       (setf (env-recur inner) node
             (env-recur-count inner) (length bindings)
             (loop-node-body node) (analyze-body (cddr (items form)) inner t (loc form)))

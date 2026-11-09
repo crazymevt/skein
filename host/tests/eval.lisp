@@ -205,6 +205,13 @@ when they are given."
             1)
   (evals-to "(loop* [i 0] (if (< i 3) (do (recur (inc i))) i))" 3)
   (evals-to "(loop* [i 0] (let* [j (inc i)] (if (< j 5) (recur j) j)))" 5)
+  ;; Regression: an inner loop* without bindings must not take over the outer recur.
+  (evals-to "(loop* [i 0 n 0]
+               (if (< i 3)
+                 (do (loop* [] (if (= n 99) (recur) n))
+                     (recur (inc i) (+ n 2)))
+                 n))"
+            6)
   (compile-fails "(loop* [i 0] (+ 1 (recur i)))" "recur must be in tail position"
                  :line 1 :column 19)
   (compile-fails "(loop* [i 0] (recur))" "recur expects 1 argument, got 0")
