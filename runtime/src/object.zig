@@ -24,9 +24,45 @@ pub const TypeId = enum(u16) {
     /// A function: payload word 0 is its code pointer, word 1 its name (a C string).
     /// Closures add their captured values after these (M1.4).
     function = 4,
-    /// A fixed number of values: payload words are all Values. Used inside the runtime
-    /// (closure environments from M1.4, the GC's tests).
+    /// A fixed number of values. Used inside the runtime: vector trie nodes, HAMT
+    /// arrays, the GC's tests.
     tuple = 5,
+    // M1.4's types (D-046). Unless noted, every payload word is a Value; raw integers
+    // are stored as fixnums.
+    /// [hash, namespace (string or nil), name (string)]; interned and permanent.
+    symbol = 6,
+    keyword = 7,
+    /// [name]; permanent.
+    namespace = 8,
+    /// [value, namespace, name]; permanent.
+    @"var" = 9,
+    /// The empty list (): [hash or nil].
+    empty_list = 10,
+    /// [first, rest, count, hash or nil].
+    list = 11,
+    /// [count, shift, root node, tail (tuple), hash or nil]. Trie nodes are 33-slot
+    /// tuples: 32 children and the edit token that owns the node (nil if none).
+    vector = 12,
+    /// [count, shift, root, tail (32-slot tuple), edit token or nil once persistent].
+    transient_vector = 13,
+    /// [pairs (tuple of keys and values), hash or nil]: up to 8 entries.
+    array_map = 14,
+    /// [count, root node or nil, hash or nil]: a HAMT.
+    hash_map = 15,
+    /// HAMT nodes: [edit, bitmap, pairs] and [edit, hash, pairs]. A pair whose key is
+    /// `unbound` holds a child node.
+    bitmap_node = 16,
+    collision_node = 17,
+    /// [count, root, edit token, array (16-slot tuple) or nil].
+    transient_map = 18,
+    /// [map, hash or nil].
+    hash_set = 19,
+    /// [transient map].
+    transient_set = 20,
+    /// [value, hash].
+    atom = 21,
+    /// A transient's owner: [owning thread's id].
+    edit_token = 22,
     _,
 };
 
@@ -67,10 +103,11 @@ pub const Header = packed struct(u64) {
         const p = h.payload();
         const values: [*]Value = @ptrCast(p.ptr);
         return switch (h.type_id) {
-            .tuple => values[0..p.len],
+            // Raw data only.
+            .f64, .string, .bignum, .invalid => values[0..0],
             // Code pointer and name, then captured values.
             .function => values[@min(2, p.len)..p.len],
-            else => values[0..0],
+            else => values[0..p.len],
         };
     }
 

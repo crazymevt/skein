@@ -28,6 +28,12 @@ pub fn name(v: Value) []const u8 {
 
 /// Call `f` with `args`; calling anything but a function is an error.
 pub fn call(f: Value, argc: u32, argv: [*]const Value) Value {
+    // A keyword looks itself up in its argument: (:a m) and (:a m default).
+    if (f.isObjectOf(.keyword)) {
+        if (argc < 1 or argc > 2) rt.fatal("wrong number of arguments ({d}) passed to a keyword", .{argc});
+        const args = [_]Value{ argv[0], f, if (argc == 2) argv[1] else Value.nil };
+        return call(@import("core.zig").function("get").?, 3, &args);
+    }
     if (!f.isObjectOf(.function)) {
         const print = @import("print.zig");
         var buf: std.ArrayList(u8) = .empty;

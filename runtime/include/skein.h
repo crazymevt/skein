@@ -58,6 +58,34 @@ sk_value sk_check_number(const char *name, sk_value v);
 
 sk_value sk_print(uint32_t argc, const sk_value *argv, _Bool readably, _Bool newline);
 
+/* Names, vars, core functions, collections and closures (M1.4, D-046). */
+sk_value sk_keyword(const char *ns, const char *name);
+sk_value sk_symbol(const char *ns, const char *name);
+sk_value sk_var(const char *ns, const char *name);
+sk_value sk_var_set(sk_value var, sk_value value);
+sk_value sk_core(const char *name);
+sk_value sk_list_of(size_t count, const sk_value *items);
+sk_value sk_vector_of(size_t count, const sk_value *items);
+sk_value sk_map_of(size_t count, const sk_value *keys_and_values);
+sk_value sk_set_of(size_t count, const sk_value *items);
+sk_value sk_rest_list(uint32_t argc, const sk_value *argv, uint32_t from);
+sk_value sk_closure(sk_code code, const char *name, size_t count, const sk_value *captured);
+void sk_closure_set(sk_value f, size_t i, sk_value value);
+
+/* An object's payload words, after its header (the pointer is tagged with 1). */
+#define SK_PAYLOAD(v) ((sk_value *)(uintptr_t)((v) - 1) + 1)
+
+/* A var's value is its first payload word. */
+static inline sk_value sk_var_value(sk_value var) { return SK_PAYLOAD(var)[0]; }
+
+static inline sk_value sk_var_get(sk_value var, const char *name, const char *location) {
+    sk_value v = sk_var_value(var);
+    return v != SK_UNBOUND ? v : sk_unbound(name, location);
+}
+
+/* A closure's captured values follow its code pointer and name. */
+#define SK_CAPTURED(self, i) (SK_PAYLOAD(self)[2 + (i)])
+
 /* Fast paths: fixnums are n << 2, so tagged words add and subtract directly, and a
  * signed overflow of the word is exactly an overflow of the fixnum range. */
 

@@ -134,6 +134,9 @@ const State = struct {
     stats: Stats = .{},
 
     roots: std.ArrayList([]Value) = .empty,
+    /// Objects that live forever (interned symbols and keywords, vars): old, never
+    /// moved, and always marked.
+    permanent: std.ArrayList(*Header) = .empty,
     remembered: std.ArrayList(*Header) = .empty,
 
     mutators: ?*Mutator = null,
@@ -323,6 +326,11 @@ pub fn attachThread() *Mutator {
     state.mutators = m;
     current = m;
     return m;
+}
+
+/// A number identifying the calling thread while it is attached (it owns transients).
+pub fn currentThreadId() usize {
+    return @intFromPtr(attachThread()) >> 3;
 }
 
 /// Unregister the calling thread. Its objects stay alive if something references them.
@@ -562,6 +570,25 @@ fn allocOld(words: usize) *Header {
     return @ptrFromInt(segmentStart(i));
 }
 
+/// Allocate an object that is never freed or moved (interned symbols and keywords, vars,
+/// namespaces). Its value slots must be written with `store`, like any old object's.
+pub fn allocPermanent(type_id: object.TypeId, len: usize) *Header {
+    const payload = @max(len, 1);
+    world.lock();
+    defer world.unlock();
+    ensureInit();
+    // Don't allocate in the middle of a collection.
+    while (sk_gc_pending != 0) world_cond.wait(&world);
+    const h = if (1 + payload >= large_words) blk: {
+        const n = ((1 + payload) * 8 + segment_size - 1) / segment_size;
+        break :blk @as(*Header, @ptrFromInt(segmentStart(acquireSegments(n, .large_head))));
+    } else allocOld(1 + payload);
+    h.* = Header.init(type_id, @intCast(payload));
+    h.gc.old = true;
+    listAppend(*Header, &state.permanent, h);
+    return h;
+}
+
 // ---------------------------------------------------------------------------------------
 // Minor collection
 
@@ -700,6 +727,7 @@ fn major() void {
     minor(); // now every live object is old
     state.stats.major_collections += 1;
     scanStacks(markConservative);
+    for (state.permanent.items) |h| mark(h);
     for (state.roots.items) |slots| {
         for (slots) |v| if (v.isObject()) mark(v.toObject());
     }

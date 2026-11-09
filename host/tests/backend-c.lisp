@@ -185,6 +185,60 @@
                    (minor (and at (parse-integer err :start (+ at 4) :junk-allowed t))))
               (is (and minor (>= minor 5)) "expected several minor collections: ~A" err)))))))
 
+;;; Core data (M1.4): collections, names, closures, atoms and transients
+
+(test native-core-functions
+  ;; About ninety skein.core functions over every collection type, printed with prn.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein" "tests/fixtures/native-core.skn"))))
+
+(test native-closures
+  (native-matches "(ns closures)
+(defn adder [n] (fn [x] (+ x n)))
+(defn compose [f g] (fn [& args] (f (apply g args))))
+(defn counter []
+  (let [count (atom 0)]
+    {:inc (fn [] (swap! count inc)) :get (fn [] @count)}))
+(defn nested [a] (fn [b] (fn [c] [a b c])))
+(def add5 (adder 5))
+(println (add5 10) ((adder 1) 2) ((compose inc +) 1 2 3) (((nested 1) 2) 3))
+(let [c (counter)] ((:inc c)) ((:inc c)) (println ((:get c))))
+(println (letfn [(ev? [n] (if (zero? n) true (od? (dec n))))
+                 (od? [n] (if (zero? n) false (ev? (dec n))))]
+           [(ev? 10) (od? 7) (ev? 3)]))
+(defn rest-args [a & more] [a more])
+(println (rest-args 1) (rest-args 1 2 3) (apply rest-args [4 5]))
+(defn for-each-n [n f] (loop [i 0 acc []] (if (< i n) (recur (inc i) (conj acc (f i))) acc)))
+(defn make-fns [] (vec (for-each-n 3 (fn [i] (fn [] (* i 100))))))
+(defn map-vec [f v] (reduce (fn [acc x] (conj acc (f x))) [] v))
+(println (map-vec (fn [g] (g)) (make-fns)))
+(def ^:private counter-atom (atom []))
+(swap! counter-atom conj :a)
+(swap! counter-atom (fn [v x] (conj v x)) :b)
+(prn @counter-atom (def zz 1) zz)
+(defn -main [& args] (prn :main args))"))
+
+(test native-collections-under-gc
+  ;; Big collections built and changed in compiled code, with many collections along
+  ;; the way.
+  (native-matches "(ns bigcoll)
+(defn map-range [a b] (loop [i a acc []] (if (< i b) (recur (inc i) (conj acc i)) acc)))
+(defn take-n [n m] (reduce (fn [acc e] (if (< (count acc) n) (conj acc e) acc)) [] m))
+(defn build-map [n]
+  (loop [i 0 m {}] (if (< i n) (recur (inc i) (assoc m (str \"k\" i) [i (* i i)])) m)))
+(defn build-vec [n]
+  (loop [i 0 t (transient [])] (if (< i n) (recur (inc i) (conj! t {:i i})) (persistent! t))))
+(defn drain [m n] (loop [i 0 m m] (if (< i n) (recur (inc i) (dissoc m (str \"k\" i))) m)))
+(let [m (build-map 50000)
+      v (build-vec 100000)
+      s (into #{} (map-range 0 3000))
+      d (drain m 49990)]
+  (println (count m) (get m \"k49999\") (get m \"nope\" :missing))
+  (println (count v) (nth v 77777) (:i (peek v)))
+  (println (count s) (contains? s 2999) (contains? s 3000))
+  (prn d)
+  (prn (= m (build-map 50000)) (= v (build-vec 100000)) (into {} (take-n 12 m))))"))
+
 ;;; Runtime errors: a message on stderr and exit status 1
 
 (test native-runtime-errors
@@ -199,10 +253,8 @@
 ;;; What the native backend can't compile yet: errors with locations
 
 (test native-unsupported
-  (build-fails "(ns u1) (defn adder [n] (fn [x] (+ x n)))" "closures that capture locals")
-  (build-fails "(ns u2) (println :kw)" "keywords, symbols and collections arrive in M1.4")
-  (build-fails "(ns u3) (println (count \"ab\"))" "can't call skein.core/count yet")
-  (build-fails "(ns u4) (def f inc)" "can't use skein.core/inc as a value yet")
+  (build-fails "(ns u3) (println (map inc [1 2]))" "can't use skein.core/map yet")
+  (build-fails "(ns u4) (def f range)" "can't use skein.core/range yet")
   (build-fails "(ns u5) (try 1 (catch error e 2))" "conditions yet (M1.5)")
   (build-fails "(ns u6) (println (inc 1 2))" "wrong number of arguments (2) passed to skein.core/inc"))
 
@@ -217,9 +269,21 @@
     (declare (ignore out))
     (is (= skein.cli:+exit-failure+ code))
     (is (search "file not found" err)))
-  (with-program (file "(ns bc) (println :kw)")
+  (with-program (file "(ns bc) (println (map inc [1]))")
     (multiple-value-bind (code out err) (run-cli "build" (namestring file))
       (declare (ignore out))
       (is (= skein.cli:+exit-failure+ code))
       (is (search "error: " err))
-      (is (search "prog.skn:1:18" err)))))
+      (is (search "prog.skn:1:19" err)))))
+
+(test every-native-core-function-exists
+  ;; Each name the emitter allows refers to a function the runtime has (sk_core stops the
+  ;; program at startup otherwise).
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-program (file (format nil "(ns allcore) (def fns [~{~A~^ ~}]) (println (count fns))"
+                                  skein.backend.c::*native-core-functions*))
+        (multiple-value-bind (out err code) (native-run file)
+          (is (eql 0 code) "stderr: ~A" err)
+          (is (string= (format nil "~D~%" (length skein.backend.c::*native-core-functions*))
+                       out))))))

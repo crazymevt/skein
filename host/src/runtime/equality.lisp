@@ -94,12 +94,12 @@ never equal; f32 and f64 compare by value."
   (typecase x
     (null 0)
     ((eql t) 1231)
-    (integer (if (typep x '(signed-byte 64))
-                 (mix32 (fold32 x))
-                 (mix32 (fold32 (sxhash x)))))
+    ;; Integers, floats and strings hash portably, as the native runtime does (D-046).
+    (integer (mix32 (fold32 x)))
     (float (if (zerop x)
                0
-               (mix32 (fold32 (sxhash (coerce x 'double-float))))))
+               (mix32 (fold32 (ldb (byte 64 0) (sb-kernel:double-float-bits
+                                                (coerce x 'double-float)))))))
     (character (mix32 (char-code x)))
     (string (string-hash32 x))
     (sym (sym-hash x))

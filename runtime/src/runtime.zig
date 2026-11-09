@@ -21,6 +21,11 @@ pub const string = @import("string.zig");
 pub const func = @import("func.zig");
 pub const print = @import("print.zig");
 pub const api = @import("api.zig");
+pub const hash = @import("hash.zig");
+pub const names = @import("names.zig");
+pub const coll = @import("coll.zig");
+pub const equal = @import("equal.zig");
+pub const core = @import("core.zig");
 
 pub const Value = value.Value;
 
@@ -41,5 +46,11 @@ test {
     _ = func;
     _ = print;
     _ = api;
+    _ = hash;
+    _ = names;
+    _ = coll;
+    _ = equal;
+    _ = @import("coll_test.zig");
+    _ = core;
     _ = @import("platform_test.zig");
 }

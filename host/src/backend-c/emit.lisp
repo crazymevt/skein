@@ -44,7 +44,9 @@ yet. The message names the milestone that adds it."))
   out
   (indent 1)
   ;; Local -> C expression naming it.
-  (locals (make-hash-table :test 'eq)))
+  (locals (make-hash-table :test 'eq))
+  ;; Locals of enclosing functions that this function captured.
+  (captured (make-hash-table :test 'eq)))
 
 (defvar *ctx*)
 
@@ -128,9 +130,42 @@ yet. The message names the milestone that adds it."))
          (startup-constant (list :string value)
                            (format nil "sk_string(~A, ~D)" (c-string-literal value)
                                    (utf8-length value))))
-        (t (unsupported node "the native backend can't compile the constant ~A yet; ~
-                              keywords, symbols and collections arrive in M1.4"
+        ((skein.runtime:kw-p value)
+         (startup-constant (list :keyword (skein.runtime:kw-namespace value)
+                                 (skein.runtime:kw-name value))
+                           (format nil "sk_keyword(~A, ~A)"
+                                   (optional-c-string (skein.runtime:kw-namespace value))
+                                   (c-string-literal (skein.runtime:kw-name value)))))
+        ((sym-p value)
+         (startup-constant (list :symbol (sym-namespace value) (sym-name value))
+                           (format nil "sk_symbol(~A, ~A)"
+                                   (optional-c-string (sym-namespace value))
+                                   (c-string-literal (sym-name value)))))
+        ((skein.runtime:pvector-p value)
+         (collection-constant value "sk_vector_of" (skein.runtime:vector-to-list value) node))
+        ((or (skein.runtime::plist-p value) (skein.runtime::empty-list-p value))
+         (collection-constant value "sk_list_of" (skein.runtime:seq-to-cl value) node))
+        ((skein.runtime::map-p value)
+         (let ((kvs '()))
+           (skein.runtime::map-reduce-kv value (lambda (acc k v) (push k kvs) (push v kvs) acc)
+                                         nil)
+           (collection-constant value "sk_map_of" (nreverse kvs) node)))
+        ((skein.runtime::hash-set-p value)
+         (collection-constant value "sk_set_of" (skein.runtime:seq-to-cl value) node))
+        (t (unsupported node "the native backend can't compile the constant ~A yet"
                         (readable-string value)))))
+
+(defun optional-c-string (string)
+  (if string (c-string-literal string) "NULL"))
+
+(defun collection-constant (value constructor elements node)
+  "A startup constant built by CONSTRUCTOR from the constants ELEMENTS (made first)."
+  (let ((exprs (mapcar (lambda (x) (constant-expr x node)) elements)))
+    (startup-constant (list :collection (readable-string value))
+                      (if exprs
+                          (format nil "~A(~D, (const sk_value[]){~{~A~^, ~}})"
+                                  constructor (length exprs) exprs)
+                          (format nil "~A(0, NULL)" constructor)))))
 
 (defun var-c-name (var)
   (or (gethash var (unit-vars *unit*))
@@ -138,7 +173,7 @@ yet. The message names the milestone that adds it."))
         (setf (gethash var (unit-vars *unit*)) name
               (unit-var-decls *unit*)
               (append (unit-var-decls *unit*)
-                      (list (cons name (skein.runtime:var-qualified-name var)))))
+                      (list (list name (namespace-name (var-namespace var)) (var-name var)))))
         name)))
 
 (defun core-var-p (var)
@@ -153,8 +188,7 @@ yet. The message names the milestone that adds it."))
     (const-node (constant-expr (const-node-value node) node))
     (local-ref-node
      (or (gethash (local-ref-node-local node) (ctx-locals *ctx*))
-         (unsupported node "~A is a local of an enclosing function; closures that capture ~
-                            locals arrive in M1.4"
+         (unsupported node "internal error: no C variable for the local ~A"
                       (local-name (local-ref-node-local node)))))
     (var-ref-node (emit-var-ref node))
     (if-node (emit-if node))
@@ -163,12 +197,13 @@ yet. The message names the milestone that adds it."))
                  (setf value (emit f))
                  (when (eq value :recur) (return :recur)))))
     (def-node
+     ;; def returns the var, as in Phase 0.
      (let ((name (var-c-name (def-node-var node))))
        (when (def-node-init node)
          (let ((init (emit (def-node-init node))))
-           (stmt "~A = ~A;" name init)))
-       "SK_NIL"))
-    (fn-node (emit-fn node))
+           (stmt "sk_var_set(~A, ~A);" name init)))
+       name))
+    (fn-node (values (emit-fn node)))
     (let-node (emit-let (let-node-bindings node))
      (emit (let-node-body node)))
     (loop-node (emit-loop node))
@@ -176,8 +211,15 @@ yet. The message names the milestone that adds it."))
     (call-node (emit-call node))
     (the-node (emit (the-node-expr node)))
     (locally-node (emit (locally-node-body node)))
-    (letfn-node (unsupported node "the native backend can't compile letfn yet (M1.4)"))
-    (set-node (unsupported node "the native backend can't compile set! yet (M1.4)"))
+    (letfn-node (emit-letfn node))
+    (set-node
+     (let ((local (set-node-local node)))
+       (when (gethash local (ctx-captured *ctx*))
+         (unsupported node "a closure can't set! the ^:mutable local ~A of an enclosing ~
+                            function yet" (local-name local)))
+       (let ((v (emit (set-node-value node))))
+         (stmt "~A = ~A;" (gethash local (ctx-locals *ctx*)) v)
+         v)))
     ((or unwind-protect-node block-node return-from-node throw-condition-node
          handler-bind-node restart-bind-node)
      (unsupported node "the native backend can't compile non-local exits or conditions ~
@@ -185,16 +227,34 @@ yet. The message names the milestone that adds it."))
     ((or values-node let-values-node)
      (unsupported node "the native backend can't compile multiple values yet (M1.9)"))))
 
+(defparameter *native-core-functions*
+  '("+" "-" "*" "/" "<" ">" "<=" ">=" "==" "=" "not=" "inc" "dec" "max" "min" "abs" "mod"
+    "rem" "quot" "compare" "zero?" "pos?" "neg?" "not" "identical?" "identity" "constantly"
+    "println" "print" "prn" "pr" "list" "vector" "hash-map" "%map-literal" "hash-set"
+    "%set-literal" "vec" "count" "conj" "assoc" "dissoc" "disj" "get" "nth" "contains?"
+    "empty?" "first" "rest" "next" "cons" "peek" "pop" "into" "keys" "vals" "reduce" "apply"
+    "str" "subs" "keyword" "symbol" "name" "namespace" "atom" "deref" "reset!" "swap!"
+    "compare-and-set!" "transient" "persistent!" "conj!" "assoc!" "dissoc!" "disj!" "pop!"
+    "nil?" "some?" "true?" "false?" "vector?" "map?" "set?" "list?" "seq?" "coll?" "string?"
+    "keyword?" "symbol?" "number?" "integer?" "float?" "char?" "boolean?" "fn?" "atom?")
+  "The skein.core functions the native runtime has (runtime/src/core.zig). Calls to the
+arithmetic, comparison and printing ones are compiled inline.")
+
+(defun native-core-function (node var)
+  "The startup constant holding skein.core function VAR, or a compile error."
+  (let ((name (var-name var)))
+    (unless (member name *native-core-functions* :test #'string=)
+      (unsupported node "the native backend can't use skein.core/~A yet; most of skein.core ~
+                         arrives in M1.9" name))
+    (startup-constant (list :core name) (format nil "sk_core(~A)" (c-string-literal name)))))
+
 (defun emit-var-ref (node)
   (let ((var (var-ref-node-var node)))
-    (when (core-var-p var)
-      (unsupported node "the native backend can't use ~A as a value yet (only in calls); ~
-                         skein.core arrives in M1.9"
-                   (skein.runtime:var-qualified-name var)))
-    (temp (format nil "(~A != SK_UNBOUND ? ~A : sk_unbound(~A, ~A))"
-                  (var-c-name var) (var-c-name var)
-                  (c-string-literal (skein.runtime:var-qualified-name var))
-                  (c-string-literal (location-string node))))))
+    (if (core-var-p var)
+        (native-core-function node var)
+        (temp (format nil "sk_var_get(~A, ~A, ~A)" (var-c-name var)
+                      (c-string-literal (skein.runtime:var-qualified-name var))
+                      (c-string-literal (location-string node)))))))
 
 (defun emit-if (node)
   (let ((test (emit (if-node-test node)))
@@ -259,17 +319,73 @@ yet. The message names the milestone that adds it."))
     (stmt "goto ~A;" (target-label target))
     :recur))
 
-;;; Functions
+;;; Functions and closures
+
+(defun free-locals (fn-node)
+  "The locals FN-NODE refers to but does not bind (its captured values), in order of
+first use. Locals are unique objects (CORE-IR.md), so binding is a set, not a scope."
+  (let ((bound (make-hash-table :test 'eq))
+        (refs '()))
+    (labels ((bind (l) (setf (gethash l bound) t))
+             (use (l) (pushnew l refs))
+             (walk (n)
+               (etypecase n
+                 ((or const-node var-ref-node))
+                 (local-ref-node (use (local-ref-node-local n)))
+                 (if-node (walk (if-node-test n)) (walk (if-node-then n)) (walk (if-node-else n)))
+                 (do-node (mapc #'walk (do-node-forms n)))
+                 (def-node (when (def-node-init n) (walk (def-node-init n))))
+                 (fn-node
+                  (when (fn-node-self n) (bind (fn-node-self n)))
+                  (dolist (a (fn-node-arities n))
+                    (mapc #'bind (arity-params a))
+                    (when (arity-rest a) (bind (arity-rest a)))
+                    (walk (arity-body a))))
+                 (let-node (loop for (l . i) in (let-node-bindings n) do (bind l) (walk i))
+                  (walk (let-node-body n)))
+                 (loop-node (loop for (l . i) in (loop-node-bindings n) do (bind l) (walk i))
+                  (walk (loop-node-body n)))
+                 (letfn-node (loop for (l) in (letfn-node-bindings n) do (bind l))
+                  (loop for (nil . f) in (letfn-node-bindings n) do (walk f))
+                  (walk (letfn-node-body n)))
+                 (recur-node (mapc #'walk (recur-node-args n)))
+                 (set-node (use (set-node-local n)) (walk (set-node-value n)))
+                 (call-node (walk (call-node-fn n)) (mapc #'walk (call-node-args n)))
+                 (the-node (walk (the-node-expr n)))
+                 (locally-node (walk (locally-node-body n)))
+                 (unwind-protect-node (walk (unwind-protect-node-body n))
+                  (walk (unwind-protect-node-cleanup n)))
+                 (block-node (walk (block-node-body n)))
+                 (return-from-node (walk (return-from-node-value n)))
+                 (values-node (mapc #'walk (values-node-args n)))
+                 (let-values-node
+                  (loop for (ls . i) in (let-values-node-bindings n) do (mapc #'bind ls) (walk i))
+                  (walk (let-values-node-body n)))
+                 (throw-condition-node (walk (throw-condition-node-condition n)))
+                 (handler-bind-node
+                  (loop for (ty . h) in (handler-bind-node-bindings n) do (walk ty) (walk h))
+                  (walk (handler-bind-node-body n)))
+                 (restart-bind-node
+                  (loop for (nil f r) in (restart-bind-node-bindings n) do (walk f) (walk r))
+                  (walk (restart-bind-node-body n))))))
+      (walk fn-node)
+      (remove-if (lambda (l) (gethash l bound)) (reverse refs)))))
 
 (defun emit-fn (node)
+  "Emit FN-NODE's C function. Returns a C expression for the function value and the
+locals it captured. A function that captures nothing is made once, at startup."
   (let* ((code (fresh "fn"))
-         (fobj (fresh "fobj"))
          (display (or (fn-node-name node) "fn"))
+         (captured (free-locals node))
          (out (make-string-output-stream)))
     (let ((*ctx* (make-ctx :out out))
           (*targets* '()))
       (when (fn-node-self node)
         (setf (gethash (fn-node-self node) (ctx-locals *ctx*)) "self"))
+      (loop for l in captured
+            for i from 0
+            do (setf (gethash l (ctx-locals *ctx*)) (format nil "SK_CAPTURED(self, ~D)" i)
+                     (gethash l (ctx-captured *ctx*)) t))
       (format out "static sk_value ~A(sk_value self, uint32_t argc, const sk_value *argv) {~%"
               code)
       (stmt "(void)self; (void)argv;")
@@ -281,9 +397,38 @@ yet. The message names the milestone that adds it."))
                   code)
           (unit-prototypes *unit*))
     (push (get-output-stream-string out) (unit-functions *unit*))
-    (setf (unit-fn-objects *unit*)
-          (append (unit-fn-objects *unit*) (list (list fobj code display))))
-    fobj))
+    (if (null captured)
+        (let ((fobj (fresh "fobj")))
+          (setf (unit-fn-objects *unit*)
+                (append (unit-fn-objects *unit*) (list (list fobj code display))))
+          (values fobj '()))
+        (values (temp (format nil "sk_closure(~A, ~A, ~D, (const sk_value[]){~{~A~^, ~}})"
+                              code (c-string-literal display) (length captured)
+                              (mapcar (lambda (l)
+                                        (or (gethash l (ctx-locals *ctx*))
+                                            (unsupported node "internal error: ~A is not in ~
+                                                               scope" (local-name l))))
+                                      captured)))
+                captured))))
+
+(defun emit-letfn (node)
+  "letfn: make each closure with nil for the letfn locals it uses, then fill those in,
+so the functions can call each other."
+  (let ((bindings (letfn-node-bindings node)))
+    (loop for (local) in bindings
+          do (stmt "sk_value ~A = SK_NIL;" (bind-local local)))
+    (let ((made (loop for (local . fn) in bindings
+                      collect (multiple-value-bind (expr captured) (emit-fn fn)
+                                (stmt "~A = ~A;" (gethash local (ctx-locals *ctx*)) expr)
+                                (cons local captured)))))
+      (loop for (local . captured) in made
+            do (loop for c in captured
+                     for i from 0
+                     when (assoc c bindings)
+                       do (stmt "sk_closure_set(~A, ~D, ~A);"
+                                (gethash local (ctx-locals *ctx*)) i
+                                (gethash c (ctx-locals *ctx*))))))
+    (emit (letfn-node-body node))))
 
 (defun emit-arity (arity)
   (let ((n (length (arity-params arity)))
@@ -293,10 +438,7 @@ yet. The message names the milestone that adds it."))
             for i from 0
             do (stmt "sk_value ~A = argv[~D];" (bind-local p) i))
       (when rest
-        ;; Rest arguments need lists (M1.4); with none given, the rest local is nil.
-        (stmt "if (argc > ~D) sk_unbound(\"rest arguments (not yet supported natively)\", ~A);"
-              n (c-string-literal (location-string arity)))
-        (stmt "sk_value ~A = SK_NIL;" (bind-local rest)))
+        (stmt "sk_value ~A = sk_rest_list(argc, argv, ~D);" (bind-local rest) n))
       (let* ((label (fresh "top"))
              (names (mapcar (lambda (p) (gethash p (ctx-locals *ctx*)))
                             (append (arity-params arity) (and rest (list rest))))))
@@ -322,7 +464,8 @@ yet. The message names the milestone that adds it."))
 (defun emit-call (node)
   (let ((fn (call-node-fn node))
         (args (call-node-args node)))
-    (if (and (var-ref-node-p fn) (core-var-p (var-ref-node-var fn)))
+    (if (and (var-ref-node-p fn) (core-var-p (var-ref-node-var fn))
+             (member (var-name (var-ref-node-var fn)) *inline-primitives* :test #'string=))
         (emit-primitive node (var-name (var-ref-node-var fn)) args)
         (let ((f (emit fn))
               (values (emit-args args)))
@@ -341,6 +484,12 @@ yet. The message names the milestone that adds it."))
       (format nil "~A(~A, ~A)" fn (first values) (second values))
       (format nil "SK_BOOL(~{SK_TRUTHY(~A)~^ && ~})"
               (loop for (a b) on values while b collect (format nil "~A(~A, ~A)" fn a b)))))
+
+(defparameter *inline-primitives*
+  '("+" "*" "-" "/" "<" ">" "<=" ">=" "==" "=" "not=" "inc" "dec" "zero?" "pos?" "neg?"
+    "not" "nil?" "identical?" "println" "print" "prn" "pr")
+  "skein.core functions whose calls compile to inline C (other core functions are called
+through their function objects).")
 
 (defun check-arity (node name n min max)
   (unless (and (<= min n) (or (null max) (<= n max)))
@@ -420,9 +569,9 @@ yet. The message names the milestone that adds it."))
       (format out "static sk_value sk_globals[~D];~%" (max 1 (length globals)))
       (loop for name in globals
             for i from 0
-            for comment = (cdr (assoc name (unit-var-decls unit) :test #'string=))
+            for decl = (assoc name (unit-var-decls unit) :test #'string=)
             do (format out "#define ~A sk_globals[~D]~@[ /* ~A */~]~%" name i
-                       (and comment (c-comment comment)))))
+                       (and decl (c-comment (format nil "~A/~A" (second decl) (third decl)))))))
     (terpri out)
     (dolist (p (reverse (unit-prototypes unit))) (format out "~A~%" p))
     (terpri out)
@@ -431,6 +580,9 @@ yet. The message names the milestone that adds it."))
     (format out "  for (size_t i = 0; i < sizeof sk_globals / sizeof sk_globals[0]; i++) ~
                  sk_globals[i] = SK_UNBOUND;~%")
     (format out "  sk_register_roots(sk_globals, sizeof sk_globals / sizeof sk_globals[0]);~%")
+    (loop for (name ns var-name) in (unit-var-decls unit)
+          do (format out "  ~A = sk_var(~A, ~A);~%" name (c-string-literal ns)
+                     (c-string-literal var-name)))
     (loop for (name . init) in (unit-constants unit)
           do (format out "  ~A = ~A;~%" name init))
     (loop for (fobj code display) in (unit-fn-objects unit)
@@ -439,6 +591,11 @@ yet. The message names the milestone that adds it."))
             (get-output-stream-string (unit-body unit)))
     (format out "int main(int argc, char **argv) {~%  (void)argc;~%  (void)argv;~%  ~
                  sk_init();~%  sk_program_init();~%  sk_program_body();~%")
+    ;; -main gets the command-line arguments, as `skein run` passes them.
     (when main-var
-      (format out "  if (~A != SK_UNBOUND) sk_call(~A, 0, NULL);~%" main-var main-var))
+      (format out "  if (sk_var_value(~A) != SK_UNBOUND) {~%    ~
+                   sk_value main_args[64];~%    uint32_t n = 0;~%    ~
+                   for (int i = 1; i < argc && n < 64; i++) main_args[n++] = ~
+                   sk_string(argv[i], strlen(argv[i]));~%    ~
+                   sk_call(sk_var_value(~A), n, main_args);~%  }~%" main-var main-var))
     (format out "  sk_finish();~%  return 0;~%}~%")))

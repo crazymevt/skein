@@ -413,3 +413,28 @@ Date: 2026-11-09 · Status: Accepted
   - A promoted segment keeps its whole 256 KiB until the next major collection (noted in the ROADMAP).
   - The GC is tested with random object graphs against a model, pinning by interior pointers, 200,000-node chains, cycles, large objects, the write barrier, and four threads collecting concurrently, in Debug, ReleaseSafe and ReleaseFast builds.
   - A compiled bignum loop that allocates about 96 MB runs in 21 MB of memory, with pauses under 0.2 ms.
+
+## D-046: Core data in the native runtime
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.4 brings Skein's data to the native runtime: strings, symbols and keywords, vars and namespaces, closures, persistent vectors, maps and sets, transients and atoms. Jessie chose to write the collections in Zig as ports of Phase 0's, rather than in Skein compiled by the C backend.
+- **Decision:**
+  - **Same hashing as Phase 0.** Phase 0 hashed strings, floats and bignums with SBCL's `sxhash`, which nothing else can reproduce. It now uses portable functions:
+    - strings: FNV-1a over the code points, then Murmur3's finalizer;
+    - integers of any size: their 32-bit chunks XORed together;
+    - floats: the bits of the value as an f64.
+    `runtime/src/hash.zig` computes the same values, and a test checks them against values computed by Phase 0. Phase 0's tests all still pass.
+  - **Same structures.** `runtime/src/coll.zig` ports Phase 0's vector trie (32-way with a tail), array map (up to 8 entries in insertion order), HAMT (bitmap and collision nodes), sets (maps from each element to itself), transients (edit tokens that record their owner thread) and lists (counted cons cells), algorithm for algorithm. Maps and sets therefore iterate, and print, in the same order natively. A 12-entry map is checked to print exactly as Phase 0 prints it.
+  - **Layouts.** Each kind of data has its own object type. Every payload word is a Value, with raw integers stored as fixnums, so the GC scans them all uniformly. Writes into existing objects go through the write barrier, because any allocation in between may have promoted them. Symbols, keywords, vars and namespaces are permanent objects (`gc.allocPermanent`): never moved, always live.
+  - **Strings** store their byte length and their character count, so `count` is O(1) (D-019). Indexing is O(1) for ASCII strings.
+  - **`skein.core` natively:** about ninety functions in `runtime/src/core.zig` cover collections, strings and names, atoms, transients, predicates, `reduce`, `apply` and `into`, matching Phase 0's behavior. Each also has a function object, so they can be passed as values. A keyword in function position looks itself up. Seqs over maps and sets, laziness and the rest of skein.core come in M1.9.
+  - **C backend:**
+    - **Closures:** the captured locals of a `fn` come from a walk of its Core IR. A closure is a function object with the captured values after its code and name. `letfn` fills its closures' references to each other after making them.
+    - **Vars** are runtime objects, and `def` returns the var.
+    - **Constants:** keywords, symbols and collection constants are made at startup.
+    - **Rest parameters** are lists.
+    - **`-main`** receives the command-line arguments.
+- **Alternatives:** collections written in Skein and compiled natively (dogfooding, but blocked on much more of the backend, and slower until it optimizes); new native hash functions with a different iteration order from Phase 0 (output could then no longer be compared exactly).
+- **Consequences:**
+  - The tests compare native and Phase 0 output for the whole core-function program, closures, and large collections built under GC.
+  - The Zig model tests check vectors, maps with forced hash collisions, sets and transients against plain containers, across garbage collections, in all three build modes.
+  - Atoms and functions hash by identity differently from Phase 0, so maps keyed by them may iterate in a different order (ROADMAP note).

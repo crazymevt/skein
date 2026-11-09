@@ -23,8 +23,14 @@
     (if (minusp n) (u32 (lognot h)) h)))
 
 (defun string-hash32 (string)
-  "A 32-bit hash of STRING's characters."
-  (mix32 (fold32 (sxhash string))))
+  "A 32-bit hash of STRING's characters: FNV-1a over their code points, then MIX32. The
+native runtime computes the same (runtime/src/hash.zig, D-046), so maps iterate in the
+same order there."
+  (let ((h #x811C9DC5))
+    (declare (type (unsigned-byte 32) h))
+    (loop for ch across string
+          do (setf h (u32 (* (logxor h (char-code ch)) #x01000193))))
+    (mix32 h)))
 
 ;;; Symbols and keywords are interned: reading the same name twice gives the same (EQ)
 ;;; object. The namespace is NIL for unqualified names.

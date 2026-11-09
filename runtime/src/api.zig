@@ -8,6 +8,10 @@ const string = @import("string.zig");
 const func = @import("func.zig");
 const print = @import("print.zig");
 const gc = @import("gc.zig");
+const names = @import("names.zig");
+const coll = @import("coll.zig");
+const equal = @import("equal.zig");
+const core = @import("core.zig");
 const Value = @import("value.zig").Value;
 
 // skein.h spells the immediate constants out; keep them in step with value.zig.
@@ -23,6 +27,7 @@ comptime {
 /// Start the runtime on the calling (main) thread.
 export fn sk_init() void {
     _ = gc.attachThread();
+    coll.ensureConstants();
 }
 
 /// Finish normally: print GC statistics if SKEIN_GC_STATS is set.
@@ -123,12 +128,81 @@ export fn sk_compare_slow(op: c_int, a: Value, b: Value) Value {
     });
 }
 
-/// Skein's = (value equality) for the types the runtime has so far.
+/// Skein's = (value equality).
 export fn sk_equal_slow(a: Value, b: Value) Value {
-    if (num.isNumber(a) and num.isNumber(b)) return Value.fromBool(num.numbersEqual(a, b));
-    if (string.isString(a) and string.isString(b))
-        return Value.fromBool(std.mem.eql(u8, string.bytes(a), string.bytes(b)));
-    return Value.fromBool(a == b);
+    return Value.fromBool(equal.equiv(a, b));
+}
+
+// Names, vars and core functions (M1.4)
+
+fn optional(text: ?[*:0]const u8) ?[]const u8 {
+    return if (text) |t| std.mem.span(t) else null;
+}
+
+export fn sk_keyword(ns: ?[*:0]const u8, name: [*:0]const u8) Value {
+    return names.keyword(optional(ns), std.mem.span(name));
+}
+
+export fn sk_symbol(ns: ?[*:0]const u8, name: [*:0]const u8) Value {
+    return names.symbol(optional(ns), std.mem.span(name));
+}
+
+/// A new unbound var ns/name.
+export fn sk_var(ns: [*:0]const u8, name: [*:0]const u8) Value {
+    return names.makeVar(std.mem.span(ns), std.mem.span(name));
+}
+
+/// Set a var's value (def); returns the var.
+export fn sk_var_set(v: Value, x: Value) Value {
+    names.setVar(v, x);
+    return v;
+}
+
+/// The function object of skein.core/`name`; the program stops if the runtime lacks it.
+export fn sk_core(name: [*:0]const u8) Value {
+    return core.function(std.mem.span(name)) orelse
+        rt.fatal("the native runtime has no skein.core/{s}", .{std.mem.span(name)});
+}
+
+// Collections built from compiled literals
+
+export fn sk_list_of(count: usize, items: [*]const Value) Value {
+    return coll.listOf(items[0..count]);
+}
+
+export fn sk_vector_of(count: usize, items: [*]const Value) Value {
+    return coll.vectorOf(items[0..count]);
+}
+
+/// A map of `count` values: keys and values alternating.
+export fn sk_map_of(count: usize, kvs: [*]const Value) Value {
+    return coll.mapOf(kvs[0..count]);
+}
+
+export fn sk_set_of(count: usize, items: [*]const Value) Value {
+    return coll.setOf(items[0..count]);
+}
+
+/// The rest parameter's value: a list of the arguments from `from` on, or nil.
+export fn sk_rest_list(argc: u32, argv: [*]const Value, from: u32) Value {
+    if (argc <= from) return Value.nil;
+    return coll.listOf(argv[from..argc]);
+}
+
+// Closures: a function object with captured values after its code and name.
+
+export fn sk_closure(code: func.Code, name: [*:0]const u8, count: usize, captured: [*]const Value) Value {
+    const h = rt.alloc(.function, 2 + count);
+    h.payload()[0] = @intFromPtr(code);
+    h.payload()[1] = @intFromPtr(name);
+    @memcpy(h.valueSlots()[0..count], captured[0..count]);
+    return Value.fromObject(h);
+}
+
+/// Set captured value `i` of a closure (letfn ties mutually recursive closures this way).
+export fn sk_closure_set(f: Value, i: usize, v: Value) void {
+    const h = f.toObject();
+    gc.store(h, &h.valueSlots()[i], v);
 }
 
 /// A check that `v` is a number, for the one-argument cases of + and *.

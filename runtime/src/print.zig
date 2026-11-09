@@ -7,6 +7,9 @@ const rt = @import("rt.zig");
 const num = @import("num.zig");
 const string = @import("string.zig");
 const func = @import("func.zig");
+const names = @import("names.zig");
+const coll = @import("coll.zig");
+const equal = @import("equal.zig");
 const platform = @import("platform");
 const Value = @import("value.zig").Value;
 
@@ -31,14 +34,99 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
         if (readably) writeStringLiteral(string.bytes(v), out) else put(out, string.bytes(v));
         return;
     }
-    if (v.isObjectOf(.function)) {
-        put(out, "#<fn ");
-        put(out, func.name(v));
-        put(out, ">");
-        return;
+    if (!v.isObject()) return put(out, "#<object>");
+    switch (v.toObject().type_id) {
+        .function => {
+            put(out, "#<fn ");
+            put(out, func.name(v));
+            put(out, ">");
+        },
+        .symbol, .keyword => {
+            if (names.isKeyword(v)) put(out, ":");
+            if (names.nsOf(v)) |ns| {
+                put(out, ns);
+                put(out, "/");
+            }
+            put(out, names.nameOf(v));
+        },
+        .@"var" => {
+            put(out, "#'");
+            put(out, names.varNamespaceName(v));
+            put(out, "/");
+            put(out, names.varName(v));
+        },
+        .namespace => {
+            put(out, "#<namespace ");
+            put(out, string.bytes(coll.get(v, 0)));
+            put(out, ">");
+        },
+        .list, .empty_list => writeSequential(v, out, readably, "(", ")"),
+        .vector => writeSequential(v, out, readably, "[", "]"),
+        .array_map, .hash_map => {
+            put(out, "{");
+            var ctx: Entries = .{ .out = out, .readably = readably };
+            coll.mapEach(v, &ctx, Entries.mapEntry);
+            put(out, "}");
+        },
+        .hash_set => {
+            put(out, "#{");
+            var ctx: Entries = .{ .out = out, .readably = readably };
+            coll.mapEach(coll.get(v, 0), &ctx, Entries.setElement);
+            put(out, "}");
+        },
+        .atom => {
+            put(out, "#<atom ");
+            write(coll.atomGet(v), out, true);
+            put(out, ">");
+        },
+        .transient_vector => put(out, "#<transient vector>"),
+        .transient_map => put(out, "#<transient map>"),
+        .transient_set => put(out, "#<transient set>"),
+        else => put(out, "#<object>"),
     }
-    put(out, "#<object>");
 }
+
+const Elements = struct {
+    out: *std.ArrayList(u8),
+    readably: bool,
+    first: bool = true,
+
+    fn add(c: *Elements, x: Value) bool {
+        if (!c.first) put(c.out, " ");
+        c.first = false;
+        write(x, c.out, c.readably);
+        return true;
+    }
+};
+
+fn writeSequential(v: Value, out: *std.ArrayList(u8), readably: bool, open: []const u8, close: []const u8) void {
+    put(out, open);
+    var ctx: Elements = .{ .out = out, .readably = readably };
+    equal.eachElement(v, &ctx, Elements.add);
+    put(out, close);
+}
+
+const Entries = struct {
+    out: *std.ArrayList(u8),
+    readably: bool,
+    first: bool = true,
+
+    fn mapEntry(c: *Entries, k: Value, x: Value) bool {
+        if (!c.first) put(c.out, ", ");
+        c.first = false;
+        write(k, c.out, c.readably);
+        put(c.out, " ");
+        write(x, c.out, c.readably);
+        return true;
+    }
+
+    fn setElement(c: *Entries, k: Value, _: Value) bool {
+        if (!c.first) put(c.out, " ");
+        c.first = false;
+        write(k, c.out, c.readably);
+        return true;
+    }
+};
 
 fn writeStringLiteral(s: []const u8, out: *std.ArrayList(u8)) void {
     put(out, "\"");
