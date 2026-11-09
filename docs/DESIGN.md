@@ -606,7 +606,7 @@ source (.skn)
 syntax objects (data + source locations)
   │  expander (macros, phase tracking, namespace resolution)
   ▼
-Core IR (only the special forms of §5.1, fully resolved, ANF)
+Core IR (only the special forms of §5.1, fully resolved; ANF before the C backend)
   │  analysis passes: free variables, closure conversion, mutability,
   │  type inference, inlining, constant folding, escape analysis (later)
   ▼
@@ -618,7 +618,7 @@ Backend
 
 **Key rule: the reader, expander, Core IR and analysis passes are shared by all backends.** Phase 0 is therefore not throwaway: it is the front end of the real compiler with a temporary backend.
 
-- **Core IR** is a small, fully macro-expanded, alpha-renamed, ANF (A-normal form) tree. It is documented in `docs/CORE-IR.md`, to be written in milestone M0.3. Every node carries a source location.
+- **Core IR** is a small, fully macro-expanded, alpha-renamed tree, documented in [`docs/CORE-IR.md`](CORE-IR.md). Every node carries a source location. In Phase 0 it is a plain tree; an ANF (A-normal form) pass runs before the C backend in Phase 1 (D-030).
 - **Phase 0:** the front end is written in Common Lisp.
 - **Phase 1:** the front end is ported to Skein (self-hosting), bootstrapped by running the Phase 0 implementation.
 - **Compilation unit:** the namespace. Compiled output is cached per namespace, keyed by a source hash plus the hashes of its macro dependencies.

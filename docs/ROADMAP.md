@@ -8,7 +8,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 |---|---|
 | M0.1 Repository scaffolding | ✅ |
 | M0.2 Reader | ✅ |
-| M0.3 Core IR, expander skeleton, CL backend | ⬜ |
+| M0.3 Core IR, expander skeleton, CL backend | ✅ |
 | M0.4 Persistent collections and seqs | ⬜ |
 | M0.5 Macros and `skein.core` | ⬜ |
 | M0.6 Conditions and restarts | ⬜ |
@@ -151,5 +151,12 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Phase 2: decide whether FFI calls run on the fiber stack or the worker thread's native stack (D-024).
 - M0.4: add `##Inf`, `##-Inf` and `##NaN` to the reader and printer when printing of all values lands (D-029). The runtime `pr-str` should reuse `skein.runtime:print-atom`.
 - M0.3/M0.5: support `::alias/kw` keywords once namespace aliases exist; the reader needs a way to resolve aliases.
+- M0.4: replace the temporary CL-list rest arguments with persistent lists or seqs, and `=` with full value equality (D-031).
+- M0.4/M0.5: support collection literals and quoting collections in the expander; they are compile errors until persistent collections exist.
+- Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031).
+- Arity errors name where the function was defined, not the call site; consider reporting the call site too (M0.6 or M0.11).
+- Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form (M0.6).
+- M0.8: calls currently go through `&rest` argument lists and a dispatch on the count; give fixed-arity functions direct CL lambda lists for speed.
+- `skein run` looks for required namespaces next to the main file and in the current directory; use `project.skn` `:paths` once it exists.
 - Consider `#!` shebang lines so `.skn` files can be executable scripts.
 - First shader-using demo: pick shader cross-compilation tooling for the SDL3 GPU API, e.g. SDL_shadercross (D-020).

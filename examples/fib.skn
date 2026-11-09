@@ -1,0 +1,18 @@
+(ns fib)
+
+;; Naive recursion: every call goes through the var `fib`.
+(defn fib [n]
+  (if (< n 2)
+    n
+    (+ (fib (- n 1)) (fib (- n 2)))))
+
+;; Constant-stack iteration with loop/recur.
+(defn fib-iter [n]
+  (loop [i 0 a 0 b 1]
+    (if (= i n)
+      a
+      (recur (inc i) b (+ a b)))))
+
+(println "fib 20 =" (fib 20))
+(println "fib-iter 90 =" (fib-iter 90))
+(println "fib-iter 200 =" (fib-iter 200))

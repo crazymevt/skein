@@ -47,8 +47,11 @@ Commands:
   (let ((file (first args)))
     (unless (probe-file file)
       (cli-error +exit-failure+ "skein run: file not found: ~A" file))
-    (cli-error +exit-failure+
-               "skein run: running programs is not implemented yet (milestone M0.3)")))
+    (handler-case (skein.backend.cl:run-file file)
+      (error (e)
+        (finish-output *standard-output*)
+        (let ((*print-pretty* nil))
+          (cli-error +exit-failure+ "error: ~A" e))))))
 
 (defun main (args &key (out *standard-output*) (err *error-output*))
   "Run the `skein` command line with ARGS, a list of strings, and return an exit code.

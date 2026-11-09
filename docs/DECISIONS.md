@@ -176,3 +176,24 @@ Date: 2026-11-09 · Status: Accepted (user-visible choices approved by Jessie)
 - **Decision:** Numbers are strict: no leading zeros (no octal), a decimal point needs digits on both sides, and the `f` suffix needs a float literal. Float literals too large for their type are errors, and `##Inf`-style literals wait for M0.4. Type hints accept compound type forms (`^(array f32) xs`). CRLF inside string literals reads as LF. Strings combine `\u` surrogate pairs and reject lone surrogates, since `char` is a Unicode scalar value. The reader expands `#(...)` to `(fn [%1 ...] ...)` using the `%N` names as parameters. Prefix forms other than `quote` expand to `skein.core/`-qualified symbols. The details are in DESIGN §3.1.
 - **Alternatives:** Clojure's behavior for each: octal `007`, `5.` as `5.0`, `1e400` as Infinity, symbol-only type hints, and strings kept byte-for-byte.
 - **Consequences:** Some valid Clojure literals are read errors in Skein, each with a message that says what to write instead.
+
+## D-030: Phase 0 Core IR is a tree; ANF comes before the C backend
+Date: 2026-11-09 · Status: Accepted
+- **Context:** DESIGN §16 described Core IR as ANF (A-normal form). The CL backend gains nothing from ANF, since SBCL does its own normalization.
+- **Decision:** The expander produces a fully resolved, alpha-renamed tree whose call arguments may be any node (docs/CORE-IR.md). An ANF pass is added in Phase 1, before the C backend.
+- **Alternatives:** ANF from the start (more code and harder-to-read output in Phase 0, for no benefit until the C backend).
+- **Consequences:** Analysis passes written before Phase 1 must not assume ANF.
+
+## D-031: Phase 0 evaluation model
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M0.3 needs a concrete way to compile and run Core IR on SBCL, and some semantics that DESIGN leaves to Clojure convention.
+- **Decision:**
+  - Each top-level form is read, macro-expanded, analyzed, compiled with `compile` and run before the next is read. A top-level `(do ...)` is split into top-level forms, so `ns` affects the forms after it.
+  - `def` interns its var when the form is expanded, so a function can refer to itself. Referring to a symbol that resolves to nothing is a compile error, as in Clojure. `(def x)` leaves an existing value unchanged.
+  - Every global reference reads the var at run time; this is what makes redefinition visible to existing callers.
+  - Skein functions are CL closures taking `&rest` arguments and dispatching on the count. Until M0.4, a rest parameter is bound to a CL list (`nil` when empty).
+  - A special-form name in operator position always means the special form, even if a local shadows it, as in Clojure.
+  - `ns` is a built-in macro that expands to `skein.core/%in-ns`, `%require` and `%refer` calls. A namespace `a.b-c` is loaded from `a/b-c.skn` on `*source-paths*`; a namespace whose file fails to load can be required again.
+  - Built-in macros (`ns`, `defn`, `defn-`, `let`, `loop`, `when`, `when-not`, `cond`, `and`, `or`) are CL functions in skein.core vars until M0.5.
+- **Alternatives:** compile a whole file at once (breaks `ns` and macro definitions that later forms use); resolve unknown symbols at run time (hides typos until the code runs).
+- **Consequences:** Calls cost an `&rest` list and a count dispatch; M0.8 revisits this. Dynamic binding and `set!` of vars are not implemented yet.
