@@ -7,7 +7,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | Milestone | Status |
 |---|---|
 | M0.1 Repository scaffolding | 🟨 in progress: done locally on macOS; CI not yet run on GitHub |
-| M0.2 Reader | ⬜ |
+| M0.2 Reader | ✅ |
 | M0.3 Core IR, expander skeleton, CL backend | ⬜ |
 | M0.4 Persistent collections and seqs | ⬜ |
 | M0.5 Macros and `skein.core` | ⬜ |
@@ -149,4 +149,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 
 - Phase 2: decide VS Code support for the native runtime's Swank server (a Swank-speaking extension or an LSP server); check SLY/Slynk compatibility (D-018).
 - Phase 2: decide whether FFI calls run on the fiber stack or the worker thread's native stack (D-024).
+- M0.4: add `##Inf`, `##-Inf` and `##NaN` to the reader and printer when printing of all values lands (D-029). The runtime `pr-str` should reuse `skein.runtime:print-atom`.
+- M0.3/M0.5: support `::alias/kw` keywords once namespace aliases exist; the reader needs a way to resolve aliases.
+- Consider `#!` shebang lines so `.skn` files can be executable scripts.
 - First shader-using demo: pick shader cross-compilation tooling for the SDL3 GPU API, e.g. SDL_shadercross (D-020).

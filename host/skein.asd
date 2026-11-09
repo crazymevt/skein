@@ -8,13 +8,19 @@
   :depends-on ()
   :pathname "src/"
   :serial t
-  :components ((:module "syntax" :components ((:file "package")))
-               (:module "reader" :components ((:file "package")))
-               (:module "ir" :components ((:file "package")))
-               (:module "expander" :components ((:file "package")))
-               (:module "runtime" :components ((:file "package")))
-               (:module "backend-cl" :components ((:file "package")))
-               (:module "cli" :components ((:file "package")
+  :components ((:module "runtime" :serial t :components ((:file "package")
+                                               (:file "data")
+                                               (:file "numbers")
+                                               (:file "print")))
+               (:module "syntax" :serial t :components ((:file "package")
+                                              (:file "syntax")
+                                              (:file "print")))
+               (:module "reader" :serial t :components ((:file "package")
+                                              (:file "reader")))
+               (:module "ir" :serial t :components ((:file "package")))
+               (:module "expander" :serial t :components ((:file "package")))
+               (:module "backend-cl" :serial t :components ((:file "package")))
+               (:module "cli" :serial t :components ((:file "package")
                                            (:file "cli"))))
   :in-order-to ((test-op (test-op "skein/tests"))))
 
@@ -25,6 +31,9 @@
   :serial t
   :components ((:file "package")
                (:file "smoke")
+               (:file "runtime")
+               (:file "syntax")
+               (:file "reader")
                (:file "cli"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!

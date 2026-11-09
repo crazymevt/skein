@@ -162,3 +162,17 @@ Date: 2026-11-09 · Status: Accepted
 - **Decision:** `host/tools/bootstrap.lisp` loads Quicklisp from `~/quicklisp` (or `QUICKLISP_HOME`), registers `host/skein.asd` with ASDF and loads systems with `ql:quickload`. Batch commands run SBCL with `--no-userinit` so personal init files don't affect results. CI installs the official SBCL 2.5.10 binaries on Linux and Windows and Homebrew's SBCL on macOS.
 - **Alternatives:** Vendoring the libraries as git submodules (more to maintain); qlot or ocicl for pinned versions (another tool for every contributor to install).
 - **Consequences:** Library versions follow the current Quicklisp dist rather than a lockfile. If that causes breakage, switch to qlot or pin a dist version.
+
+## D-028: Phase 0 value representation and syntax objects
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M0.2's reader has to produce values before persistent collections exist (M0.4), and Skein's `nil`, `false` and `()` are all distinct.
+- **Decision:** In Phase 0, Skein `nil` is CL `NIL` and `true` is CL `T`. `false` is a unique singleton (`skein.runtime:+false+`). Integers, f64, f32, chars and strings are the corresponding CL types. Symbols and keywords are interned structs with an optional namespace, separate from CL symbols. The reader returns syntax objects with a kind (`:atom`, `:list`, `:vector`, `:map`, `:set`), a datum (the atom, or a CL list of child syntax objects), a source location (start and end line and column) and optional metadata (a map syntax object). Compound syntax doesn't need runtime collections; turning syntax into runtime data waits for M0.4.
+- **Alternatives:** Represent `false` as CL `NIL` and Skein `nil` as a sentinel (makes nil-punning interop with CL harder); produce runtime collections directly from the reader (blocked on M0.4, and loses per-element locations).
+- **Consequences:** Truthiness tests in the CL backend must check for both `NIL` and `+false+`. The empty list `()` is a distinct value from `nil` and needs its own representation in M0.4.
+
+## D-029: Reader literal rules
+Date: 2026-11-09 · Status: Accepted (user-visible choices approved by Jessie)
+- **Context:** DESIGN §3 says the reader follows Clojure unless noted, but some Clojure behaviors are surprising or conflict with Skein's design.
+- **Decision:** Numbers are strict: no leading zeros (no octal), a decimal point needs digits on both sides, and the `f` suffix needs a float literal. Float literals too large for their type are errors, and `##Inf`-style literals wait for M0.4. Type hints accept compound type forms (`^(array f32) xs`). CRLF inside string literals reads as LF. Strings combine `\u` surrogate pairs and reject lone surrogates, since `char` is a Unicode scalar value. The reader expands `#(...)` to `(fn [%1 ...] ...)` using the `%N` names as parameters. Prefix forms other than `quote` expand to `skein.core/`-qualified symbols. The details are in DESIGN §3.1.
+- **Alternatives:** Clojure's behavior for each: octal `007`, `5.` as `5.0`, `1e400` as Infinity, symbol-only type hints, and strings kept byte-for-byte.
+- **Consequences:** Some valid Clojure literals are read errors in Skein, each with a message that says what to write instead.

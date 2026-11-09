@@ -78,7 +78,7 @@ The reader follows **Clojure's conventions** unless noted.
 | `:kw`, `:ns/kw` | keyword; `::kw` resolves to the current namespace |
 | `sym`, `ns/sym` | symbol |
 | `"text"` | string (UTF-8, immutable) |
-| `\a`, `\newline`, `λ` | character |
+| `\a`, `\newline`, `\λ`, `\u00e9` | character |
 | `42`, `-7`, `0xFF`, `0b1010`, `1_000_000` | integer |
 | `3.14`, `1e-9` | f64 float |
 | `3.14f`, `1.0f` | f32 float |
@@ -98,7 +98,18 @@ Notes:
 - Commas are whitespace. Unquote is `~`, as in Clojure, not `,` as in Common Lisp.
 - Symbols are case-sensitive.
 - The reader produces **syntax objects** that carry source location (file, line, column). The compiler uses them for error messages and for future hygiene (§11).
-- There is no user-programmable readtable in v1. Tagged literals `#tag form` are reserved for later.
+- There is no user-programmable readtable in v1. Tagged literals `#tag form` and `##` literals (such as `##Inf`) are reserved for later.
+
+### 3.1 Literal details (D-029)
+- **Integers:** decimal, `0x`/`0X` hex and `0b`/`0B` binary, with an optional `+` or `-` sign. `_` may appear only between two digits. Leading zeros are an error (`007`): there are no octal literals.
+- **Floats:** a decimal point needs digits on both sides (`5.` and `.5` are not floats; `.5` reads as a symbol). The `f` suffix makes an `f32` and needs a float (`1.0f`, `1e5f`; `1f` is an error). Floats are correctly rounded. A literal too large for its type is an error; one too small rounds to zero.
+- **Strings:** escapes are `\n \t \r \b \f \" \\` and `\uXXXX`. A UTF-16 surrogate pair of `\u` escapes combines into one code point; a lone surrogate is an error. A CRLF line ending inside a string literal reads as `\n`, so source files behave the same whatever line endings they were checked out with.
+- **Characters:** `\x` for any single character, the names `newline space tab backspace formfeed return`, and `\uXXXX` (not a surrogate).
+- **Symbols and keywords** may contain any character except whitespace, commas and `` " ; @ ^ ` ~ ( ) [ ] { } \ ``. A symbol can't start with a digit, or with `+` or `-` followed by a digit, since that reads as a number. At most one `/` separates the namespace (`ns/name`); `/` alone and `ns//` name division. Parts may not start or end with `:` or contain `::`. `::alias/kw` is not supported yet.
+- **Metadata:** `^sym`, `^"str"` and `^(type form)` mean `{:tag ...}`; `^:kw` means `{:kw true}`; `^{...}` is used as is. Stacked metadata merges, with the outer (leftmost) entry winning. Metadata can be attached only to symbols and collections.
+- **Prefix forms** read as lists: `'x` → `(quote x)`, `` `x `` → `(skein.core/syntax-quote x)`, `~x` → `(skein.core/unquote x)`, `~@x` → `(skein.core/unquote-splicing x)`, `@x` → `(skein.core/deref x)`.
+- **`#(...)`** reads as `(fn [%1 %2 ...] body)`, with parameters up to the highest `%N` used, plus `& %&` if `%&` appears; `%` means `%1`. `#()` forms cannot nest.
+- **Map and set literals** with duplicate keys or elements are read errors.
 
 ## 4. Evaluation model, namespaces and phases
 
