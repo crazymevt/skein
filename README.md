@@ -87,16 +87,17 @@ skein/
 ├── host/                ← Phase 0: Skein implemented on SBCL (Common Lisp)
 │   ├── skein.asd
 │   ├── src/
-│   └── tests/
+│   ├── tests/
+│   └── tools/           ← scripts behind `make` and the `skein` launchers
 ├── lib/                 ← Skein standard library written in Skein (.skn)
 ├── runtime/             ← Phase 1+: native runtime (Zig)
 ├── examples/            ← example programs; also run as tests
 └── tools/               ← CLI, binding generator, editor support
 ```
 
-## Getting started (Phase 0, once milestone M0.1 lands)
+## Getting started (Phase 0)
 
-Requirements: [SBCL](https://www.sbcl.org/) 2.4+ and [Quicklisp](https://www.quicklisp.org/) (or ocicl).
+Requirements: [SBCL](https://www.sbcl.org/) 2.4+ and [Quicklisp](https://www.quicklisp.org/), installed in `~/quicklisp` or wherever `QUICKLISP_HOME` points. On Windows, use `skein.cmd` instead of `./skein`.
 
 ```sh
 make test            # run the full test suite

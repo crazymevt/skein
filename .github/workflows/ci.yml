@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      SBCL_VERSION: 2.5.10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SBCL (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sbcl
+
+      - name: Install SBCL (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o sbcl.tar.bz2 \
+            "https://downloads.sourceforge.net/project/sbcl/sbcl/${SBCL_VERSION}/sbcl-${SBCL_VERSION}-x86-64-linux-binary.tar.bz2"
+          tar xjf sbcl.tar.bz2
+          cd "sbcl-${SBCL_VERSION}-x86-64-linux"
+          sudo sh install.sh
+
+      - name: Install SBCL and make (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = Join-Path $env:RUNNER_TEMP "sbcl.msi"
+          curl.exe -fsSL -o $msi "https://downloads.sourceforge.net/project/sbcl/sbcl/$env:SBCL_VERSION/sbcl-$env:SBCL_VERSION-x86-64-windows-binary.msi"
+          Start-Process msiexec.exe -Wait -ArgumentList "/i", $msi, "/qn"
+          $exe = Get-ChildItem "C:\Program Files\Steel Bank Common Lisp" -Recurse -Filter sbcl.exe |
+            Select-Object -First 1
+          $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "SBCL_HOME=$($exe.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          choco install make --no-progress -y
+
+      - name: Show SBCL version
+        run: sbcl --version
+
+      - name: Cache Quicklisp
+        uses: actions/cache@v4
+        with:
+          path: ~/quicklisp
+          key: quicklisp-${{ runner.os }}-v1
+
+      - name: Install Quicklisp
+        run: |
+          if [ ! -f "$HOME/quicklisp/setup.lisp" ]; then
+            curl -fsSL -o "$RUNNER_TEMP/quicklisp.lisp" https://beta.quicklisp.org/quicklisp.lisp
+            sbcl --noinform --no-userinit --non-interactive \
+              --load "$RUNNER_TEMP/quicklisp.lisp" --eval "(quicklisp-quickstart:install)"
+          fi
+
+      - name: Run tests
+        run: make test
+
+      - name: Launcher (bash)
+        run: ./skein --version
+
+      - name: Launcher (cmd)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: skein.cmd --version

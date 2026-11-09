@@ -155,3 +155,10 @@ Date: 2026-11-09 · Status: Accepted
 - **Decision:** v1 has no ratio type. `/` on integers returns `f64`.
 - **Alternatives:** Ratios as in Common Lisp and Clojure.
 - **Consequences:** If a community (for example scientific or exact-arithmetic users) later needs ratios, they come as a separate library type with its own functions. Changing what `/` returns would be a breaking change, so it stays as it is.
+
+## D-027: Phase 0 loads dependencies through Quicklisp; CI pins SBCL 2.5.10
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M0.1 needs `make test`, `make repl` and the `skein` launchers to find FiveAM and the other allowed libraries on macOS, Windows and Linux.
+- **Decision:** `host/tools/bootstrap.lisp` loads Quicklisp from `~/quicklisp` (or `QUICKLISP_HOME`), registers `host/skein.asd` with ASDF and loads systems with `ql:quickload`. Batch commands run SBCL with `--no-userinit` so personal init files don't affect results. CI installs the official SBCL 2.5.10 binaries on Linux and Windows and Homebrew's SBCL on macOS.
+- **Alternatives:** Vendoring the libraries as git submodules (more to maintain); qlot or ocicl for pinned versions (another tool for every contributor to install).
+- **Consequences:** Library versions follow the current Quicklisp dist rather than a lockfile. If that causes breakage, switch to qlot or pin a dist version.

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Run the `skein` command line on the Phase 0 SBCL host.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${SBCL:-sbcl}" --noinform --no-userinit --non-interactive \
+  --load "$here/host/tools/launch.lisp" --end-toplevel-options "$@"
