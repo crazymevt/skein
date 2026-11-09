@@ -1,0 +1,16 @@
+(ns driftrock.world
+  "Driftrock's playfield: its size and wraparound."
+  (:require [skein.math :as m :refer [vec2 vec2-x vec2-y]]))
+
+(def width 960.0)
+(def height 720.0)
+
+(defn center [] (vec2 (f32 (/ width 2.0)) (f32 (/ height 2.0))))
+
+(defn wrap-pos
+  "Point p wrapped around the edges of the playfield."
+  [p]
+  (vec2 (f32 (m/wrap (vec2-x p) width)) (f32 (m/wrap (vec2-y p) height))))
+
+(defn random-pos []
+  (vec2 (f32 (rand width)) (f32 (rand height))))

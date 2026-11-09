@@ -102,12 +102,44 @@ or NIL."
   (let ((*current-namespace* (ensure-namespace "user")))
     (load-file (merge-pathnames "skein/core.skn" (library-directory)))))
 
+(defun declared-namespace (path)
+  "The name of the namespace that the file at PATH declares in its first form, (ns name
+...), or NIL."
+  (ignore-errors
+   (with-open-file (s path :external-format :utf-8)
+     (let* ((form (skein.reader:read-form (skein.reader:make-reader s :file "x")
+                                          :eof-value nil))
+            (items (and form (eq (skein.syntax:syntax-kind form) :list)
+                        (skein.syntax:syntax-datum form)))
+            (head (and items (skein.syntax:syntax-datum (first items))))
+            (name (and (rest items) (skein.syntax:syntax-datum (second items)))))
+       (and (skein.runtime:sym-p head) (string= (skein.runtime:sym-name head) "ns")
+            (skein.runtime:sym-p name) (null (skein.runtime:sym-namespace name))
+            (skein.runtime:sym-name name))))))
+
+(defun namespace-root (path)
+  "If the file at PATH declares a namespace whose name matches its path, as
+src/game/main.skn declares game.main, return the root directory (src/), else NIL."
+  (let* ((file (truename path))
+         (name (declared-namespace file))
+         (parts (and name (uiop:split-string name :separator '(#\.))))
+         (dirs (butlast parts))
+         (directory (pathname-directory file)))
+    (when (and parts
+               (string= (car (last parts)) (pathname-name file))
+               (>= (length (rest directory)) (length dirs))
+               (equal dirs (last directory (length dirs))))
+      (make-pathname :directory (butlast directory (length dirs))
+                     :name nil :type nil :version nil :defaults file))))
+
 (defun program-source-paths (path)
-  "The source paths for a program whose main file is PATH: its directory, the current
+  "The source paths for a program whose main file is PATH: the root its namespace name
+implies (src/ for src/game/main.skn declaring game.main), its directory, the current
 directory and lib/."
-  (remove-duplicates (list (uiop:pathname-directory-pathname (merge-pathnames path))
-                           (uiop:getcwd)
-                           (library-directory))
+  (remove-duplicates (remove nil (list (namespace-root path)
+                                       (uiop:pathname-directory-pathname (merge-pathnames path))
+                                       (uiop:getcwd)
+                                       (library-directory)))
                      :test #'equal :key #'uiop:native-namestring :from-end t))
 
 (defun main-function (namespace)

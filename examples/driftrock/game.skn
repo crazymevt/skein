@@ -1,0 +1,152 @@
+(ns driftrock.game
+  "Driftrock's rules: the world, one fixed update step as a job graph, collisions, lives
+and waves. Nothing here touches SDL, so the game can also run headless."
+  (:require [skein.math :as m :refer [vec2 v+ v- v*]]
+            [skein.jobs :as jobs :refer [job]]
+            [driftrock.world :as w]
+            [driftrock.entities :as e]))
+
+(def turn-speed 4.2)       ; radians per second
+(def thrust 420.0)         ; pixels per second²
+(def bullet-speed 600.0)   ; pixels per second
+(def fire-delay 0.17)      ; seconds between shots
+(def respawn-delay 2.0)
+(def points {3 20, 2 50, 1 100})
+
+(defn spawn-wave
+  "n large rocks drifting from random places at least 220 pixels from away."
+  [n away]
+  (vec (for [_ (range n)]
+         (let [p (loop [] (let [p (w/random-pos)]
+                            (if (< (m/distance p away) 220.0) (recur) p)))]
+           (e/make-rock 3 p (m/from-angle (rand m/tau) (m/rand-range 25.0 85.0)))))))
+
+(defn new-world []
+  (let [ship (e/make-ship (w/center))]
+    {:mode :playing          ; :playing, :respawning or :game-over
+     :ship ship
+     :rocks (spawn-wave 4 (w/center))
+     :bullets []
+     :score 0
+     :lives 3
+     :wave 1
+     :timer 0.0}))
+
+(defonce world (atom (new-world)))
+
+(defn restart! [] (reset! world (new-world)))
+
+;;; Steps that run in parallel jobs
+
+(defn steer! [ship input dt]
+  (let [turn (cond (and (:left input) (not (:right input))) -1.0
+                   (and (:right input) (not (:left input))) 1.0
+                   :else 0.0)]
+    (swap! (:angle ship) + (* turn turn-speed dt))
+    (reset! (:thrust ship) (boolean (:thrust input)))
+    (when (:thrust input)
+      (swap! (:vel ship) v+ (m/from-angle @(:angle ship) (* thrust dt))))))
+
+(defn fire [ship input]
+  (when (and (:fire input) (zero? @(:cooldown ship)))
+    (reset! (:cooldown ship) fire-delay)
+    (let [dir (m/from-angle @(:angle ship))]
+      (e/make-bullet (v+ @(:pos ship) (v* dir 16.0))
+                     (v+ @(:vel ship) (v* dir bullet-speed))))))
+
+;;; Collisions and rules: one job, after everything has moved
+
+(defn hit? [a b]
+  (< (m/distance @(:pos a) @(:pos b)) (+ (:radius a) (:radius b))))
+
+(defn break-rock
+  "The pieces a destroyed rock breaks into."
+  [rock]
+  (let [size (dec (:size rock))]
+    (when (pos? size)
+      (let [speed (* 1.5 (m/length @(:vel rock)))]
+        (for [_ [1 2]]
+          (e/make-rock size @(:pos rock)
+                       (v+ @(:vel rock) (m/from-angle (rand m/tau) (+ 30.0 speed)))))))))
+
+(defn shoot-rocks
+  "Resolve bullets hitting rocks: returns the world with points and broken rocks."
+  [wd]
+  (reduce (fn [wd bullet]
+            (if-let [rock (and (e/alive? bullet)
+                               (first (filter #(and (e/alive? %) (hit? bullet %)) (:rocks wd))))]
+              (do (e/kill! bullet)
+                  (e/kill! rock)
+                  (e/emit-sparks! @(:pos rock) (* 8 (:size rock)) 160.0)
+                  (-> wd
+                      (update :score + (points (:size rock)))
+                      (update :rocks into (break-rock rock))))
+              wd))
+          wd
+          (:bullets wd)))
+
+(defn crash-ship
+  "If the ship hits a rock while unshielded, it explodes."
+  [wd]
+  (let [ship (:ship wd)]
+    (if (and (= :playing (:mode wd))
+             (zero? @(:shield ship))
+             (some #(and (e/alive? %) (hit? ship %)) (:rocks wd)))
+      (do (e/kill! ship)
+          (e/emit-sparks! @(:pos ship) 60 240.0)
+          (let [lives (dec (:lives wd))]
+            (assoc wd :lives lives :mode (if (pos? lives) :respawning :game-over)
+                      :timer respawn-delay)))
+      wd)))
+
+(defn advance-mode [wd input dt]
+  (case (:mode wd)
+    :respawning (let [t (- (:timer wd) dt)]
+                  (if (pos? t)
+                    (assoc wd :timer t)
+                    (assoc wd :mode :playing :ship (e/make-ship (w/center)))))
+    :game-over (if (:restart input) (new-world) wd)
+    wd))
+
+(defn next-wave [wd]
+  (if (empty? (:rocks wd))
+    (let [wave (inc (:wave wd))]
+      (assoc wd :wave wave
+                :rocks (spawn-wave (min 11 (+ 3 wave)) @(:pos (:ship wd)))))
+    wd))
+
+(defn apply-rules [wd input dt]
+  (let [shot (when (= :playing (:mode wd)) (fire (:ship wd) input))
+        wd (-> wd
+               (update :bullets #(if shot (conj % shot) %))
+               shoot-rocks
+               crash-ship)]
+    (-> wd
+        (update :rocks #(filterv e/alive? %))
+        (update :bullets #(filterv e/alive? %))
+        next-wave
+        (advance-mode input dt))))
+
+;;; One fixed step
+
+(defn update!
+  "Advance the world by dt seconds with the player's input: a job graph in which the
+ship, the rocks and the bullets move in parallel, then the rules apply, then the sparks
+move."
+  [input dt]
+  (let [{:keys [mode ship rocks bullets] :as wd} @world]
+    (jobs/graph
+     {:ship    (job (when (= :playing mode)
+                      (steer! ship input dt)
+                      (e/step! ship dt)))
+      :rocks   (job (doseq [r rocks] (e/step! r dt)))
+      :bullets (job (doseq [b bullets] (e/step! b dt)))
+      :rules   (job {:after [:ship :rocks :bullets]}
+                 (reset! world (apply-rules wd input dt)))
+      :sparks  (job {:after [:rules]} (e/step-sparks! dt))})
+    nil))
+
+(defn autopilot
+  "Input that plays by itself, for headless runs: turn, fire, and thrust now and then."
+  [t]
+  {:right true :fire true :thrust (< (mod t 3.0) 0.4) :restart true})

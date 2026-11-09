@@ -1,0 +1,105 @@
+(ns driftrock.entities
+  "Driftrock's game objects. The ship, rocks and bullets are defclass instances whose
+moving parts are atom cells, because each update step moves them on worker threads (a
+job graph). Sparks are many and short-lived, so they live in a struct of arrays."
+  (:require [skein.math :as m :refer [vec2 vec2-x vec2-y v+ v*]]
+            [driftrock.world :as w]))
+
+(defclass body []
+  (pos :cell :atom :init m/vec2-zero)
+  (vel :cell :atom :init m/vec2-zero)
+  (angle :cell :atom :init 0.0)
+  (spin :init 0.0)                       ; radians per second
+  (radius :init 10.0)
+  (alive :cell :atom :init true))
+
+(defclass ship [body]
+  (thrust :cell :atom :init false)
+  (cooldown :cell :atom :init 0.0)       ; seconds until it can fire again
+  (shield :cell :atom :init 0.0))        ; seconds of invulnerability left
+
+(defclass rock [body]
+  (size :init 3)                         ; 3 large, 2 medium, 1 small
+  (shape :init []))                      ; outline: vec2 offsets from pos, unrotated
+
+(defclass bullet [body]
+  (life :cell :atom :init 1.0))
+
+(defn alive? [e] @(:alive e))
+(defn kill! [e] (reset! (:alive e) false))
+
+;;; Movement
+
+(defgeneric step! [e dt] "Move e on by dt seconds.")
+
+(defmethod step! [(e body) dt]
+  (let [vel @(:vel e)]
+    (swap! (:pos e) (fn [p] (w/wrap-pos (v+ p (v* vel dt))))))
+  (swap! (:angle e) + (* (:spin e) dt)))
+
+(defmethod step! :after [(b bullet) dt]
+  (when (neg? (swap! (:life b) - dt))
+    (kill! b)))
+
+(def ship-drag "Fraction of its speed the ship keeps per second." 0.55)
+
+(defmethod step! :after [(s ship) dt]
+  (swap! (:cooldown s) (fn [c] (max 0.0 (- c dt))))
+  (swap! (:shield s) (fn [c] (max 0.0 (- c dt))))
+  (swap! (:vel s) v* (m/pow ship-drag dt)))
+
+;;; Rocks: an outline made bumpy with noise, so every rock looks different.
+
+(def rock-radius {3 48.0 2 27.0 1 14.0})
+(def rock-points 13)
+
+(defn rock-shape [radius seed]
+  (vec (for [i (range rock-points)]
+         (let [a (* m/tau (/ i (f64 rock-points)))
+               bump (m/noise (* 1.6 (m/cos a)) (* 1.6 (m/sin a)) seed)]
+           (m/from-angle a (* radius (+ 0.82 (* 0.45 bump))))))))
+
+(defn make-rock [size pos vel]
+  (let [r (rock-radius size)]
+    (make rock :size size :radius (* 0.9 r) :shape (rock-shape r (rand 1000.0))
+               :pos pos :vel vel :angle (rand m/tau) :spin (m/rand-range -1.2 1.2))))
+
+(defn make-ship [pos]
+  (make ship :pos pos :radius 13.0 :angle (- (/ m/pi 2.0)) :shield 2.5))
+
+(defn make-bullet [pos vel]
+  (make bullet :pos pos :vel vel :radius 2.0 :life 1.05))
+
+;;; Sparks
+
+(defsoa sparks (pos vec2) (vel vec2) (life f32))
+
+(def spark-capacity 600)
+(defonce spark-store (make-sparks spark-capacity))
+(defonce next-spark (atom 0))
+
+(defn emit-sparks!
+  "Throw n sparks out from point p at up to speed pixels per second."
+  [p n speed]
+  (dotimes [_ n]
+    (let [i (mod (swap! next-spark inc) spark-capacity)
+          v (m/from-angle (rand m/tau) (* speed (+ 0.2 (rand 0.8))))
+          life (f32 (+ 0.35 (rand 0.65)))]
+      (update! spark-store i :pos (fn [_] p))
+      (update! spark-store i :vel (fn [_] v))
+      (update! spark-store i :life (fn [_] life)))))
+
+(defn step-sparks! [dt]
+  (let [dt (f32 dt)]
+    (dotimes [i spark-capacity]
+      (when (pos? (life spark-store i))
+        (update! spark-store i :pos v+ (v* (vel spark-store i) dt))
+        (update! spark-store i :life - dt)))))
+
+(defn live-sparks
+  "The positions and remaining lives of the live sparks."
+  []
+  (for [i (range spark-capacity)
+        :let [l (life spark-store i)]
+        :when (pos? l)]
+    [(pos spark-store i) l]))

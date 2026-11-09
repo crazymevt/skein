@@ -183,7 +183,7 @@ repl.test.a/x
                          (game/with-frame-restarts :ok)]"
                        :namespace "user"))))
   (fails "(ns repl.frames3 (:require [skein.game :as game])) (game/run-loop {})"
-         "run-loop needs a :frame function"))
+         "run-loop needs a :frame, :update or :render function"))
 
 ;;; The REPL server
 

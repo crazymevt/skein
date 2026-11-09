@@ -13,6 +13,17 @@
         do (print-value x stream :readably readably)
            (when more (write-string separator stream))))
 
+(defun print-fields (fields stream readably)
+  "Print FIELDS, a list of (name . value), like a map but in their declared order."
+  (write-char #\{ stream)
+  (loop for ((name . value) . more) on fields
+        do (write-char #\: stream)
+           (write-string name stream)
+           (write-char #\Space stream)
+           (print-value value stream :readably readably)
+           (when more (write-string ", " stream)))
+  (write-char #\} stream))
+
 (defun print-value (x stream &key readably)
   "Write X to STREAM. When READABLY is false, strings and chars are written raw, as
 print does; otherwise as pr does. Values with no readable syntax print as #<...>."
@@ -47,19 +58,16 @@ print does; otherwise as pr does. Values with no readable syntax print as #<...>
          (write-char #\) stream))
         ((instance-p x)
          (format stream "#<~A " (skein-class-name (class-of x)))
-         (print-value (map-from-pairs
-                       (loop for s in (skein-slots (class-of x))
-                             append (list (intern-kw (slot-name-string s))
-                                          (slot-value x (c2mop:slot-definition-name s)))))
-                      stream :readably readably)
+         (print-fields (loop for s in (skein-slots (class-of x))
+                             collect (cons (slot-name-string s)
+                                           (slot-value x (c2mop:slot-definition-name s))))
+                       stream readably)
          (write-char #\> stream))
         ((struct-instance-def x)
          (format stream "#<~A " (struct-def-name (struct-instance-def x)))
-         (print-value (map-from-pairs
-                       (loop for f in (struct-def-fields (struct-instance-def x))
-                             append (list (intern-kw (field-def-name f))
-                                          (funcall (field-def-accessor f) x))))
-                      stream :readably readably)
+         (print-fields (loop for f in (struct-def-fields (struct-instance-def x))
+                             collect (cons (field-def-name f) (funcall (field-def-accessor f) x)))
+                       stream readably)
          (write-char #\> stream))
         ((struct-array-p x)
          (format stream "#<array ~A [" (struct-def-name (struct-array-def x)))

@@ -1,0 +1,115 @@
+(ns driftrock.draw
+  "Drawing Driftrock with SDL's 2D renderer: glowing outlines and debug-font text."
+  (:require [skein.ffi :as ffi]
+            [skein.math :as m :refer [vec2 vec2-x vec2-y]]
+            [sdl3.raw :as sdl]
+            [driftrock.world :as w]
+            [driftrock.entities :as e]))
+
+(def colors
+  {:space  [6 8 20]
+   :ship   [110 235 255]
+   :flame  [255 120 60]
+   :shield [70 120 255]
+   :rock   [255 190 90]
+   :bullet [255 255 230]
+   :spark  [255 150 70]
+   :text   [220 230 255]
+   :title  [255 190 90]})
+
+(defn color! [renderer key]
+  (let [[r g b] (colors key)]
+    (sdl/set-render-draw-color renderer r g b 255)))
+
+;;; Outlines go to SDL as an array of SDL_FPoint (x, y f32 pairs) in C memory.
+
+(def max-points 64)
+(defonce points (ffi/alloc f32 (* 2 max-points)))
+
+(defn outline!
+  "Draw the closed outline through pts (vec2s, model space), placed by the 2D transform
+xf (a mat3)."
+  [renderer xf pts]
+  (let [n (count pts)]
+    (dotimes [i (inc n)]
+      (let [p (m/transform-point xf (nth pts (mod i n)))]
+        (ffi/put! points f32 (vec2-x p) (* 2 i))
+        (ffi/put! points f32 (vec2-y p) (inc (* 2 i)))))
+    (sdl/render-lines renderer points (inc n))))
+
+(defn placement
+  "The transform that puts a model at entity e's position and angle."
+  [e]
+  (let [p @(:pos e)]
+    (m/m* (m/mat3-translation (vec2-x p) (vec2-y p)) (m/mat3-rotation @(:angle e)))))
+
+(def ship-shape [(vec2 18.0f 0.0f) (vec2 -12.0f -11.0f) (vec2 -6.0f 0.0f) (vec2 -12.0f 11.0f)])
+(def flame-shape [(vec2 -8.0f -5.0f) (vec2 -20.0f 0.0f) (vec2 -8.0f 5.0f)])
+(def bullet-shape [(vec2 2.0f 0.0f) (vec2 0.0f 2.0f) (vec2 -2.0f 0.0f) (vec2 0.0f -2.0f)])
+
+(defn circle-shape [r n]
+  (vec (for [i (range n)] (m/from-angle (* m/tau (/ i (f64 n))) r))))
+
+(def shield-shape (circle-shape 22.0 20))
+
+(defgeneric draw! [e renderer] "Draw a game object.")
+
+(defmethod draw! [(s e/ship) renderer]
+  (let [xf (placement s)]
+    (color! renderer :ship)
+    (outline! renderer xf ship-shape)
+    (when (and @(:thrust s) (< (rand) 0.8))
+      (color! renderer :flame)
+      (outline! renderer xf flame-shape))
+    (when (pos? @(:shield s))
+      (color! renderer :shield)
+      (outline! renderer xf shield-shape))))
+
+(defmethod draw! [(r e/rock) renderer]
+  (color! renderer :rock)
+  (outline! renderer (placement r) (:shape r)))
+
+(defmethod draw! [(b e/bullet) renderer]
+  (color! renderer :bullet)
+  (outline! renderer (placement b) bullet-shape))
+
+(defn sparks! [renderer]
+  (color! renderer :spark)
+  (let [live (take max-points (e/live-sparks))]
+    (doseq [[i [p _]] (map-indexed vector live)]
+      (ffi/put! points f32 (vec2-x p) (* 2 i))
+      (ffi/put! points f32 (vec2-y p) (inc (* 2 i))))
+    (sdl/render-points renderer points (count live))))
+
+;;; Text, in SDL's built-in 8x8 debug font, scaled up.
+
+(defn text! [renderer s x y scale key]
+  (color! renderer key)
+  (sdl/set-render-scale renderer scale scale)
+  (sdl/render-debug-text renderer (/ x scale) (/ y scale) s)
+  (sdl/set-render-scale renderer 1.0 1.0))
+
+(defn centered-text! [renderer s y scale key]
+  (let [w (* scale sdl/debug-text-font-character-size (count s))]
+    (text! renderer s (/ (- w/width w) 2.0) y scale key)))
+
+(defn hud! [renderer wd fps]
+  (text! renderer (str "SCORE " (:score wd)) 16.0 14.0 2.0 :text)
+  (text! renderer (str "WAVE " (:wave wd) "   SHIPS " (:lives wd)) 360.0 14.0 2.0 :text)
+  (when fps
+    (text! renderer (str (int (+ fps 0.5)) " FPS") 860.0 14.0 1.0 :text))
+  (case (:mode wd)
+    :game-over (do (centered-text! renderer "DRIFTROCK" 260.0 6.0 :title)
+                   (centered-text! renderer "GAME OVER - PRESS ENTER" 340.0 2.0 :text))
+    nil))
+
+(defn world!
+  "Draw everything in the world map wd."
+  [renderer wd fps]
+  (color! renderer :space)
+  (sdl/render-clear renderer)
+  (doseq [r (:rocks wd)] (draw! r renderer))
+  (doseq [b (:bullets wd)] (draw! b renderer))
+  (when (= :playing (:mode wd)) (draw! (:ship wd) renderer))
+  (sparks! renderer)
+  (hud! renderer wd fps))

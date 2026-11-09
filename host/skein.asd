@@ -36,6 +36,7 @@
                (:file "runtime/objects")
                (:file "runtime/inline")
                (:file "runtime/arrays")
+               (:file "runtime/math")
                (:file "runtime/structs")
                (:file "runtime/types")
                (:file "runtime/concurrency")
@@ -87,7 +88,8 @@
                (:file "cli")
                (:file "ffi")
                (:file "bindgen")
-               (:file "repl"))
+               (:file "repl")
+               (:file "math"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!
                                        (uiop:find-symbol* :all :skein.tests))

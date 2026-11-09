@@ -135,3 +135,13 @@ jobs:
       - name: SDL3 window example (Linux, under Xvfb)
         if: runner.os == 'Linux'
         run: xvfb-run -a ./skein run examples/sdl/window.skn
+
+      # M0.12: the demo game plays itself for 600 frames and must keep its 99th-percentile
+      # frame within the 60 fps budget.
+      - name: Driftrock at 60 fps
+        if: runner.os != 'Linux'
+        run: ./skein run examples/driftrock/main.skn --frames 600 --autopilot --check-60fps
+
+      - name: Driftrock at 60 fps (Linux, under Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./skein run examples/driftrock/main.skn --frames 600 --autopilot --check-60fps

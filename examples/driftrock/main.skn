@@ -1,0 +1,123 @@
+(ns driftrock.main
+  "Driftrock: steer a ship through a field of drifting rocks and break them up.
+
+Arrows (or A/D/W) steer and thrust, Space fires, Enter restarts after game over, Escape
+quits. Run it with
+
+  ./skein run examples/driftrock/main.skn
+  ./skein dev examples/driftrock/main.skn     (reload code while playing)
+
+Options: --frames N stops after N frames, --autopilot plays by itself, --no-vsync draws
+as fast as it can, and --screenshot file.bmp saves the last frame. On exit it prints
+frame-time statistics; with --check-60fps it fails if the 99th-percentile frame takes
+more than 16.67 ms of work."
+  (:require [skein.ffi :as ffi]
+            [skein.game :as game]
+            [skein.time :as time]
+            [sdl3.raw :as sdl]
+            [driftrock.world :as w]
+            [driftrock.game :as g]
+            [driftrock.draw :as draw]))
+
+(defn parse-args [args]
+  (loop [opts {} args (seq args)]
+    (if-not args
+      opts
+      (let [[a b] args]
+        (case a
+          "--frames" (recur (assoc opts :frames (parse-long b)) (nnext args))
+          "--autopilot" (recur (assoc opts :autopilot true) (next args))
+          "--no-vsync" (recur (assoc opts :no-vsync true) (next args))
+          "--screenshot" (recur (assoc opts :screenshot b) (nnext args))
+          "--check-60fps" (recur (assoc opts :check true) (next args))
+          (error (str "unknown option " a)))))))
+
+(defn key? [keys scancode] (ffi/get keys bool scancode))
+
+(defn read-input [keys]
+  {:left (or (key? keys sdl/scancode-left) (key? keys sdl/scancode-a))
+   :right (or (key? keys sdl/scancode-right) (key? keys sdl/scancode-d))
+   :thrust (or (key? keys sdl/scancode-up) (key? keys sdl/scancode-w))
+   :fire (key? keys sdl/scancode-space)
+   :restart (key? keys sdl/scancode-return)
+   :quit (key? keys sdl/scancode-escape)})
+
+(defn quit-requested? [event]
+  (loop [quit false]
+    (if (sdl/poll-event event)
+      (recur (or quit (= (ffi/field event sdl/sdl-event :type) sdl/event-quit)))
+      quit)))
+
+;;; Frame statistics: how long each frame's work (input, updates and drawing, but not
+;;; waiting for vsync) takes.
+
+(defn percentile [sorted p]
+  (nth sorted (min (dec (count sorted)) (int (* p (count sorted))))))
+
+(def budget (/ 1.0 60.0))
+
+(defn report
+  "Print frame statistics; return the 99th-percentile frame work in seconds."
+  [work-times frames seconds]
+  (let [sorted (vec (sort work-times))
+        ms (fn [s] (/ (int (* s 100000.0)) 100.0))]
+    (println (str "frames " frames ", " (ms (/ seconds 1000.0)) " s, "
+                  (/ (int (* 10 (/ frames seconds))) 10.0) " fps"))
+    (when (seq sorted)
+      (println (str "frame work: mean " (ms (/ (reduce + sorted) (count sorted)))
+                    " ms, p99 " (ms (percentile sorted 0.99))
+                    " ms, worst " (ms (peek sorted)) " ms (budget 16.67 ms at 60 fps)")))
+    (if (seq sorted) (percentile sorted 0.99) 0.0)))
+
+(defn save-screenshot! [renderer path]
+  (let [surface (sdl/render-read-pixels renderer nil)]
+    (when-not (and surface (sdl/save-bmp surface path))
+      (error (str "could not save " path ": " (sdl/get-error))))
+    (sdl/destroy-surface surface)
+    (println "saved" path)))
+
+(defn -main [& args]
+  (let [opts (parse-args args)]
+    (when-not (sdl/init sdl/init-video)
+      (error (str "SDL_Init failed: " (sdl/get-error))))
+    (try
+      (let [window (sdl/create-window "Driftrock" (int w/width) (int w/height) 0)
+            renderer (sdl/create-renderer window nil)
+            keys (sdl/get-keyboard-state nil)
+            input (atom {})
+            quit (atom false)
+            frames (atom 0)
+            work-start (atom 0.0)
+            work-times (atom [])
+            fps (atom nil)
+            start (time/now)]
+        (when-not (and window renderer)
+          (error (str "could not open a window: " (sdl/get-error))))
+        (sdl/set-render-vsync renderer (if (:no-vsync opts) 0 1))
+        (g/restart!)
+        (ffi/with-foreign [event (ffi/alloc sdl/sdl-event)]
+          (game/run-loop
+           {:running? (fn [] (not (or @quit (when-let [n (:frames opts)] (>= @frames n)))))
+            :frame (fn []
+                     (reset! work-start (time/now))
+                     (when (quit-requested? event) (reset! quit true))
+                     (reset! input (if (:autopilot opts)
+                                     (g/autopilot (- (time/now) start))
+                                     (read-input keys)))
+                     (when (:quit @input) (reset! quit true)))
+            :update (fn [dt] (g/update! @input dt))
+            :render (fn [_]
+                      (draw/world! renderer @g/world @fps)
+                      (swap! work-times conj (- (time/now) @work-start))
+                      (when (and (:screenshot opts) (= (inc @frames) (:frames opts)))
+                        (save-screenshot! renderer (:screenshot opts)))
+                      (sdl/render-present renderer)
+                      (let [n (swap! frames inc) secs (- (time/now) start)]
+                        (when (zero? (mod n 30)) (reset! fps (/ n secs)))))}))
+        (let [p99 (report (drop 30 @work-times) @frames (- (time/now) start))]
+          (println "score" (:score @g/world) "wave" (:wave @g/world))
+          (when (and (:check opts) (> p99 budget))
+            (error "the 99th-percentile frame is over the 60 fps budget")))
+        (sdl/destroy-renderer renderer)
+        (sdl/destroy-window window))
+      (finally (sdl/quit)))))

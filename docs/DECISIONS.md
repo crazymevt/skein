@@ -310,3 +310,17 @@ Date: 2026-11-09 · Status: Accepted
   - `parse-long`, from Clojure, is added to skein.core for command-line arguments.
 - **Alternatives:** SLY/Swank in the SBCL host (needs main-thread workarounds for SDL, and speaks CL rather than Skein); nREPL for Calva and CIDER (a bencode protocol and session model, which is more work than Phase 0 needs); suspending only the failing task, which needs Phase 2's fibers.
 - **Consequences:** Editor support is plain text over a socket or terminal, documented in `docs/EDITORS.md`. Swank remains the plan for the native runtime (D-018). While the program waits in the debugger its main thread is stopped, so the window doesn't redraw.
+
+## D-040: The demo game and the libraries it needed
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M0.12 builds the demo game. The roadmap said "an Asteroids clone"; Jessie chose an original game in that genre, Driftrock, with its own name and look. Writing it needed number conversions, trigonometry, random numbers, a clock and `skein.math`, none of which existed. Jessie chose type-named conversions and the whole of `skein.math` from DESIGN §21.
+- **Decision:**
+  - `f32`, `f64` and `int` (truncating toward zero) convert numbers and are inlined. `rand`, `rand-int` (Clojure's) and `parse-long` (M0.11) join `skein.core`.
+  - `skein.math` is mostly Skein source (`lib/skein/math.skn`). The value structs are `vec2`, `vec3`, `vec4`, `quat`, `mat3` and `mat4`, all of `f32`, with generic functions over them. Trigonometry, rounding, `pow`, `exp`, `log` and Perlin `noise` are host functions, inlined like core primitives. Matrices are column-major. Projections produce depth in [0, 1].
+  - `skein.time/now` gives monotonic seconds as an `f64`; `now-ns` gives nanoseconds.
+  - `skein.game/run-loop` gains `:update` with a fixed `:step` and `:max-steps`, and `:render` with the leftover fraction. The restarts wrap each call, so `retry-frame` repeats only the call that failed, not updates that already succeeded.
+  - `skein run` and `skein dev` add the source root implied by the main file's `ns` name to the source paths, so a multi-file program runs from its main file.
+  - `instance?` accepts a struct's name (its constructor). Structs and instances print their fields in declared order.
+  - Driftrock is `examples/driftrock/`: `defclass` entities with `:atom` cells (moved by a per-update job graph), sparks in a `defsoa`, and drawing through `sdl3.raw`. `--autopilot --frames N --check-60fps` lets CI play it on all three platforms and fail if the 99th-percentile frame misses the 60 fps budget.
+- **Alternatives:** Clojure-named conversions (`float`, `double`, `long`); only vectors and scalars in `skein.math` now; restarts around the whole frame (which would repeat updates that already ran).
+- **Consequences:** Phase 0's retrospective (`docs/PHASE0-RETRO.md`) measured the game and lists language changes to decide, as DESIGN §22 open questions 11–14.

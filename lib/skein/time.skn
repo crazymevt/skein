@@ -1,0 +1,5 @@
+(ns skein.time
+  "Clocks (DESIGN §21). now and now-ns are built into the host:
+  (now)     seconds since the program started, an f64, from a monotonic clock
+  (now-ns)  the same in nanoseconds, an integer
+sleep is in skein.core.")

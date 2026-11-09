@@ -346,6 +346,9 @@ names, or a var (in NAMESPACE-NAME) holding a class or a condition type."
   (flet ((fail () (skein-error 'skein-error nil "~A is not a class" (readable-string x))))
     (cond ((typep x 'class) x)
           ((condition-type-p x) (find-class (condition-type-class x)))
+          ;; A struct's constructor, as in (instance? vec2 v).
+          ((and (functionp x) (struct-def-of-constructor x))
+           (find-class (struct-def-cl-type (struct-def-of-constructor x))))
           ((not (sym-p x)) (fail))
           (t (let ((builtin (and (null (sym-namespace x))
                                  (assoc (sym-name x) *builtin-classes* :test #'string=))))

@@ -187,6 +187,8 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 
 **Arithmetic:** `+ - *` follow numeric contagion: integer op integer gives an integer; any float makes the result a float; `f32` op `f64` gives `f64`. **`/` on integers always returns `f64`.** Use `quot`, `rem` and `mod` for integer division. There are **no ratios** in v1 (D-026).
 
+**Conversions** are named after the type they produce (D-040): `(f32 x)`, `(f64 x)`, and `(int x)`, which truncates toward zero. `(rand)` and `(rand n)` give an `f64` in [0, n); `(rand-int n)` an integer in [0, n). `(parse-long s)` reads a decimal integer, or returns `nil`.
+
 **Integer overflow:** arithmetic on values known only to be `integer` always promotes to a bignum on fixnum overflow, at every optimization policy, including `speed 3` (D-023). Fixnum-only arithmetic happens only when operands and result are declared or inferred `fixnum` or a machine integer type; overflow of those follows §12.3.
 
 ### 6.2 Persistent collections (immutable, structurally shared)
@@ -679,7 +681,8 @@ Phase 0 details (D-039):
 - **REPL:** `*1`, `*2`, `*3` hold the last values and `*e` the last error; `(ns name)` or `(in-ns 'name)` switches namespace; `:quit` leaves.
 - **Debugger:** an unhandled error prints the active Skein restarts, numbered innermost first. Type a number to invoke one, `:bt` for the Skein functions on the stack, or any form to evaluate it. An error in the program's thread pauses that thread; the REPL attaches to it, and forms typed there run in the failing thread, so its restarts and state are available. Errors in spawned tasks still go to their nursery.
 - **Reload:** `(reload 'ns)` loads the namespace's file again. Vars keep their identity, so callers see new definitions; definitions deleted from the file remain until restart.
-- **Game loop:** `(skein.game/run-loop {:frame f :running? p})` calls `(f)` while `(p)` is true, each call inside `(skein.game/with-frame-restarts ...)`, which establishes `retry-frame` (run the frame again) and `skip-frame` (give up on it). M0.12 adds a fixed timestep.
+- **Game loop:** `skein.game/run-loop` takes `:frame` (once per frame, e.g. input), `:update` (called with the fixed timestep `:step`, default 1/60 s, as often as the clock requires, at most `:max-steps` times per frame, default 5), `:render` (once per frame, with the fraction of a step left over), and `:running?`. Each call runs inside `(skein.game/with-frame-restarts ...)`, which establishes `retry-frame` (run that call again) and `skip-frame` (give up on it) (D-040).
+- **Source root:** if the main file declares a namespace that matches its path (`src/game/main.skn` declaring `game.main`), `skein run` and `skein dev` also look for namespaces under that root (`src/`) (D-040).
 
 ## 16. Compiler architecture
 
@@ -852,11 +855,29 @@ Dependencies are git-based at first. A package registry is deferred.
 | `skein.json`, `skein.edn` | data formats | 1+ |
 | `skein.net` | sockets, HTTP client | Deferred |
 
+Phase 0 status (D-040):
+- **Done:** `skein.core`, `skein.ffi`, `skein.jobs` (job graphs; the rest of `skein.conc` is in `skein.core`) and `skein.math`. `skein.time` has `now` and `now-ns`, with `sleep` in `skein.core`. `skein.game` has `run-loop` and the frame restarts, but no input mapping yet.
+- **Not started:** `skein.string`, `skein.gc`, `skein.io`, `skein.log` and `skein.test`. The REPL is in the host rather than `skein.repl`.
+- **`skein.math`:**
+  - The operations on its types are generic functions: `v+ v- v* vdiv negate dot length length-sq distance normalize lerp` for vectors, and `m* transform transpose determinant inverse` for matrices and quaternions. Functions such as `cross`, `rotate`, `quat-rotate`, `slerp` and `mat3-translation` cover the rest.
+  - Matrices are column-major: field `mCR` is column C, row R.
+  - Projections (`perspective`, `ortho`) map depth to [0, 1], as Vulkan, Metal and SDL's GPU API expect.
+  - Scalar functions keep float types; integer arguments give `f64`.
+
 Bindings shipped as separate libraries: `sdl3` (windowing, input, the 2D renderer and the GPU API; D-020), `miniaudio`, `cimgui`, `box2d`, `stb`.
 
 ## 22. Open questions
 
-None are open right now. New questions go here; once resolved, they move to `DECISIONS.md` and the table below.
+New questions go here; once resolved, they move to `DECISIONS.md` and the table below. Questions 11–14 come from the Phase 0 retrospective ([`PHASE0-RETRO.md`](PHASE0-RETRO.md)).
+
+**Open**
+
+| # | Question | Proposal |
+|---|---|---|
+| 11 | Reading and changing mutable slots without `@` and `swap!` everywhere | `(:pos e)` returns a cell slot's value; `(set-slot! e :pos v)` and `(update-slot! e :pos f args...)` change it; `(cell e :pos)` gives the cell |
+| 12 | Restart names: syntax-quote qualifies them, so macros need `~'retry-frame` | Name restarts with keywords (`:retry-frame`), or compare restart symbols by their unqualified name |
+| 13 | Struct type tests | `defstruct` also defines a predicate `name?` (`vec2?`) |
+| 14 | `/` can't appear in a symbol's name, so vector division is `vdiv` | Keep `/`-free names, or let the reader accept `/` after the namespace separator |
 
 **Resolved**
 

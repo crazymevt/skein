@@ -1,0 +1,438 @@
+(ns skein.math
+  "Math for games (DESIGN §21).
+
+Scalars: sin cos tan asin acos atan atan2 exp log pow floor ceil round trunc (built into
+the host; floats keep their type, integers become f64), pi, tau, sign, clamp, lerp,
+inverse-lerp, remap, smoothstep, deg->rad, rad->deg, wrap, approx=, rand-range and
+(noise x y) / (noise x y z), smooth Perlin noise in about [-1, 1].
+
+Value structs of f32: vec2, vec3, vec4, quat (x y z w), mat3 and mat4. Matrices are
+column-major: field mCR is column C, row R, and the constructor takes the columns in
+order. Vectors and matrices work with the generic functions v+ v- v* vdiv negate dot
+length length-sq distance normalize lerp, m* transform transpose determinant inverse.")
+
+;;; ------------------------------------------------------------------------------------
+;;; Scalars
+
+(def pi "π as an f64." 3.141592653589793)
+(def tau "2π as an f64." 6.283185307179586)
+
+(defn sign
+  "-1, 0 or 1 (in x's type) by the sign of x."
+  [x]
+  (cond (pos? x) (if (float? x) (+ (* x 0) 1) 1)
+        (neg? x) (if (float? x) (- (* x 0) 1) -1)
+        :else x))
+
+(defn clamp
+  "x limited to the range [lo, hi]."
+  [x lo hi]
+  (max lo (min hi x)))
+
+(defn inverse-lerp
+  "Where x lies between a and b: 0 at a, 1 at b."
+  [a b x]
+  (/ (- x a) (- b a)))
+
+(defn remap
+  "Map x from the range [a, b] to [c, d]."
+  [x a b c d]
+  (+ c (* (- d c) (inverse-lerp a b x))))
+
+(defn smoothstep
+  "0 below edge0, 1 above edge1, and a smooth curve between."
+  [edge0 edge1 x]
+  (let [t (clamp (inverse-lerp edge0 edge1 x) 0.0 1.0)]
+    (* t t (- 3.0 (* 2.0 t)))))
+
+(defn deg->rad "Degrees to radians." [d] (* d (/ pi 180.0)))
+(defn rad->deg "Radians to degrees." [r] (* r (/ 180.0 pi)))
+
+(defn wrap
+  "x wrapped into [0, n): (wrap -1.0 10.0) is 9.0. Useful for wraparound worlds."
+  [x n]
+  (mod x n))
+
+(defn approx=
+  "True if a and b differ by at most epsilon (default 1e-5)."
+  ([a b] (approx= a b 1e-5))
+  ([a b epsilon] (<= (abs (- a b)) epsilon)))
+
+(defn rand-range
+  "A random f64 in [lo, hi)."
+  [lo hi]
+  (+ lo (rand (- hi lo))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Types
+
+(defstruct vec2 :value "A 2D vector." (x f32) (y f32))
+(defstruct vec3 :value "A 3D vector." (x f32) (y f32) (z f32))
+(defstruct vec4 :value "A 4D vector." (x f32) (y f32) (z f32) (w f32))
+(defstruct quat :value "A rotation quaternion, x y z the vector part and w the scalar."
+  (x f32) (y f32) (z f32) (w f32))
+(defstruct mat3 :value "A 3x3 column-major matrix; mCR is column C, row R."
+  (m00 f32) (m01 f32) (m02 f32)
+  (m10 f32) (m11 f32) (m12 f32)
+  (m20 f32) (m21 f32) (m22 f32))
+(defstruct mat4 :value "A 4x4 column-major matrix; mCR is column C, row R."
+  (m00 f32) (m01 f32) (m02 f32) (m03 f32)
+  (m10 f32) (m11 f32) (m12 f32) (m13 f32)
+  (m20 f32) (m21 f32) (m22 f32) (m23 f32)
+  (m30 f32) (m31 f32) (m32 f32) (m33 f32))
+
+(def vec2-zero "(vec2 0 0)." (vec2 0.0f 0.0f))
+(def vec3-zero "(vec3 0 0 0)." (vec3 0.0f 0.0f 0.0f))
+(def quat-identity "The rotation that does nothing." (quat 0.0f 0.0f 0.0f 1.0f))
+(def mat3-identity "The 3x3 identity matrix."
+  (mat3 1.0f 0.0f 0.0f, 0.0f 1.0f 0.0f, 0.0f 0.0f 1.0f))
+(def mat4-identity "The 4x4 identity matrix."
+  (mat4 1.0f 0.0f 0.0f 0.0f, 0.0f 1.0f 0.0f 0.0f, 0.0f 0.0f 1.0f 0.0f, 0.0f 0.0f 0.0f 1.0f))
+
+;;; ------------------------------------------------------------------------------------
+;;; Vector operations
+
+(defgeneric v+ [a b] "The sum of two vectors of the same type.")
+(defgeneric v- [a b] "a minus b, two vectors of the same type.")
+(defgeneric v* [v k] "Vector v scaled by the number k.")
+(defgeneric negate [v] "The vector pointing the other way.")
+(defgeneric dot [a b] "The dot product of two vectors of the same type.")
+(defgeneric lerp [a b t]
+  "Linear interpolation from a (t = 0) to b (t = 1): numbers or vectors of one type.")
+
+(defmethod lerp [(a number) b t] (+ a (* (- b a) t)))
+
+(defmethod v+ [(a vec2) b] (vec2 (+ (vec2-x a) (vec2-x b)) (+ (vec2-y a) (vec2-y b))))
+(defmethod v- [(a vec2) b] (vec2 (- (vec2-x a) (vec2-x b)) (- (vec2-y a) (vec2-y b))))
+(defmethod v* [(v vec2) k] (let [k (f32 k)] (vec2 (* (vec2-x v) k) (* (vec2-y v) k))))
+(defmethod negate [(v vec2)] (vec2 (- (vec2-x v)) (- (vec2-y v))))
+(defmethod dot [(a vec2) b] (+ (* (vec2-x a) (vec2-x b)) (* (vec2-y a) (vec2-y b))))
+(defmethod lerp [(a vec2) b t] (v+ a (v* (v- b a) t)))
+
+(defmethod v+ [(a vec3) b]
+  (vec3 (+ (vec3-x a) (vec3-x b)) (+ (vec3-y a) (vec3-y b)) (+ (vec3-z a) (vec3-z b))))
+(defmethod v- [(a vec3) b]
+  (vec3 (- (vec3-x a) (vec3-x b)) (- (vec3-y a) (vec3-y b)) (- (vec3-z a) (vec3-z b))))
+(defmethod v* [(v vec3) k]
+  (let [k (f32 k)] (vec3 (* (vec3-x v) k) (* (vec3-y v) k) (* (vec3-z v) k))))
+(defmethod negate [(v vec3)] (vec3 (- (vec3-x v)) (- (vec3-y v)) (- (vec3-z v))))
+(defmethod dot [(a vec3) b]
+  (+ (* (vec3-x a) (vec3-x b)) (* (vec3-y a) (vec3-y b)) (* (vec3-z a) (vec3-z b))))
+(defmethod lerp [(a vec3) b t] (v+ a (v* (v- b a) t)))
+
+(defmethod v+ [(a vec4) b]
+  (vec4 (+ (vec4-x a) (vec4-x b)) (+ (vec4-y a) (vec4-y b))
+        (+ (vec4-z a) (vec4-z b)) (+ (vec4-w a) (vec4-w b))))
+(defmethod v- [(a vec4) b]
+  (vec4 (- (vec4-x a) (vec4-x b)) (- (vec4-y a) (vec4-y b))
+        (- (vec4-z a) (vec4-z b)) (- (vec4-w a) (vec4-w b))))
+(defmethod v* [(v vec4) k]
+  (let [k (f32 k)]
+    (vec4 (* (vec4-x v) k) (* (vec4-y v) k) (* (vec4-z v) k) (* (vec4-w v) k))))
+(defmethod negate [(v vec4)] (vec4 (- (vec4-x v)) (- (vec4-y v)) (- (vec4-z v)) (- (vec4-w v))))
+(defmethod dot [(a vec4) b]
+  (+ (* (vec4-x a) (vec4-x b)) (* (vec4-y a) (vec4-y b))
+     (* (vec4-z a) (vec4-z b)) (* (vec4-w a) (vec4-w b))))
+(defmethod lerp [(a vec4) b t] (v+ a (v* (v- b a) t)))
+
+(defn vdiv "Vector v divided by the number k." [v k] (v* v (/ 1.0 k)))
+(defn length-sq "The squared length of a vector." [v] (dot v v))
+(defn length "The length of a vector." [v] (sqrt (dot v v)))
+(defn distance "The distance between two points." [a b] (length (v- a b)))
+
+(defn normalize
+  "v scaled to length 1, or v itself if its length is 0."
+  [v]
+  (let [len (length v)]
+    (if (zero? len) v (v* v (/ 1.0 len)))))
+
+(defn cross
+  "The cross product of two vec3s."
+  [a b]
+  (vec3 (- (* (vec3-y a) (vec3-z b)) (* (vec3-z a) (vec3-y b)))
+        (- (* (vec3-z a) (vec3-x b)) (* (vec3-x a) (vec3-z b)))
+        (- (* (vec3-x a) (vec3-y b)) (* (vec3-y a) (vec3-x b)))))
+
+(defn from-angle
+  "The vec2 of the given length (default 1) pointing at angle radians from the x axis."
+  ([angle] (from-angle angle 1.0))
+  ([angle len] (vec2 (f32 (* len (cos angle))) (f32 (* len (sin angle))))))
+
+(defn angle
+  "The angle of a vec2 from the x axis, in radians."
+  [v]
+  (atan2 (vec2-y v) (vec2-x v)))
+
+(defn rotate
+  "The vec2 v rotated by angle radians, counterclockwise when y points up."
+  [v angle]
+  (let [c (f32 (cos angle)) s (f32 (sin angle)) x (vec2-x v) y (vec2-y v)]
+    (vec2 (- (* x c) (* y s)) (+ (* x s) (* y c)))))
+
+(defn perp
+  "The vec2 v turned a quarter turn: (perp (vec2 1 0)) is (vec2 0 1)."
+  [v]
+  (vec2 (- (vec2-y v)) (vec2-x v)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Quaternions
+
+(defn quat-from-axis-angle
+  "The rotation by angle radians around the vec3 axis (which need not be normalized)."
+  [axis angle]
+  (let [a (normalize axis)
+        s (f32 (sin (/ angle 2.0)))]
+    (quat (* (vec3-x a) s) (* (vec3-y a) s) (* (vec3-z a) s) (f32 (cos (/ angle 2.0))))))
+
+(defn conjugate "The inverse of a unit quaternion." [q]
+  (quat (- (quat-x q)) (- (quat-y q)) (- (quat-z q)) (quat-w q)))
+
+(defn quat-normalize "q scaled to length 1." [q]
+  (let [len (sqrt (+ (* (quat-x q) (quat-x q)) (* (quat-y q) (quat-y q))
+                     (* (quat-z q) (quat-z q)) (* (quat-w q) (quat-w q))))
+        k (f32 (/ 1.0 len))]
+    (quat (* (quat-x q) k) (* (quat-y q) k) (* (quat-z q) k) (* (quat-w q) k))))
+
+(defn quat-rotate
+  "The vec3 v rotated by the unit quaternion q."
+  [q v]
+  (let [u (vec3 (quat-x q) (quat-y q) (quat-z q))
+        w (quat-w q)
+        t (v* (cross u v) 2.0)]
+    (v+ (v+ v (v* t w)) (cross u t))))
+
+(defn slerp
+  "Spherical interpolation between unit quaternions a (t = 0) and b (t = 1)."
+  [a b t]
+  (let [d (+ (* (quat-x a) (quat-x b)) (* (quat-y a) (quat-y b))
+             (* (quat-z a) (quat-z b)) (* (quat-w a) (quat-w b)))
+        [b d] (if (neg? d) [(quat (- (quat-x b)) (- (quat-y b)) (- (quat-z b)) (- (quat-w b)))
+                            (- d)]
+                  [b d])]
+    (if (> d 0.9995)
+      (quat-normalize (quat (f32 (lerp (quat-x a) (quat-x b) t))
+                            (f32 (lerp (quat-y a) (quat-y b) t))
+                            (f32 (lerp (quat-z a) (quat-z b) t))
+                            (f32 (lerp (quat-w a) (quat-w b) t))))
+      (let [theta (acos d)
+            s (sin theta)
+            ka (f32 (/ (sin (* (- 1.0 t) theta)) s))
+            kb (f32 (/ (sin (* t theta)) s))]
+        (quat (+ (* (quat-x a) ka) (* (quat-x b) kb)) (+ (* (quat-y a) ka) (* (quat-y b) kb))
+              (+ (* (quat-z a) ka) (* (quat-z b) kb)) (+ (* (quat-w a) ka) (* (quat-w b) kb)))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Matrices
+
+(defgeneric m* [a b] "The product a·b of two matrices, or of two quaternions.")
+(defgeneric transform [m v] "The vector v transformed by the matrix m (mat3·vec3, mat4·vec4).")
+(defgeneric transpose [m] "The transpose of a matrix.")
+(defgeneric determinant [m] "The determinant of a matrix.")
+(defgeneric inverse [m] "The inverse of a matrix (nil if it has none), or of a unit quaternion.")
+
+(defmethod m* [(a quat) b]
+  (let [ax (quat-x a) ay (quat-y a) az (quat-z a) aw (quat-w a)
+        bx (quat-x b) by (quat-y b) bz (quat-z b) bw (quat-w b)]
+    (quat (+ (* aw bx) (* ax bw) (* ay bz) (- (* az by)))
+          (+ (* aw by) (- (* ax bz)) (* ay bw) (* az bx))
+          (+ (* aw bz) (* ax by) (- (* ay bx)) (* az bw))
+          (- (* aw bw) (* ax bx) (* ay by) (* az bz)))))
+
+(defmethod inverse [(q quat)] (conjugate q))
+
+(defn mat3-at "Element (column c, row r) of a mat3." [m c r]
+  (case (+ (* 3 c) r)
+    0 (mat3-m00 m) 1 (mat3-m01 m) 2 (mat3-m02 m)
+    3 (mat3-m10 m) 4 (mat3-m11 m) 5 (mat3-m12 m)
+    6 (mat3-m20 m) 7 (mat3-m21 m) 8 (mat3-m22 m)))
+
+(defn mat4-at "Element (column c, row r) of a mat4." [m c r]
+  (case (+ (* 4 c) r)
+    0 (mat4-m00 m) 1 (mat4-m01 m) 2 (mat4-m02 m) 3 (mat4-m03 m)
+    4 (mat4-m10 m) 5 (mat4-m11 m) 6 (mat4-m12 m) 7 (mat4-m13 m)
+    8 (mat4-m20 m) 9 (mat4-m21 m) 10 (mat4-m22 m) 11 (mat4-m23 m)
+    12 (mat4-m30 m) 13 (mat4-m31 m) 14 (mat4-m32 m) 15 (mat4-m33 m)))
+
+(defn- mat3-from [f] ; f gives the element at column c, row r
+  (mat3 (f 0 0) (f 0 1) (f 0 2) (f 1 0) (f 1 1) (f 1 2) (f 2 0) (f 2 1) (f 2 2)))
+
+(defn- mat4-from [f]
+  (mat4 (f 0 0) (f 0 1) (f 0 2) (f 0 3) (f 1 0) (f 1 1) (f 1 2) (f 1 3)
+        (f 2 0) (f 2 1) (f 2 2) (f 2 3) (f 3 0) (f 3 1) (f 3 2) (f 3 3)))
+
+;; Written out: element (c, r) of a·b is the sum over k of a(k, r)·b(c, k).
+(defmethod m* [(a mat3) b]
+  (let [a00 (mat3-m00 a) a01 (mat3-m01 a) a02 (mat3-m02 a)
+        a10 (mat3-m10 a) a11 (mat3-m11 a) a12 (mat3-m12 a)
+        a20 (mat3-m20 a) a21 (mat3-m21 a) a22 (mat3-m22 a)
+        b00 (mat3-m00 b) b01 (mat3-m01 b) b02 (mat3-m02 b)
+        b10 (mat3-m10 b) b11 (mat3-m11 b) b12 (mat3-m12 b)
+        b20 (mat3-m20 b) b21 (mat3-m21 b) b22 (mat3-m22 b)]
+    (mat3 (+ (* a00 b00) (* a10 b01) (* a20 b02))
+          (+ (* a01 b00) (* a11 b01) (* a21 b02))
+          (+ (* a02 b00) (* a12 b01) (* a22 b02))
+          (+ (* a00 b10) (* a10 b11) (* a20 b12))
+          (+ (* a01 b10) (* a11 b11) (* a21 b12))
+          (+ (* a02 b10) (* a12 b11) (* a22 b12))
+          (+ (* a00 b20) (* a10 b21) (* a20 b22))
+          (+ (* a01 b20) (* a11 b21) (* a21 b22))
+          (+ (* a02 b20) (* a12 b21) (* a22 b22)))))
+
+(defmethod m* [(a mat4) b]
+  (let [a00 (mat4-m00 a) a01 (mat4-m01 a) a02 (mat4-m02 a) a03 (mat4-m03 a)
+        a10 (mat4-m10 a) a11 (mat4-m11 a) a12 (mat4-m12 a) a13 (mat4-m13 a)
+        a20 (mat4-m20 a) a21 (mat4-m21 a) a22 (mat4-m22 a) a23 (mat4-m23 a)
+        a30 (mat4-m30 a) a31 (mat4-m31 a) a32 (mat4-m32 a) a33 (mat4-m33 a)
+        b00 (mat4-m00 b) b01 (mat4-m01 b) b02 (mat4-m02 b) b03 (mat4-m03 b)
+        b10 (mat4-m10 b) b11 (mat4-m11 b) b12 (mat4-m12 b) b13 (mat4-m13 b)
+        b20 (mat4-m20 b) b21 (mat4-m21 b) b22 (mat4-m22 b) b23 (mat4-m23 b)
+        b30 (mat4-m30 b) b31 (mat4-m31 b) b32 (mat4-m32 b) b33 (mat4-m33 b)]
+    (mat4 (+ (* a00 b00) (* a10 b01) (* a20 b02) (* a30 b03))
+          (+ (* a01 b00) (* a11 b01) (* a21 b02) (* a31 b03))
+          (+ (* a02 b00) (* a12 b01) (* a22 b02) (* a32 b03))
+          (+ (* a03 b00) (* a13 b01) (* a23 b02) (* a33 b03))
+          (+ (* a00 b10) (* a10 b11) (* a20 b12) (* a30 b13))
+          (+ (* a01 b10) (* a11 b11) (* a21 b12) (* a31 b13))
+          (+ (* a02 b10) (* a12 b11) (* a22 b12) (* a32 b13))
+          (+ (* a03 b10) (* a13 b11) (* a23 b12) (* a33 b13))
+          (+ (* a00 b20) (* a10 b21) (* a20 b22) (* a30 b23))
+          (+ (* a01 b20) (* a11 b21) (* a21 b22) (* a31 b23))
+          (+ (* a02 b20) (* a12 b21) (* a22 b22) (* a32 b23))
+          (+ (* a03 b20) (* a13 b21) (* a23 b22) (* a33 b23))
+          (+ (* a00 b30) (* a10 b31) (* a20 b32) (* a30 b33))
+          (+ (* a01 b30) (* a11 b31) (* a21 b32) (* a31 b33))
+          (+ (* a02 b30) (* a12 b31) (* a22 b32) (* a32 b33))
+          (+ (* a03 b30) (* a13 b31) (* a23 b32) (* a33 b33)))))
+
+(defmethod transform [(m mat3) v]
+  (let [x (vec3-x v) y (vec3-y v) z (vec3-z v)]
+    (vec3 (+ (* (mat3-m00 m) x) (* (mat3-m10 m) y) (* (mat3-m20 m) z))
+          (+ (* (mat3-m01 m) x) (* (mat3-m11 m) y) (* (mat3-m21 m) z))
+          (+ (* (mat3-m02 m) x) (* (mat3-m12 m) y) (* (mat3-m22 m) z)))))
+
+(defmethod transform [(m mat4) v]
+  (let [x (vec4-x v) y (vec4-y v) z (vec4-z v) w (vec4-w v)]
+    (vec4 (+ (* (mat4-m00 m) x) (* (mat4-m10 m) y) (* (mat4-m20 m) z) (* (mat4-m30 m) w))
+          (+ (* (mat4-m01 m) x) (* (mat4-m11 m) y) (* (mat4-m21 m) z) (* (mat4-m31 m) w))
+          (+ (* (mat4-m02 m) x) (* (mat4-m12 m) y) (* (mat4-m22 m) z) (* (mat4-m32 m) w))
+          (+ (* (mat4-m03 m) x) (* (mat4-m13 m) y) (* (mat4-m23 m) z) (* (mat4-m33 m) w)))))
+
+(defmethod transpose [(m mat3)] (mat3-from (fn [c r] (mat3-at m r c))))
+(defmethod transpose [(m mat4)] (mat4-from (fn [c r] (mat4-at m r c))))
+
+(defmethod determinant [(m mat3)]
+  (let [a (mat3-m00 m) b (mat3-m10 m) c (mat3-m20 m)
+        d (mat3-m01 m) e (mat3-m11 m) f (mat3-m21 m)
+        g (mat3-m02 m) h (mat3-m12 m) i (mat3-m22 m)]
+    (+ (* a (- (* e i) (* f h))) (- (* b (- (* d i) (* f g)))) (* c (- (* d h) (* e g))))))
+
+(defmethod inverse [(m mat3)]
+  (let [det (determinant m)]
+    (when-not (zero? det)
+      (let [k (/ 1.0 det)
+            ;; Element (row r, column c) of the adjugate is the cofactor of (c, r).
+            cof (fn [r c]
+                  (let [rows (remove #{r} [0 1 2]) cols (remove #{c} [0 1 2])
+                        [r0 r1] rows [c0 c1] cols
+                        minor (- (* (mat3-at m c0 r0) (mat3-at m c1 r1))
+                                 (* (mat3-at m c1 r0) (mat3-at m c0 r1)))]
+                    (if (odd? (+ r c)) (- minor) minor)))]
+        (mat3-from (fn [c r] (f32 (* k (cof c r)))))))))
+
+(defn- mat4-minor [m skip-c skip-r]
+  ;; The determinant of the 3x3 matrix left after removing a column and a row.
+  (let [cols (vec (remove #{skip-c} [0 1 2 3])) rows (vec (remove #{skip-r} [0 1 2 3]))]
+    (determinant (mat3-from (fn [c r] (mat4-at m (nth cols c) (nth rows r)))))))
+
+(defmethod determinant [(m mat4)]
+  (reduce + (for [c [0 1 2 3]]
+              (* (if (odd? c) -1.0 1.0) (mat4-at m c 0) (mat4-minor m c 0)))))
+
+(defmethod inverse [(m mat4)]
+  (let [det (determinant m)]
+    (when-not (zero? det)
+      (let [k (/ 1.0 det)]
+        (mat4-from (fn [c r] (f32 (* k (if (odd? (+ c r)) -1.0 1.0) (mat4-minor m r c)))))))))
+
+(defn transform-point
+  "A point transformed by an affine matrix: a vec2 by a mat3, or a vec3 by a mat4."
+  [m p]
+  (if (instance? mat3 m)
+    (let [v (transform m (vec3 (vec2-x p) (vec2-y p) 1.0f))]
+      (vec2 (vec3-x v) (vec3-y v)))
+    (let [v (transform m (vec4 (vec3-x p) (vec3-y p) (vec3-z p) 1.0f))]
+      (vec3 (vec4-x v) (vec4-y v) (vec4-z v)))))
+
+(defn transform-vector
+  "A direction transformed by an affine matrix (ignoring translation): a vec2 by a mat3,
+or a vec3 by a mat4."
+  [m v]
+  (if (instance? mat3 m)
+    (let [r (transform m (vec3 (vec2-x v) (vec2-y v) 0.0f))]
+      (vec2 (vec3-x r) (vec3-y r)))
+    (let [r (transform m (vec4 (vec3-x v) (vec3-y v) (vec3-z v) 0.0f))]
+      (vec3 (vec4-x r) (vec4-y r) (vec4-z r)))))
+
+;;; 2D transforms as mat3 (points are (x, y, 1)).
+
+(defn mat3-translation "The 2D translation by (x, y)." [x y]
+  (mat3 1.0f 0.0f 0.0f, 0.0f 1.0f 0.0f, (f32 x) (f32 y) 1.0f))
+
+(defn mat3-rotation "The 2D rotation by angle radians." [angle]
+  (let [c (f32 (cos angle)) s (f32 (sin angle))]
+    (mat3 c s 0.0f, (- s) c 0.0f, 0.0f 0.0f 1.0f)))
+
+(defn mat3-scale "The 2D scaling by sx and sy (default: sx)."
+  ([s] (mat3-scale s s))
+  ([sx sy] (mat3 (f32 sx) 0.0f 0.0f, 0.0f (f32 sy) 0.0f, 0.0f 0.0f 1.0f)))
+
+;;; 3D transforms as mat4.
+
+(defn mat4-translation "The translation by (x, y, z)." [x y z]
+  (mat4 1.0f 0.0f 0.0f 0.0f, 0.0f 1.0f 0.0f 0.0f, 0.0f 0.0f 1.0f 0.0f,
+        (f32 x) (f32 y) (f32 z) 1.0f))
+
+(defn mat4-scale "The scaling by sx, sy and sz." [sx sy sz]
+  (mat4 (f32 sx) 0.0f 0.0f 0.0f, 0.0f (f32 sy) 0.0f 0.0f, 0.0f 0.0f (f32 sz) 0.0f,
+        0.0f 0.0f 0.0f 1.0f))
+
+(defn mat4-rotation "The rotation by the unit quaternion q." [q]
+  (let [x (quat-x q) y (quat-y q) z (quat-z q) w (quat-w q)]
+    (mat4 (- 1.0f (* 2.0f (+ (* y y) (* z z)))) (* 2.0f (+ (* x y) (* z w)))
+          (* 2.0f (- (* x z) (* y w))) 0.0f
+          (* 2.0f (- (* x y) (* z w))) (- 1.0f (* 2.0f (+ (* x x) (* z z))))
+          (* 2.0f (+ (* y z) (* x w))) 0.0f
+          (* 2.0f (+ (* x z) (* y w))) (* 2.0f (- (* y z) (* x w)))
+          (- 1.0f (* 2.0f (+ (* x x) (* y y)))) 0.0f
+          0.0f 0.0f 0.0f 1.0f)))
+
+(defn perspective
+  "A right-handed perspective projection to clip space with depth in [0, 1] (as Vulkan,
+Metal and SDL's GPU API use): fov-y in radians, aspect width/height, near and far > 0."
+  [fov-y aspect near far]
+  (let [f (/ 1.0 (tan (/ fov-y 2.0)))]
+    (mat4 (f32 (/ f aspect)) 0.0f 0.0f 0.0f
+          0.0f (f32 f) 0.0f 0.0f
+          0.0f 0.0f (f32 (/ far (- near far))) -1.0f
+          0.0f 0.0f (f32 (/ (* near far) (- near far))) 0.0f)))
+
+(defn ortho
+  "An orthographic projection of the box [left, right] × [bottom, top] × [near, far] to
+clip space with depth in [0, 1]."
+  [left right bottom top near far]
+  (mat4 (f32 (/ 2.0 (- right left))) 0.0f 0.0f 0.0f
+        0.0f (f32 (/ 2.0 (- top bottom))) 0.0f 0.0f
+        0.0f 0.0f (f32 (/ 1.0 (- near far))) 0.0f
+        (f32 (/ (+ right left) (- left right))) (f32 (/ (+ top bottom) (- bottom top)))
+        (f32 (/ near (- near far))) 1.0f))
+
+(defn look-at
+  "A right-handed view matrix for a camera at eye looking at target, with up (vec3s)."
+  [eye target up]
+  (let [f (normalize (v- target eye))
+        s (normalize (cross f up))
+        u (cross s f)]
+    (mat4 (vec3-x s) (vec3-x u) (- (vec3-x f)) 0.0f
+          (vec3-y s) (vec3-y u) (- (vec3-y f)) 0.0f
+          (vec3-z s) (vec3-z u) (- (vec3-z f)) 0.0f
+          (f32 (- (dot s eye))) (f32 (- (dot u eye))) (f32 (dot f eye)) 1.0f)))

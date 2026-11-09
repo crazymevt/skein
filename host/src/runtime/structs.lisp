@@ -20,6 +20,10 @@
   (:documentation "Warns that a struct's fields changed, so values and compiled code made
 with the old layout keep using it."))
 
+(defun struct-def-of-constructor (fn)
+  "Return the struct-def whose constructor var holds FN, or NIL."
+  (gethash fn **struct-defs-by-value**))
+
 (defun struct-instance-def (x)
   "Return the struct-def of X if it is a value struct or record, else NIL."
   (and (typep x 'structure-object) (gethash (type-of x) **struct-defs-by-type**)))
