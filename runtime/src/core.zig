@@ -1,7 +1,7 @@
 //! skein.core functions in the native runtime (M1.4, D-046): collections, strings,
 //! names, atoms, transients and predicates, matching Phase 0's behavior. Each is also a
 //! function object (`function`), so compiled code can pass it around: `(swap! a inc)`.
-//! Seqs over maps and sets, laziness and the rest of skein.core come in M1.9.
+//! Seqs over maps and sets, laziness and the rest of skein.core come in M1.8.
 
 const std = @import("std");
 const rt = @import("rt.zig");
@@ -209,7 +209,7 @@ fn rest(c: Value) Value {
 }
 
 fn unsupportedSeq(comptime name: []const u8, c: Value) noreturn {
-    rt.raise(.unsupported_operation_error, name ++ " of {s} needs seqs, which the native runtime gets in M1.9", .{typeName(c)});
+    rt.raise(.unsupported_operation_error, name ++ " of {s} needs seqs, which the native runtime gets in M1.8", .{typeName(c)});
 }
 
 // ---------------------------------------------------------------------------------------
@@ -934,7 +934,7 @@ const table = [_]Entry{
     }.t)),
     e("mapv", 2, null, struct {
         fn f(a: Args) Value {
-            if (a.len > 2) rt.raise(.unsupported_operation_error, "mapv over more than one collection arrives natively in M1.9", .{});
+            if (a.len > 2) rt.raise(.unsupported_operation_error, "mapv over more than one collection arrives natively in M1.8", .{});
             var ctx: MapInto = .{ .f = a[0], .to = coll.vectorOf(&.{}) };
             each(a[1], &ctx, MapInto.add);
             return ctx.to;

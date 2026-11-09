@@ -301,7 +301,7 @@
 (test native-unsupported
   (build-fails "(ns u3) (println (map inc [1 2]))" "can't use skein.core/map yet")
   (build-fails "(ns u4) (def f range)" "can't use skein.core/range yet")
-  (build-fails "(ns u5) (prn (values 1 2))" "multiple values yet (M1.9)")
+  (build-fails "(ns u5) (prn (values 1 2))" "multiple values yet (M1.8)")
   (build-fails "(ns u6) (println (inc 1 2))" "wrong number of arguments (2) passed to skein.core/inc"))
 
 ;;; The command

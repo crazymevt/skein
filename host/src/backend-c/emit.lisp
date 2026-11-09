@@ -239,7 +239,7 @@ yet. The message names the milestone that adds it."))
        (stmt "sk_throw_condition(~A);" c)
        "SK_NIL"))
     ((or values-node let-values-node)
-     (unsupported node "the native backend can't compile multiple values yet (M1.9)"))))
+     (unsupported node "the native backend can't compile multiple values yet (M1.8)"))))
 
 (defparameter *native-core-functions*
   '("+" "-" "*" "/" "<" ">" "<=" ">=" "==" "=" "not=" "inc" "dec" "max" "min" "abs" "mod"
@@ -264,7 +264,7 @@ arithmetic, comparison and printing ones are compiled inline.")
   (let ((name (var-name var)))
     (unless (member name *native-core-functions* :test #'string=)
       (unsupported node "the native backend can't use skein.core/~A yet; most of skein.core ~
-                         arrives in M1.9" name))
+                         arrives in M1.8" name))
     (startup-constant (list :core name) (format nil "sk_core(~A)" (c-string-literal name)))))
 
 (defparameter *builtin-condition-types*
@@ -751,7 +751,7 @@ through their function objects).")
          ((string= name "prn") (print-call t t))
          ((string= name "pr") (print-call t nil))
          (t (unsupported node "the native backend can't call skein.core/~A yet; most of ~
-                               skein.core arrives in M1.9"
+                               skein.core arrives in M1.8"
                          name)))))))
 
 ;;; ------------------------------------------------------------------------------------

@@ -22,7 +22,7 @@ compile time and produce no code; everything else becomes C."
              (error 'c-backend-error
                     :location (skein.syntax:syntax-location form)
                     :message "programs that require other namespaces build natively from ~
-                              M1.9; for now a native program is one file")))
+                              M1.8; for now a native program is one file")))
           (t
            (let* ((env (skein.expander:make-env :namespace *current-namespace*))
                   (expanded (skein.expander:macroexpand form env)))

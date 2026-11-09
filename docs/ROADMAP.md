@@ -25,8 +25,8 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.5 Conditions and unwinding | ✅ |
 | M1.6 Reader in Skein | ✅ |
 | M1.7 Expander and Core IR in Skein | ✅ |
-| M1.8 Self-hosting | ⬜ |
-| M1.9 Native `skein.core` | ⬜ |
+| M1.8 Native `skein.core` | ⬜ |
+| M1.9 Self-hosting | ⬜ |
 | M1.10 Native FFI | ⬜ |
 | M1.11 `skein build` and `skein package` | ⬜ |
 | M1.12 Driftrock native | ⬜ |
@@ -141,7 +141,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Goal:** Skein programs compile to native executables for macOS, Windows and Linux through a C backend and a runtime written in Zig, with the front end written in Skein. Driftrock builds and runs natively at the end.
 
-**Order (D-042):** a thin native slice comes first (M1.1–M1.2), then the runtime's hard parts (GC, data, unwinding), then the front end's port to Skein (M1.6–M1.8), then the library, FFI and tooling. Running native code early tests the riskiest parts while the Phase 0 front end is still a stable reference.
+**Order (D-042):** a thin native slice comes first (M1.1–M1.2), then the runtime's hard parts (GC, data, unwinding), then the front end's port to Skein (M1.6–M1.7), native `skein.core` (M1.8) and self-hosting on it (M1.9, swapped by D-050), then FFI and tooling. Running native code early tests the riskiest parts while the Phase 0 front end is still a stable reference.
 
 **Rules for Phase 1**
 - The runtime is Zig, built with Zig **0.17.1** (pinned in M1.1, D-043; upgrade deliberately). Generated code is C11 compiled with `zig cc`. Ask before adding other dependencies or tools.
@@ -189,15 +189,17 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Exit:** for every `.skn` file in the repository, the Skein expander produces the same Core IR as Phase 0.
 
-### M1.8 Self-hosting
-- The Skein front end plus the C backend compile the compiler itself to a native executable (bootstrapped by Phase 0).
-
-**Exit:** the native compiler rebuilds itself, and the second build's output is identical to the first.
-
-### M1.9 Native `skein.core`
+### M1.8 Native `skein.core`
 - `core.skn`, seqs, transducers, the object system (classes, generic functions with dispatch caches), value structs and typed arrays, declarations, and concurrency on OS threads, compiled natively.
 
 **Exit:** every example with an `.expected` file passes natively on all three platforms; the n-body benchmark is within 1.5× of C.
+
+### M1.9 Self-hosting
+- The Skein front end plus the C backend compile the compiler itself to a native executable (bootstrapped by Phase 0). It comes after native `skein.core` because the compiler uses most of it (D-050).
+- skein.core's macros are compiled into the compiler; a program's own macros run in a Core IR interpreter written in Skein, on the build machine (DESIGN §4.4, D-050).
+- The compiler reads and writes files and runs zig through a new `skein.io` namespace (D-050).
+
+**Exit:** the native compiler rebuilds itself, and the second build's output is identical to the first.
 
 ### M1.10 Native FFI
 - The C backend emits direct C calls for `defcfun`, callbacks as C functions, pinning, owned pointers and handles (DESIGN §14). `sdl3.raw` works unchanged.
@@ -256,16 +258,16 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - FFI: passing and returning structs by value is not supported (D-038). The SDL3 headers bound so far don't need it; CFFI's libffi support (`cffi-libffi`, which needs libffi installed) could add it if a library does.
 - bindgen: `long` is assumed to be 64 bits; handle LLP64 (Windows) if a bound library uses `long`. Typedefs of anonymous structs (`typedef struct { ... } X;`) and anonymous members are skipped; add them when a library needs them.
 - bindgen: generate `sdl3.raw` for the rest of SDL3 (GPU, audio, gamepad, properties, ...) when the milestones that use them start, and hand-write the idiomatic `sdl3` layer on top.
-- Native runtime (D-046): atoms and functions hash by identity differently from Phase 0, so maps keyed by them iterate in a different order natively. Seqs over maps and sets, lazy seqs, `reduced` and most of skein.core wait for M1.9; `first`/`rest` work on lists, vectors and strings. Vars are made per compiled program, not looked up by name (namespaces at run time come with multi-file programs, M1.9).
+- Native runtime (D-046): atoms and functions hash by identity differently from Phase 0, so maps keyed by them iterate in a different order natively. Seqs over maps and sets, lazy seqs, `reduced` and most of skein.core wait for M1.8; `first`/`rest` work on lists, vectors and strings. Vars are made per compiled program, not looked up by name (namespaces at run time come with multi-file programs, M1.9).
 - GC (D-045): a nursery segment promoted for one pinned object keeps its whole 256 KiB until the next major collection; consider moving pinned objects' neighbors out, or smaller pinning granularity. Marking is stop-the-world; incremental marking (DESIGN §18.1) and `with-frame-arena` (§18.2) are still to do.
 - FFI callbacks from foreign threads work as SBCL allows; DESIGN §14.3's attach-as-fiber behavior waits for Phase 2.
-- Reader in Skein (D-048): building it natively (M1.8) needs `pr-str`, `parse-long`, `%decimal-to-float` (Zig's `parseFloat` is correctly rounded) and an `apply` that takes more than 256 arguments, or a string builder, since string literals are made with `(apply str chars)`. `skein run` still uses the CL reader until the front end is self-hosted.
-- Expander in Skein (D-049), for self-hosting (M1.8):
+- Reader in Skein (D-048): building it natively (M1.9) needs `pr-str`, `parse-long`, `%decimal-to-float` (Zig's `parseFloat` is correctly rounded) and an `apply` that takes more than 256 arguments, or a string builder, since string literals are made with `(apply str chars)`. `skein run` still uses the CL reader until the front end is self-hosted.
+- Expander in Skein (D-049), for self-hosting (M1.9):
   - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
-  - Macros run at compile time. A native compiler has to run the macros of the code it compiles: `lib/skein/core.skn`'s and the program's own. That needs an evaluator, or compiling and loading macros on the fly.
-  - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native only in M1.9. Either bring them forward or keep the compiler to the native subset.
+  - Macros run at compile time: skein.core's are compiled into the compiler, and a program's own run in an interpreter (D-050).
+  - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native in M1.8, before self-hosting (D-050).
 - Native conditions (D-047):
   - No top-level `abort`/`continue`/`exit` restarts exist natively; Phase 0's come from `skein run` and SBCL.
-  - A condition type named by a symbol at run time (`(error 'foo)`) is found by its unique unqualified name, until namespaces exist at run time (M1.9).
+  - A condition type named by a symbol at run time (`(error 'foo)`) is found by its unique unqualified name, until namespaces exist at run time (M1.8).
   - Some native messages differ from Phase 0's, where Phase 0 shows CL's wording (index errors, returning to an exited block).
   - M1.10 (native FFI) must decide what unwinding through foreign C frames does, as in a Skein callback that signals into a `handler-case` outside the C call. longjmp skips foreign cleanups on POSIX and needs unwind tables on Windows.

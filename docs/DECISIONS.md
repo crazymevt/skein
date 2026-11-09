@@ -528,3 +528,22 @@ Date: 2026-11-09 · Status: Accepted
   - The Skein expander matches Phase 0 on all 2,496 top-level forms of the repository's 29 `.skn` files, including the forms their expansions splice in, and on every compile error the tests check. Changing one location, one `recur-p` flag or one message is caught.
   - `skein run` and `skein build` still use the Phase 0 expander.
   - Self-hosting (M1.8) has three things to solve: native versions of the compile-time functions, running macros inside a native compiler, and the seq functions the compiler uses (ROADMAP notes).
+
+## D-050: Native skein.core before self-hosting; macros interpreted at compile time; skein.io
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.8 was self-hosting and M1.9 native `skein.core`. Porting the reader and expander showed that the compiler uses most of skein.core: seq functions, and all of `core.skn`'s macros. A native compiler must also run macros while it compiles, and read and write files and run zig, which Skein has no API for.
+- **Decision** (Jessie chose each):
+  - **The milestones swap.** M1.8 is now native `skein.core` and M1.9 self-hosting, so the compiler self-hosts on a complete native core. Code and notes that pointed at the old numbers now use the new ones. Earlier DECISIONS entries keep the numbers they were written with.
+  - **Macros at compile time:**
+    - skein.core's macros are compiled into the native compiler.
+    - A program's own macros (its `defmacro`s and the phase-1 code they call) run in a Core IR interpreter written in Skein.
+    - Phase 1 therefore always runs on the build machine, as DESIGN §4.4 wants for cross-compiling.
+  - **`skein.io`** (DESIGN §21) starts with `read-file`, `write-file`, `file-exists?` and `run-process`, which returns `{:exit :out :err}`. It is a public namespace, available to programs.
+- **Alternatives:**
+  - Keeping the order and bringing forward only the parts of skein.core the compiler uses.
+  - Compiling macro code to shared libraries and loading them during a build. That would need zig mid-compile and is awkward with macOS code signing.
+  - Supporting only skein.core's macros natively at first.
+  - `slurp`/`spit` in skein.core, or compiler-only `%` functions.
+- **Consequences:**
+  - M1.8's exit is the old M1.9's: every example with an `.expected` file runs natively on all three platforms, and n-body is within 1.5× of C.
+  - M1.9 adds the interpreter, `skein.io` and the C backend in Skein.

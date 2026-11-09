@@ -9,7 +9,7 @@ location is a map {:file :line :column :end-line :end-column}: lines and columns
 1-based, columns count characters, and the end is just after the form.
 
 The reader keeps to a small part of skein.core (no seqs, laziness or objects), so that the
-compiler can be built natively without the rest of it (M1.8).")
+compiler can be built natively without the rest of it (M1.9).")
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Errors
