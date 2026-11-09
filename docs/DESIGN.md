@@ -774,6 +774,22 @@ Phase 1 details (D-044):
 - **Large objects** of 32 KB and up go in a separate non-moving space.
 - **Pinned and foreign-visible objects** live in non-moving spaces.
 
+Phase 1 details (D-045, `runtime/src/gc.zig`):
+- **Arena:** the heap is one reserved 16 GiB address range of 256 KiB segments, each with a metadata record.
+- **Nursery:** each thread bump-allocates in its own nursery segment and sets a bit per object in the segment's start bitmap, which lets a conservative pointer find its object, interior pointers included.
+- **Minor collection:**
+  - It runs after 32 nursery segments (8 MiB), or the equivalent in large objects, have been handed out.
+  - It scans every thread's stack and spilled registers conservatively, pinning what they point at.
+  - It copies everything else reachable from the registered roots, the remembered set and the pinned objects into old-generation size classes.
+  - A nursery segment that holds pinned objects is promoted whole, keeping only those objects.
+- **Old generation:** 43 size classes (one class per segment), promoted segments, and large runs of 32 KiB and up. Large objects start young and are promoted in place.
+- **Major collection:** a minor collection, then mark from the roots and stacks, then sweep. It runs when the old generation passes twice its live size after the last major collection (32 MiB at first). Marking is stop-the-world for now; incremental marking comes later.
+- **Write barrier:** a remembered set. Storing a young object into an old one records the old object.
+- **Threads:**
+  - Threads stop at safepoints: when taking a new nursery segment, when compiled code sees `sk_gc_pending` (polled at function entry and loop back-edges), and around blocking calls, which run with their registers spilled.
+  - A program registers its globals as roots.
+  - `SKEIN_GC_STATS=1` prints collection statistics at exit.
+
 ### 18.2 Game-oriented controls
 
 ```clojure

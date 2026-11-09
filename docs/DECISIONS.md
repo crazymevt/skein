@@ -385,3 +385,31 @@ Date: 2026-11-09 · Status: Accepted
   - Natively, float overflow gives infinity where Phase 0 signals an error. Division by zero is an error in both.
   - Mixed integer/float comparisons convert to f64.
   - `fib 32` runs in 0.09 s natively, against 0.79 s for `skein run`, most of which is startup.
+
+## D-045: A mostly-copying generational collector
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.3 builds the runtime's garbage collector to DESIGN §18.1. The C compiler gives no stack maps, so stacks must be scanned conservatively. Objects must be able to move, so the nursery can be compacted.
+- **Decision:**
+  - **Arena and segments:** the heap is one reserved arena (16 GiB of address space) of 256 KiB segments. A metadata table maps any address to its segment. Free segments are decommitted and come back zeroed. Each nursery segment has a bitmap of object starts.
+  - **Minor collections (Bartlett's mostly-copying):**
+    - Every thread's stack, from its parked stack pointer to its top, is scanned conservatively after the registers are spilled (`src/spill.c`: `__builtin_unwind_init` and `setjmp`). Any word that points into a young object, even into its middle, pins it.
+    - Precise roots are copied into old-generation size-class cells, updating their slots. These roots are registered globals, the remembered set and the children of pinned objects.
+    - A segment with pinned objects is promoted whole, with its bitmap rebuilt to list only them; the other nursery segments are freed.
+    - Young large objects reachable from anywhere are promoted in place.
+  - **Major collections:** a minor collection, then mark-sweep over everything, with an explicit worklist rather than recursion. Size-class cells go back on free lists, emptied segments go back to the OS, and promoted segments keep only marked objects.
+  - **Triggers:** a minor collection after 8 MiB of nursery (`SKEIN_NURSERY_SEGMENTS` overrides the count). A major collection when the old generation reaches twice its live size after the last major collection (at least 32 MiB).
+  - **Write barrier:** `gc.store` records an old object in the remembered set (once, using a header bit) when a young object is stored into it.
+  - **Threads:**
+    - Each thread that allocates is a mutator with its own nursery buffer.
+    - A collection stops the world: the collecting thread waits until every other mutator is parked at a safepoint or in a blocking call (`gc.blocking`, which spills registers before blocking).
+    - Compiled code polls `sk_gc_pending` at function entry and loop back-edges.
+    - A thread detaches before exiting.
+  - **Object layout:** every object has at least one payload word (for the forwarding address). The header gains a `remembered` bit, and a `tuple` type (all values) serves the tests and later closure environments.
+- **Alternatives:** precise stack maps (not available from C); a non-moving collector everywhere (simpler, but fragments and makes allocation slower than bumping); card marking instead of a remembered set (better for heavily mutated old objects; this can change later); stopping threads with signals (more intrusive and platform-specific than polling).
+- **Consequences:**
+  - The C backend can keep values in ordinary C locals and registers.
+  - Every object a stack might point to stays where it is, so runtime code may hold interior pointers across allocations.
+  - A conservative collector can't promise to free a particular object, so tests check reclamation in aggregate.
+  - A promoted segment keeps its whole 256 KiB until the next major collection (noted in the ROADMAP).
+  - The GC is tested with random object graphs against a model, pinning by interior pointers, 200,000-node chains, cycles, large objects, the write barrier, and four threads collecting concurrently, in Debug, ReleaseSafe and ReleaseFast builds.
+  - A compiled bignum loop that allocates about 96 MB runs in 21 MB of memory, with pauses under 0.2 ms.

@@ -20,7 +20,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.12 Demo game | ✅ |
 | M1.1 Zig toolchain and runtime skeleton | ✅ |
 | M1.2 C backend, first slice | ✅ |
-| M1.3 Garbage collector | ⬜ |
+| M1.3 Garbage collector | ✅ |
 | M1.4 Core data in the runtime | ⬜ |
 | M1.5 Conditions and unwinding | ⬜ |
 | M1.6 Reader in Skein | ⬜ |
@@ -256,4 +256,5 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - FFI: passing and returning structs by value is not supported (D-038). The SDL3 headers bound so far don't need it; CFFI's libffi support (`cffi-libffi`, which needs libffi installed) could add it if a library does.
 - bindgen: `long` is assumed to be 64 bits; handle LLP64 (Windows) if a bound library uses `long`. Typedefs of anonymous structs (`typedef struct { ... } X;`) and anonymous members are skipped; add them when a library needs them.
 - bindgen: generate `sdl3.raw` for the rest of SDL3 (GPU, audio, gamepad, properties, ...) when the milestones that use them start, and hand-write the idiomatic `sdl3` layer on top.
+- GC (D-045): a nursery segment promoted for one pinned object keeps its whole 256 KiB until the next major collection; consider moving pinned objects' neighbors out, or smaller pinning granularity. Marking is stop-the-world; incremental marking (DESIGN §18.1) and `with-frame-arena` (§18.2) are still to do.
 - FFI callbacks from foreign threads work as SBCL allows; DESIGN §14.3's attach-as-fiber behavior waits for Phase 2.

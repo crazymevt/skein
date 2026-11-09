@@ -16,11 +16,16 @@ const STD_OUTPUT_HANDLE: u32 = @bitCast(@as(i32, -11));
 const STD_ERROR_HANDLE: u32 = @bitCast(@as(i32, -12));
 
 const SRWLOCK = extern struct { ptr: ?*anyopaque = null };
+const CONDITION_VARIABLE = extern struct { ptr: ?*anyopaque = null };
+const INFINITE: u32 = 0xFFFFFFFF;
 
 extern "kernel32" fn VirtualAlloc(address: ?*anyopaque, size: usize, allocation_type: u32, protect: u32) callconv(.winapi) ?*anyopaque;
 extern "kernel32" fn VirtualFree(address: ?*anyopaque, size: usize, free_type: u32) callconv(.winapi) i32;
 extern "kernel32" fn AcquireSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
 extern "kernel32" fn ReleaseSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
+extern "kernel32" fn SleepConditionVariableSRW(cv: *CONDITION_VARIABLE, lock: *SRWLOCK, milliseconds: u32, flags: u32) callconv(.winapi) i32;
+extern "kernel32" fn WakeAllConditionVariable(cv: *CONDITION_VARIABLE) callconv(.winapi) void;
+extern "kernel32" fn GetCurrentThreadStackLimits(low: *usize, high: *usize) callconv(.winapi) void;
 extern "kernel32" fn QueryPerformanceCounter(count: *i64) callconv(.winapi) i32;
 extern "kernel32" fn QueryPerformanceFrequency(frequency: *i64) callconv(.winapi) i32;
 extern "kernel32" fn GetStdHandle(which: u32) callconv(.winapi) ?*anyopaque;
@@ -68,6 +73,31 @@ pub const Mutex = struct {
         ReleaseSRWLockExclusive(&m.inner);
     }
 };
+
+/// A condition variable, used with `Mutex`.
+pub const Condition = struct {
+    inner: CONDITION_VARIABLE = .{},
+
+    /// Atomically unlock `m` and wait; `m` is locked again on return. Wakeups can be
+    /// spurious, so callers re-check their condition in a loop.
+    pub fn wait(cond: *Condition, m: *Mutex) void {
+        _ = SleepConditionVariableSRW(&cond.inner, &m.inner, INFINITE, 0);
+    }
+
+    pub fn broadcast(cond: *Condition) void {
+        WakeAllConditionVariable(&cond.inner);
+    }
+};
+
+/// The address range of the current thread's stack: [low, high). Stacks grow down.
+pub const StackBounds = struct { low: usize, high: usize };
+
+pub fn currentStackBounds() StackBounds {
+    var low: usize = 0;
+    var high: usize = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    return .{ .low = low, .high = high };
+}
 
 /// Nanoseconds from a monotonic clock with an arbitrary start.
 pub fn monotonicNanos() u64 {

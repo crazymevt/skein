@@ -146,6 +146,45 @@
 (println (fn [a] a) classify)
 (defn -main [& args] (println \"main ran with\" args))"))
 
+;;; Garbage collection (M1.3): programs that allocate far more than they keep
+
+(defun native-run-with-stats (file)
+  "Build FILE natively and run it with SKEIN_GC_STATS=1. Returns stdout and stderr."
+  (let ((exe (skein.backend.c:build-program
+              file :output (uiop:native-namestring
+                            (make-pathname :name "gc-native"
+                                           :type (and (string= (skein.platform:os-name) "windows")
+                                                      "exe")
+                                           :defaults file))))
+        (out (make-string-output-stream))
+        (err (make-string-output-stream)))
+    (sb-ext:run-program (uiop:native-namestring exe) '()
+                        :output out :error err
+                        :environment (cons "SKEIN_GC_STATS=1" (sb-ext:posix-environ)))
+    (values (get-output-stream-string out) (get-output-stream-string err))))
+
+(test native-garbage-collection
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-program (file "(ns gcheavy)
+(def greeting \"kept across collections\")
+(def big 123456789012345678901234567890)
+(defn churn [n]
+  ;; Each iteration makes a bignum and drops it: about 96 MB in all.
+  (loop [i 0 acc 0]
+    (if (< i n)
+      (recur (inc i) (- (+ acc 100000000000000000000) 99999999999999999999))
+      acc)))
+(defn twice [x] (* 2 x))
+(println (churn 3000000) greeting (twice big))
+(println (churn 1000) greeting big)")
+        (let ((expected (phase0-output file)))
+          (multiple-value-bind (out err) (native-run-with-stats file)
+            (is (string= expected out) "native output differs:~%~A~%vs~%~A" out expected)
+            (let* ((at (search "gc: " err))
+                   (minor (and at (parse-integer err :start (+ at 4) :junk-allowed t))))
+              (is (and minor (>= minor 5)) "expected several minor collections: ~A" err)))))))
+
 ;;; Runtime errors: a message on stderr and exit status 1
 
 (test native-runtime-errors

@@ -61,3 +61,33 @@ test "console output does not fail" {
     platform.writeStderr("");
     platform.writeStdout("");
 }
+
+test "the stack bounds contain the current stack" {
+    const bounds = platform.currentStackBounds();
+    var local: u64 = 0;
+    std.mem.doNotOptimizeAway(&local);
+    const here = @intFromPtr(&local);
+    try testing.expect(bounds.low < here and here < bounds.high);
+    try testing.expect(bounds.high - bounds.low >= 64 * 1024);
+}
+
+test "a condition variable wakes a waiting thread" {
+    const Shared = struct {
+        mutex: platform.Mutex = .{},
+        cond: platform.Condition = .{},
+        ready: bool = false,
+
+        fn waiter(s: *@This()) void {
+            s.mutex.lock();
+            defer s.mutex.unlock();
+            while (!s.ready) s.cond.wait(&s.mutex);
+        }
+    };
+    var shared: Shared = .{};
+    const t = try std.Thread.spawn(.{}, Shared.waiter, .{&shared});
+    shared.mutex.lock();
+    shared.ready = true;
+    shared.cond.broadcast();
+    shared.mutex.unlock();
+    t.join();
+}

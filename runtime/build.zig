@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "platform", .module = platform }},
     });
+    runtime.addCSourceFile(.{ .file = b.path("src/spill.c"), .flags = &.{"-std=c11"} });
 
     const lib = b.addLibrary(.{
         .name = "skein_runtime",

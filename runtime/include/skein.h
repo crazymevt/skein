@@ -23,7 +23,21 @@ typedef sk_value (*sk_code)(sk_value self, uint32_t argc, const sk_value *argv);
 #define SK_BOTH_FIXNUMS(a, b) ((((a) | (b)) & 3u) == 0)
 
 void sk_init(void);
+void sk_finish(void);
 _Noreturn void sk_exit(int status);
+
+/* Garbage collection (D-045). A program registers its globals as roots; compiled code
+ * polls sk_gc_pending at function entry and loop back-edges so other threads' collections
+ * can stop it. */
+extern unsigned char sk_gc_pending;
+void sk_register_roots(sk_value *slots, size_t count);
+void sk_safepoint(void);
+void sk_collect(_Bool major);
+#define SK_POLL()                                                            \
+    do {                                                                     \
+        if (__builtin_expect(__atomic_load_n(&sk_gc_pending, __ATOMIC_RELAXED), 0)) \
+            sk_safepoint();                                                  \
+    } while (0)
 
 sk_value sk_string(const char *bytes, size_t len);
 sk_value sk_f64(double x);

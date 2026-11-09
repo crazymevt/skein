@@ -3,6 +3,7 @@
 //! platform/windows/ provides the same declarations.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 
@@ -51,6 +52,48 @@ pub const Mutex = struct {
         _ = c.pthread_mutex_unlock(&m.inner);
     }
 };
+
+/// A condition variable, used with `Mutex`.
+pub const Condition = struct {
+    inner: c.pthread_cond_t = .{},
+
+    /// Atomically unlock `m` and wait; `m` is locked again on return. Wakeups can be
+    /// spurious, so callers re-check their condition in a loop.
+    pub fn wait(cond: *Condition, m: *Mutex) void {
+        _ = c.pthread_cond_wait(&cond.inner, &m.inner);
+    }
+
+    pub fn broadcast(cond: *Condition) void {
+        _ = c.pthread_cond_broadcast(&cond.inner);
+    }
+};
+
+/// The address range of the current thread's stack: [low, high). Stacks grow down.
+pub const StackBounds = struct { low: usize, high: usize };
+
+extern "c" fn pthread_get_stackaddr_np(thread: c.pthread_t) ?*anyopaque;
+extern "c" fn pthread_get_stacksize_np(thread: c.pthread_t) usize;
+extern "c" fn pthread_getattr_np(thread: c.pthread_t, attr: *c.pthread_attr_t) c_int;
+extern "c" fn pthread_attr_getstack(attr: *const c.pthread_attr_t, addr: *?*anyopaque, size: *usize) c_int;
+
+pub fn currentStackBounds() StackBounds {
+    const self = c.pthread_self();
+    switch (builtin.os.tag) {
+        .macos => {
+            const high = @intFromPtr(pthread_get_stackaddr_np(self));
+            return .{ .low = high - pthread_get_stacksize_np(self), .high = high };
+        },
+        else => {
+            var attr: c.pthread_attr_t = undefined;
+            var addr: ?*anyopaque = null;
+            var size: usize = 0;
+            if (pthread_getattr_np(self, &attr) != 0) @panic("pthread_getattr_np failed");
+            defer _ = c.pthread_attr_destroy(&attr);
+            _ = pthread_attr_getstack(&attr, &addr, &size);
+            return .{ .low = @intFromPtr(addr), .high = @intFromPtr(addr) + size };
+        },
+    }
+}
 
 /// Nanoseconds from a monotonic clock with an arbitrary start.
 pub fn monotonicNanos() u64 {

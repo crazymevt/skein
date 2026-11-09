@@ -1,20 +1,16 @@
-//! Process-wide runtime state: the heap, each thread's allocation buffer, and fatal
+//! Process-wide runtime services: allocation (through the garbage collector) and fatal
 //! errors. Until conditions arrive (M1.5), an error in compiled code prints a message
 //! and ends the program.
 
 const std = @import("std");
 const platform = @import("platform");
 const object = @import("object.zig");
-const heap_mod = @import("heap.zig");
+const gc = @import("gc.zig");
 
-var heap: heap_mod.Heap = .{};
-threadlocal var tlab: ?heap_mod.Tlab = null;
-
-/// Allocate an object of `type_id` with `len` zeroed payload words, in this thread's
-/// buffer. Running out of memory is fatal.
+/// Allocate an object of `type_id` with `len` zeroed payload words. It may trigger a
+/// collection, which can move unpinned young objects (but not ones the stack refers to).
 pub fn alloc(type_id: object.TypeId, len: usize) *object.Header {
-    if (tlab == null) tlab = heap_mod.Tlab.init(&heap);
-    return tlab.?.alloc(type_id, len) catch fatal("out of memory", .{});
+    return gc.alloc(type_id, len);
 }
 
 /// Print "error: <message>" to standard error and exit with status 1.

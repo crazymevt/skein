@@ -92,7 +92,10 @@ yet. The message names the milestone that adds it."))
   (length (sb-ext:string-to-octets string :external-format :utf-8)))
 
 (defun c-comment (string)
-  (substitute #\_ #\* (substitute #\_ #\/ string)))
+  "STRING made safe inside /* */."
+  (let ((s (copy-seq string)))
+    (loop for i = (search "*/" s) while i do (setf (char s (1+ i)) #\_))
+    s))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Constants and vars
@@ -237,6 +240,7 @@ yet. The message names the milestone that adds it."))
         (result (fresh "t")))
     (stmt "sk_value ~A = SK_NIL;" result)
     (stmt "~A: ;" label)
+    (stmt "SK_POLL();")
     (let* ((*targets* (acons node (make-target label (mapcar (lambda (b) (gethash (car b) (ctx-locals *ctx*)))
                                                              (loop-node-bindings node)))
                              *targets*))
@@ -297,6 +301,7 @@ yet. The message names the milestone that adds it."))
              (names (mapcar (lambda (p) (gethash p (ctx-locals *ctx*)))
                             (append (arity-params arity) (and rest (list rest))))))
         (stmt "~A: ;" label)
+        (stmt "SK_POLL();")
         (let* ((*targets* (acons arity (make-target label names) *targets*))
                (v (emit (arity-body arity))))
           (unless (eq v :recur) (stmt "return ~A;" v)))))))
@@ -407,17 +412,25 @@ yet. The message names the milestone that adds it."))
     (format out "#include \"skein.h\"~%#include <string.h>~%~%")
     (format out "static double sk_bits_f64(uint64_t bits) {~%  double d;~%  ~
                  memcpy(&d, &bits, sizeof d);~%  return d;~%}~%~%")
-    (loop for (name . comment) in (unit-var-decls unit)
-          do (format out "static sk_value ~A = SK_UNBOUND; /* ~A */~%" name (c-comment comment)))
-    (loop for (name) in (unit-constants unit)
-          do (format out "static sk_value ~A;~%" name))
-    (loop for (fobj) in (unit-fn-objects unit)
-          do (format out "static sk_value ~A;~%" fobj))
+    ;; Every global value lives in one array, registered with the garbage collector as
+    ;; roots, so it keeps its objects alive and is updated when they move.
+    (let ((globals (append (mapcar #'car (unit-var-decls unit))
+                           (mapcar #'car (unit-constants unit))
+                           (mapcar #'first (unit-fn-objects unit)))))
+      (format out "static sk_value sk_globals[~D];~%" (max 1 (length globals)))
+      (loop for name in globals
+            for i from 0
+            for comment = (cdr (assoc name (unit-var-decls unit) :test #'string=))
+            do (format out "#define ~A sk_globals[~D]~@[ /* ~A */~]~%" name i
+                       (and comment (c-comment comment)))))
     (terpri out)
     (dolist (p (reverse (unit-prototypes unit))) (format out "~A~%" p))
     (terpri out)
     (dolist (f (reverse (unit-functions unit))) (format out "~A~%" f))
     (format out "static void sk_program_init(void) {~%")
+    (format out "  for (size_t i = 0; i < sizeof sk_globals / sizeof sk_globals[0]; i++) ~
+                 sk_globals[i] = SK_UNBOUND;~%")
+    (format out "  sk_register_roots(sk_globals, sizeof sk_globals / sizeof sk_globals[0]);~%")
     (loop for (name . init) in (unit-constants unit)
           do (format out "  ~A = ~A;~%" name init))
     (loop for (fobj code display) in (unit-fn-objects unit)
@@ -428,4 +441,4 @@ yet. The message names the milestone that adds it."))
                  sk_init();~%  sk_program_init();~%  sk_program_body();~%")
     (when main-var
       (format out "  if (~A != SK_UNBOUND) sk_call(~A, 0, NULL);~%" main-var main-var))
-    (format out "  return 0;~%}~%")))
+    (format out "  sk_finish();~%  return 0;~%}~%")))

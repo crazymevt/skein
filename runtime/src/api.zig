@@ -7,6 +7,7 @@ const num = @import("num.zig");
 const string = @import("string.zig");
 const func = @import("func.zig");
 const print = @import("print.zig");
+const gc = @import("gc.zig");
 const Value = @import("value.zig").Value;
 
 // skein.h spells the immediate constants out; keep them in step with value.zig.
@@ -19,10 +20,36 @@ comptime {
     std.debug.assert(@intFromEnum(Value.fromF32(0.0)) == 0x05);
 }
 
-export fn sk_init() void {}
+/// Start the runtime on the calling (main) thread.
+export fn sk_init() void {
+    _ = gc.attachThread();
+}
+
+/// Finish normally: print GC statistics if SKEIN_GC_STATS is set.
+export fn sk_finish() void {
+    if (std.c.getenv("SKEIN_GC_STATS") != null) gc.printStats();
+}
 
 export fn sk_exit(status: c_int) noreturn {
+    sk_finish();
     std.process.exit(@intCast(status));
+}
+
+// Garbage collection
+
+/// Make `count` values starting at `slots` roots (a program's globals).
+export fn sk_register_roots(slots: [*]Value, count: usize) void {
+    gc.addRoots(slots[0..count]);
+}
+
+/// Stop for a pending collection; compiled code calls this when `sk_gc_pending` is set.
+export fn sk_safepoint() void {
+    gc.safepoint();
+}
+
+/// Collect now: a major collection if `major` is true, else a minor one.
+export fn sk_collect(major: bool) void {
+    gc.collect(if (major) .major else .minor);
 }
 
 // Constants
