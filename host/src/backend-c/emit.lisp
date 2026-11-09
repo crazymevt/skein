@@ -333,6 +333,10 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%eql-specializer" "%define-generic"
     ;; Structs and typed arrays (step 5)
     "%make-array" "aget" "aset!" "array?" "struct?" "view" "as-bytes" "update!"
+    ;; Concurrency (step 6; runtime/src/tasks.zig)
+    "%with-nursery" "%spawn" "%future" "%with-timeout" "%on-main-thread" "%spawn-pinned"
+    "drain-main-thread!" "check-cancelled" "sleep" "cancel!" "cancelled?" "done?" "task?"
+    "cpu-count" "chan" "chan?" ">!" "<!" "close!" "alts!" "timeout-chan"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -352,12 +356,12 @@ constant), the library's var, or a compile error."
     (cond ((member name *native-core-functions* :test #'string=)
            (startup-constant (list :core name) (format nil "sk_core(~A)" (c-string-literal name))))
           ((library-var name) (emit-global-ref node (library-var name)))
-          (t (unsupported node "the native backend can't use skein.core/~A yet; most of ~
-                                skein.core arrives in M1.8" name)))))
+          (t (unsupported node "the native backend can't use skein.core/~A yet" name)))))
 
 (defparameter *builtin-condition-types*
   '("arithmetic-error" "type-error" "index-error" "arity-error" "unbound-var-error"
-    "not-callable-error" "unsupported-operation-error" "transient-error" "namespace-error")
+    "not-callable-error" "unsupported-operation-error" "transient-error" "namespace-error"
+    "cancelled" "timeout" "task-cancelled-error")
   "The skein.core vars that hold built-in condition types.")
 
 (defun emit-var-ref (node)
@@ -1002,9 +1006,7 @@ through their function objects).")
          ((string= name "print") (print-call nil nil))
          ((string= name "prn") (print-call t t))
          ((string= name "pr") (print-call t nil))
-         (t (unsupported node "the native backend can't call skein.core/~A yet; most of ~
-                               skein.core arrives in M1.8"
-                         name)))))))
+         (t (unsupported node "the native backend can't call skein.core/~A yet" name)))))))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Top-level forms and the whole program

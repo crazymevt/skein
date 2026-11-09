@@ -29,6 +29,11 @@ extern "kernel32" fn GetCurrentThreadStackLimits(low: *usize, high: *usize) call
 extern "kernel32" fn QueryPerformanceCounter(count: *i64) callconv(.winapi) i32;
 extern "kernel32" fn QueryPerformanceFrequency(frequency: *i64) callconv(.winapi) i32;
 extern "kernel32" fn GetStdHandle(which: u32) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn TryAcquireSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) u8;
+extern "kernel32" fn SwitchToThread() callconv(.winapi) i32;
+extern "kernel32" fn CreateThread(attributes: ?*anyopaque, stack_size: usize, start: *const fn (?*anyopaque) callconv(.winapi) u32, parameter: ?*anyopaque, flags: u32, id: ?*u32) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn CloseHandle(handle: ?*anyopaque) callconv(.winapi) i32;
+extern "kernel32" fn GetActiveProcessorCount(group: u16) callconv(.winapi) u32;
 extern "kernel32" fn WriteFile(file: ?*anyopaque, buffer: [*]const u8, count: u32, written: ?*u32, overlapped: ?*anyopaque) callconv(.winapi) i32;
 
 /// The size of a virtual memory page.
@@ -72,7 +77,17 @@ pub const Mutex = struct {
     pub fn unlock(m: *Mutex) void {
         ReleaseSRWLockExclusive(&m.inner);
     }
+
+    /// Lock `m` if it is free; return whether it did.
+    pub fn tryLock(m: *Mutex) bool {
+        return TryAcquireSRWLockExclusive(&m.inner) != 0;
+    }
 };
+
+/// Give up the rest of this thread's time slice.
+pub fn yieldThread() void {
+    _ = SwitchToThread();
+}
 
 /// A condition variable, used with `Mutex`.
 pub const Condition = struct {
@@ -87,7 +102,44 @@ pub const Condition = struct {
     pub fn broadcast(cond: *Condition) void {
         WakeAllConditionVariable(&cond.inner);
     }
+
+    /// Like `wait`, but return after at most `nanos` nanoseconds.
+    pub fn timedWait(cond: *Condition, m: *Mutex, nanos: u64) void {
+        const ms: u32 = @intCast(@max(1, @min(nanos / std.time.ns_per_ms, 0xFFFFFFFE)));
+        _ = SleepConditionVariableSRW(&cond.inner, &m.inner, ms, 0);
+    }
 };
+
+const ThreadStart = *const fn (?*anyopaque) callconv(.c) ?*anyopaque;
+
+const ThreadArg = struct { f: ThreadStart, arg: ?*anyopaque };
+
+fn threadMain(p: ?*anyopaque) callconv(.winapi) u32 {
+    const a: *ThreadArg = @ptrCast(@alignCast(p));
+    const f = a.f;
+    const arg = a.arg;
+    std.heap.page_allocator.destroy(a);
+    _ = f(arg);
+    return 0;
+}
+
+/// Start a detached thread running `f(arg)` with a stack of `stack_size` bytes.
+pub fn spawnThread(f: ThreadStart, arg: ?*anyopaque, stack_size: usize) bool {
+    const a = std.heap.page_allocator.create(ThreadArg) catch return false;
+    a.* = .{ .f = f, .arg = arg };
+    const h = CreateThread(null, stack_size, threadMain, a, 0, null) orelse {
+        std.heap.page_allocator.destroy(a);
+        return false;
+    };
+    _ = CloseHandle(h);
+    return true;
+}
+
+/// The number of CPUs online.
+pub fn cpuCount() usize {
+    const n = GetActiveProcessorCount(0xFFFF);
+    return if (n > 0) n else 1;
+}
 
 /// The address range of the current thread's stack: [low, high). Stacks grow down.
 pub const StackBounds = struct { low: usize, high: usize };

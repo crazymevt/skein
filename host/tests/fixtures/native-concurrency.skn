@@ -1,0 +1,175 @@
+(ns native-concurrency
+  (:require [skein.jobs :as jobs :refer [job]]))
+
+;; Concurrency on OS threads natively (M1.8 step 6): tasks, nurseries, futures,
+;; cancellation, timeouts, channels, data parallelism and the main thread's queue. The C
+;; backend tests check that this prints the same natively as with `skein run`.
+
+(defn message-of [thunk] (try (thunk) (catch error e (condition-message e))))
+
+;; Nurseries wait for their tasks; the first failure cancels the rest and is re-signaled
+(let [a (atom [])]
+  (with-nursery [n]
+    (spawn n (sleep 0.02) (swap! a conj :slow))
+    (spawn n (swap! a conj :fast)))
+  (prn (sort @a)))
+(prn (with-nursery [n] (let [t (spawn n (+ 1 2))] (* 10 @t))) (with-nursery [n] :body-value))
+(prn (message-of (fn [] (spawn 5 1))))
+(let [sleeper (atom nil)]
+  (prn (try (with-nursery [n]
+              (reset! sleeper (spawn n (sleep 10) :never))
+              (spawn n (error "boom")))
+         (catch error e (condition-message e)))
+       (cancelled? @sleeper) (done? @sleeper) @sleeper))
+(prn (try (with-nursery [n]
+            (spawn n (error "child failed"))
+            (sleep 10)
+            :body-finished)
+       (catch error e (condition-message e))))
+(let [t (atom nil)]
+  (prn (try (with-nursery [n] (reset! t (spawn n (sleep 10))) (error "body failed"))
+         (catch error e (condition-message e)))
+       (cancelled? @t)))
+(prn (try (with-nursery [outer]
+            (spawn outer (with-nursery [inner] (spawn inner (error "deep")))))
+       (catch error e (condition-message e))))
+;; Cancellation is not an error: a handler for error inside the task doesn't swallow it.
+(let [t (atom nil)]
+  (try (with-nursery [n]
+         (reset! t (spawn n (try (sleep 10) (catch error e :swallowed))))
+         (spawn n (error "x")))
+    (catch error e nil))
+  (prn (cancelled? @t)))
+
+;; Futures and deref with a timeout
+(let [f (future (sleep 0.05) :done)]
+  (prn @(future (+ 1 2)) (deref f 0.001 :not-yet) @f (done? f) (task? f) (task? 1)))
+(prn (let [f (future (error "in future"))] (try @f (catch error e (condition-message e)))))
+(let [f (future (sleep 10))]
+  (prn (cancel! f) (try @f (catch task-cancelled-error e :c)) (cancel! f) (cancelled? f)))
+(prn (message-of (fn [] @5)))
+(let [f (future (loop [i 0] (check-cancelled) (recur (inc i))))]
+  (sleep 0.01)
+  (cancel! f)
+  (prn (try @f (catch task-cancelled-error e :stopped))))
+(prn @(future [(< ##NaN 1.0) (== ##NaN ##NaN)]))
+(let [t (transient [])]
+  (prn (try @(future (conj! t 1)) (catch transient-error e :refused))
+       (try (persistent! t) (conj! t 2) (catch transient-error e :after-persistent))))
+
+;; Timeouts
+(prn (try (with-timeout 0.02 (sleep 5) :finished) (catch timeout e (condition-message e)))
+     (with-timeout 1.0 :quick)
+     (try (with-timeout 0.02 (with-nursery [n] (spawn n (sleep 5)))) (catch timeout e :timed-out))
+     (try (with-timeout 0.02 (<! (chan))) (catch timeout e :timed-out))
+     (message-of (fn [] (sleep -1))))
+
+;; Channels
+(prn (let [ch (chan 2)] (>! ch 1) (>! ch 2) (close! ch) [(<! ch) (<! ch) (<! ch) (>! ch 3)]))
+(prn (let [ch (chan)] (future (>! ch :hi)) (<! ch)))
+(prn (let [ch (chan) taken (atom false)]
+       (let [putter (future (>! ch :v) @taken)]
+         (sleep 0.02)
+         (reset! taken true)
+         (<! ch)
+         @putter)))
+(prn (let [a (chan) b (chan 1)] (>! b :from-b) (first (alts! [a b])))
+     (let [ch (chan 1)] (first (alts! [[ch :put-value]])))
+     (let [ch (chan 1)] (alts! [[ch :x]]) (<! ch))
+     (let [t (timeout-chan 0.01)] (first (alts! [(chan) t])))
+     (chan? (chan 3)) (chan? []))
+(prn (message-of (fn [] (>! (chan 1) nil))) (message-of (fn [] (<! 5)))
+     (message-of (fn [] (chan -1))) (message-of (fn [] (alts! [5]))))
+(let [ch (chan)]
+  (prn ch)
+  (close! ch)
+  (prn ch (with-nursery [n] (pr-str n))))
+
+;; Data parallelism
+(prn (pmap inc (range 10)) (pmap inc []) (preduce + 0 (range 1001)) (preduce + 0 []))
+(prn (let [a (make-array i64 50)] (pdotimes [i 50] (aset! a i (* 2 i))) (reduce + (seq a))))
+(prn (try (pmap (fn [x] (if (= x 7) (error "seven") x)) (range 20))
+       (catch error e (condition-message e)))
+     (message-of (fn [] (pdotimes [i -1] i))))
+(prn (pos? (cpu-count)))
+
+;; The main thread's queue
+(prn (on-main-thread :here) @(future (on-main-thread :marshalled))
+     (let [t (spawn-pinned :main (+ 1 1))] (drain-main-thread!) @t)
+     (message-of (fn [] (spawn-pinned :gpu 1))))
+
+;; Job graphs
+(prn (jobs/graph {:a (job 1) :b (job {:after [:a]} 2) :c (job {:after [:a :b]} 3)})
+     (message-of (fn [] (jobs/graph {:a (job {:after [:b]} 1) :b (job {:after [:a]} 2)})))
+     (message-of (fn [] (jobs/graph {:a (job {:after [:nope]} 1)})))
+     (message-of (fn [] (jobs/graph {:a (job (error "job failed")) :b (job (sleep 10))}))))
+
+;; Stress: each scenario many times, with allocation enough to collect meanwhile
+(defn stress [n f] (every? true? (for [i (range n)] (f))))
+(prn (stress 20 (fn []
+                  (let [a (atom 0)]
+                    (with-nursery [n] (dotimes [i 20] (spawn n (dotimes [j 100] (swap! a inc)))))
+                    (= @a 2000)))))
+(prn (stress 20 (fn []
+                  (let [ch (chan 4) total (atom 0)]
+                    (with-nursery [n]
+                      (let [producers (vec (for [p (range 4)]
+                                             (spawn n (doseq [i (range 50)] (>! ch [i p])))))]
+                        (dotimes [c 3]
+                          (spawn n (loop [] (when-let [v (<! ch)] (swap! total inc) (recur)))))
+                        (doseq [p producers] @p)
+                        (close! ch)))
+                    (= @total 200)))))
+(prn (stress 20 (fn []
+                  (let [ch (chan)]
+                    (= 435 (with-nursery [n]
+                             (spawn n (dotimes [i 30] (>! ch i)) (close! ch))
+                             (loop [acc 0] (if-let [v (<! ch)] (recur (+ acc v)) acc))))))))
+(prn (stress 20 (fn []
+                  (let [a (chan) b (chan 2)]
+                    (= 60 (with-nursery [n]
+                            (spawn n (dotimes [i 20] (>! a 1)) (close! a))
+                            (spawn n (dotimes [i 20] (>! b 2)) (close! b))
+                            (loop [open #{a b} sum 0]
+                              (if (empty? open)
+                                sum
+                                (let [[v ch] (alts! (vec open))]
+                                  (if (nil? v)
+                                    (recur (disj open ch) sum)
+                                    (recur open (+ sum v))))))))))))
+(prn (stress 10 (fn []
+                  (let [sleepers (atom [])]
+                    (= ["stop" true]
+                       [(try (with-nursery [n]
+                               (dotimes [i 6] (swap! sleepers conj (spawn n (sleep 10))))
+                               (spawn n (error "stop")))
+                          (catch error e (condition-message e)))
+                        (every? cancelled? @sleepers)])))))
+(prn (stress 10 (fn []
+                  (let [xs (vec (range 3000))]
+                    (and (= (pmap (fn [x] (str x "-" (* x x))) xs)
+                            (map (fn [x] (str x "-" (* x x))) xs))
+                         (= (preduce + 0 xs) (reduce + 0 xs))
+                         (let [a (make-array i64 300)]
+                           (pdotimes [i 300] (aset! a i i))
+                           (= (vec (seq a)) (vec (range 300)))))))))
+(prn (stress 10 (fn []
+                  (let [log (atom [])
+                        step (fn [k] (swap! log conj k) k)]
+                    (jobs/graph {:a (job (step :a))
+                                 :b (job {:after [:a]} (step :b))
+                                 :c (job {:after [:a]} (step :c))
+                                 :d (job {:after [:b :c]} (step :d))})
+                    (= [:a :d 4] [(first @log) (last @log) (count @log)])))))
+(prn (stress 10 (fn []
+                  (= :timed-out
+                     (try (with-timeout 0.005
+                            (with-nursery [n] (spawn n (sleep 5)) (spawn n (<! (chan)))))
+                       (catch timeout e :timed-out))))))
+;; Many tasks building garbage at once: maps of vectors, checked afterwards.
+(prn (count (with-nursery [n]
+              (let [ts (mapv (fn [k]
+                               (spawn n (reduce (fn [m i] (assoc m i (vec (range (mod i 7)))))
+                                                {} (range (+ 2000 k)))))
+                             (range 16))]
+                (filter (fn [[k t]] (= (count @t) (+ 2000 k))) (map vector (range 16) ts))))))

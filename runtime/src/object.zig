@@ -125,6 +125,16 @@ pub const TypeId = enum(u16) {
     byte_view = 43,
     /// A seq over an array from an index: [array, index].
     arrseq = 44,
+    // M1.8's concurrency (D-057; tasks.zig).
+    /// A task: [fn, state, result, condition, cancel requested, nursery, scopes, hash].
+    task = 45,
+    /// A nursery: [cancelled, failure, children (vector), hash].
+    nursery = 46,
+    /// A channel: [capacity, items (vector), head, closed, takes, puts, takers waiting,
+    /// hash].
+    chan = 47,
+    /// A with-timeout deadline: [monotonic nanoseconds, seconds].
+    deadline = 48,
     _,
 };
 

@@ -646,3 +646,62 @@ dropped."
         :else nil))
 
 (defn not-empty "coll, or nil if it is empty." [coll] (when (seq coll) coll))
+
+;;; ------------------------------------------------------------------------------------
+;;; Data parallelism (step 6 of M1.8): ports of Phase 0's concurrency.lisp. Tasks,
+;;; nurseries and channels themselves are in the Zig runtime (runtime/src/tasks.zig).
+
+(defn- parallel-ranges
+  "Call (f start end) for ranges covering 0..n, at most one per CPU, in parallel. Returns
+the results in order, as a vector."
+  [n f]
+  (if (zero? n)
+    []
+    (let [parts (max 1 (min n (cpu-count)))
+          size (quot (+ n parts -1) parts)
+          ranges (loop [start 0 acc []]
+                   (if (< start n)
+                     (recur (+ start size) (conj acc [start (min n (+ start size))]))
+                     acc))]
+      (if (<= (count ranges) 1)
+        (mapv (fn [[start end]] (f start end)) ranges)
+        (with-nursery [nursery]
+          (mapv deref (mapv (fn [[start end]] (spawn nursery (f start end))) ranges)))))))
+
+(defn pmap
+  "(f x) for each x in coll, computed in parallel. Returns an eager list, in order."
+  [f coll]
+  (let [items (vec coll)
+        chunks (parallel-ranges (count items)
+                                (fn [start end]
+                                  (loop [i start acc []]
+                                    (if (< i end)
+                                      (recur (inc i) (conj acc (f (nth items i))))
+                                      acc))))
+        all (reduce into [] chunks)]
+    (loop [i (dec (count all)) acc ()]
+      (if (neg? i) acc (recur (dec i) (cons (nth all i) acc))))))
+
+(defn preduce
+  "Reduce coll with f from init in parallel chunks, then reduce the chunks' results with
+f from init: f must be associative, with init as its identity."
+  [f init coll]
+  (let [items (vec coll)]
+    (reduce f init (parallel-ranges (count items)
+                                    (fn [start end]
+                                      (loop [i start acc init]
+                                        (if (< i end)
+                                          (recur (inc i) (f acc (nth items i)))
+                                          acc)))))))
+
+(defn %pdotimes
+  "pdotimes: call (f i) for each i from 0 below n, in parallel."
+  [n f]
+  (when-not (and (integer? n) (not (neg? n)))
+    (error (str "pdotimes needs a non-negative count, not " (pr-str n))))
+  (parallel-ranges n (fn [start end]
+                       (loop [i start]
+                         (when (< i end)
+                           (f i)
+                           (recur (inc i))))))
+  nil)

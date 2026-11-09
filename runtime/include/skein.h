@@ -81,7 +81,15 @@ void sk_closure_set(sk_value f, size_t i, sk_value value);
  * unwinds with longjmp to the frame's jmp_buf, so a function that pushes a block or
  * unwind-protect frame calls SK_SETJMP itself and keeps its locals volatile.
  * runtime/src/cond.zig mirrors every field before jb. */
-enum { SK_FRAME_BLOCK = 1, SK_FRAME_UNWIND = 2, SK_FRAME_HANDLERS = 3, SK_FRAME_RESTARTS = 4 };
+/* SK_FRAME_SCOPE frames hold cancellation scopes (tasks, nurseries, deadlines); only the
+ * runtime pushes them. */
+enum {
+    SK_FRAME_BLOCK = 1,
+    SK_FRAME_UNWIND = 2,
+    SK_FRAME_HANDLERS = 3,
+    SK_FRAME_RESTARTS = 4,
+    SK_FRAME_SCOPE = 5
+};
 
 typedef struct sk_frame {
     struct sk_frame *prev;
@@ -104,6 +112,10 @@ void sk_frame_push_restarts(sk_frame *f, uint32_t count, sk_value *names, const 
 void sk_frame_pop(sk_frame *f);
 _Noreturn void sk_unwind_to(sk_frame *f, sk_value value);
 _Noreturn void sk_return_from(sk_value token, sk_value value);
+/* Call fn, catching conditions of the given types (at most 8): returns [-1 value], or
+ * [i condition] for a condition of types[i]. */
+sk_value sk_try_call(sk_value fn, uint32_t argc, const sk_value *argv, uint32_t ntypes,
+                     sk_value *types);
 _Noreturn void sk_continue_unwind(sk_frame *f);
 _Noreturn void sk_throw_condition(sk_value condition);
 sk_value sk_builtin_condition_type(const char *name);

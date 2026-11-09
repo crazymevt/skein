@@ -18,6 +18,7 @@ const cond = @import("cond.zig");
 const seqs = @import("seq.zig");
 const objs = @import("objects.zig");
 const structs = @import("structs.zig");
+const tasks = @import("tasks.zig");
 const Value = @import("value.zig").Value;
 
 const Args = []const Value;
@@ -500,7 +501,7 @@ fn intDivision(comptime name: []const u8, x: Value, y: Value, comptime mode: enu
     return num.boxF64(if (mode == .floor) @mod(fx, fy) else @rem(fx, fy));
 }
 
-const table = [_]Entry{
+const base_table = [_]Entry{
     // Arithmetic and comparison (compiled code inlines most of these; these are for
     // passing them as values).
     e("+", 0, null, foldArith(.add, 0)),
@@ -1068,9 +1069,12 @@ const table = [_]Entry{
             return coll.makeAtom(a[0]);
         }
     }.f),
-    e("deref", 1, 1, struct {
+    e("deref", 1, 3, struct {
         fn f(a: Args) Value {
-            if (!a[0].isObjectOf(.atom)) rt.raise(.type_error, "deref (@) needs an atom, not {s}", .{typeName(a[0])});
+            // Atoms give their value; tasks (futures, spawned tasks) wait for theirs. With
+            // a timeout in seconds, a task that is not done by then gives the timeout value.
+            if (tasks.isTask(a[0])) return tasks.deref(a);
+            if (!a[0].isObjectOf(.atom)) rt.raise(.type_error, "deref (@) needs an atom or a task, not {s}", .{typeName(a[0])});
             return coll.atomGet(a[0]);
         }
     }.f),
@@ -1307,6 +1311,13 @@ const table = [_]Entry{
             return cond.slot(a[0], a[1]);
         }
     }.f),
+};
+
+/// The core table: the entries above and the concurrency functions (tasks.zig).
+const table = base_table ++ blk: {
+    var t: [tasks.entries.len]Entry = undefined;
+    for (tasks.entries, 0..) |x, i| t[i] = .{ .name = x.name, .min = x.min, .max = x.max, .impl = x.impl };
+    break :blk t;
 };
 
 /// The code pointer that runs table entry `i`, checking the argument count.

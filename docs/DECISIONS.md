@@ -691,3 +691,22 @@ Date: 2026-11-09 · Status: Accepted
 - **Consequences:**
   - n-body runs at 1.35× of C (0.249s against 0.184s for 5M steps), with Phase 0's exact energies.
   - A fixture of typed parameters, locals, contagion, typed arrays, closures over typed locals, `set!`, `the`, errors, `(safety 0)` and bignum results prints the same as Phase 0, in dev and release builds.
+
+## D-057: Concurrency natively, on OS threads
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 6 of M1.8 brings DESIGN §13's API to native programs. Phase 0 runs it on a cached pool of SBCL threads with cancellation scopes in a special variable (D-037). Natively there are no special variables, the condition chain lives in C stack frames (D-047), and the GC must see every thread's heap pointers (D-045).
+- **Decision:** the Zig runtime implements tasks, nurseries, cancellation, timeouts and channels (`runtime/src/tasks.zig`), with Phase 0's semantics and messages.
+  - **Threads:** the same cached pool as Phase 0: a new worker starts when no worker is idle, and idle workers exit after 30 seconds. Each worker attaches to the GC and registers its multiple-values buffer as a root. The platform layer adds thread creation, timed condition waits and the CPU count.
+  - **Cancellation scopes:** a new frame kind on the condition chain holds the running code's scopes: its task, enclosing nurseries and `with-timeout` deadlines. A non-local exit drops them with the other frames. A task starts with a frame holding the scopes it inherited from its spawner, then one for itself; a nursery join that was interrupted waits behind a barrier frame, so it is not cancelled again.
+  - **Catching:** tasks and nurseries catch errors and `cancelled` through `sk_try_call` in `unwind.c`, a handler cluster inside a block, as `handler-case` does.
+  - **One lock:** tasks, nurseries and channels share one lock and one wake-up condition, as Phase 0's channels do. Waiters wake at least every 20 ms to run main-thread work and check for cancellation. The lock is waited for only inside `gc.blocking`, so a thread that holds it may allocate, and so collect, while others wait for it.
+  - `cancelled`, `timeout` and `task-cancelled-error` are built-in condition types of the runtime.
+  - `pmap`, `preduce` and `pdotimes` are written in Skein in `skein.core.native`, on `with-nursery` and `spawn`, splitting the work as Phase 0 does.
+- **Alternatives:**
+  - A lock per task and per channel. Less contention, but `alts!` must then lock several channels in order; one lock is what Phase 0 does, and contention doesn't matter until fibers (Phase 2).
+  - Waking waiters only by notification, without the 20 ms slices. Cancellation and the main thread's queue would then need their own wake-ups; Phase 2's scheduler replaces all of this.
+- **Consequences:**
+  - `examples/jobs.skn` runs natively, so all eight examples with an `.expected` file pass natively.
+  - A fixture of nurseries, futures, cancellation, timeouts, channels, `alts!`, data parallelism, the main thread's queue, job graphs and stress runs prints the same as Phase 0, also with a one-segment nursery that collects thousands of times across threads.
+  - Two native bugs that only threads show were fixed: an atom's compare-and-set stored its slot a second time, which could undo another thread's update; and using a transient from the wrong thread, or after `persistent!`, signaled `error` instead of `transient-error`.
+

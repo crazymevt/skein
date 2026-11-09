@@ -50,3 +50,37 @@ sk_value sk_mv_set(uint32_t count, const sk_value *values) {
 
 /* This thread's buffer, which the garbage collector scans. */
 sk_value *sk_mv_buffer(void) { return sk_mv_values; }
+
+/* Call fn with the arguments, catching conditions of the given types as handler-case
+ * does: returns [-1 value] if fn returned, or [i condition] if a condition of types[i]
+ * was signaled (M1.8 step 6: tasks and nurseries catch errors and cancellation). */
+static sk_value sk_catch_code(sk_value self, uint32_t argc, const sk_value *argv) {
+    (void)argc;
+    const sk_value pair[2] = {SK_CAPTURED(self, 1), argv[0]};
+    sk_return_from(SK_CAPTURED(self, 0), sk_vector_of(2, pair));
+}
+
+sk_value sk_try_call(sk_value fn, uint32_t argc, const sk_value *argv, uint32_t ntypes,
+                     sk_value *types) {
+    sk_frame block;
+    sk_frame_push(&block, SK_FRAME_BLOCK);
+    volatile sk_value result = SK_NIL;
+    if (SK_SETJMP(block.jb) == 0) {
+        sk_value handlers[8];
+        for (uint32_t i = 0; i < ntypes && i < 8; i++) {
+            const sk_value captured[2] = {SK_BLOCK_TOKEN(block), SK_FIXNUM(i)};
+            handlers[i] = sk_closure(sk_catch_code, "catch", 2, captured);
+        }
+        sk_frame cluster;
+        sk_frame_push_handlers(&cluster, ntypes, types, handlers);
+        sk_value v = sk_call(fn, argc, argv);
+        sk_frame_pop(&cluster);
+        const sk_value pair[2] = {SK_FIXNUM(-1), v};
+        result = sk_vector_of(2, pair);
+        sk_frame_pop(&block);
+    } else {
+        result = block.value;
+        sk_frame_pop(&block);
+    }
+    return result;
+}

@@ -75,7 +75,7 @@
   (if (not (zig-available-p))
       (skip "zig is not installed")
       (dolist (name '("hello" "fib" "conditions" "collections" "macros" "objects"
-                      "particles"))
+                      "particles" "jobs"))
         (let ((file (asdf:system-relative-pathname "skein" (format nil "../examples/~A.skn" name))))
           (with-source-tree (dir ("unused.skn" ""))
             (let ((exe (skein.backend.c:build-program
@@ -379,6 +379,23 @@ referred in place of skein.core's."
                    (asdf:system-relative-pathname "skein"
                                                   "tests/fixtures/native-structs.skn"))))
 
+(test native-concurrency
+  ;; Step 6 of M1.8: tasks, nurseries, futures, cancellation, timeouts, channels, data
+  ;; parallelism, the main thread's queue and job graphs on OS threads, with stress runs.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein"
+                                                  "tests/fixtures/native-concurrency.skn"))))
+
+(test native-library-parallelism-matches-phase-0
+  (library-matches "(pmap inc (range 10))" "(pmap inc [])" "(pmap inc nil)"
+                   "(pmap (fn [x] (* x x)) (range 100))" "(list? (pmap inc [1]))"
+                   "(preduce + 0 (range 1001))" "(preduce + 0 [])" "(preduce conj [] (range 5))"
+                   "(let [a (atom 0)] (%pdotimes 100 (fn [i] (swap! a + i))) @a)"
+                   "(%pdotimes 0 (fn [i] i))" "(%pdotimes -1 (fn [i] i))"
+                   "(%pdotimes 1.5 (fn [i] i))"
+                   "(try (pmap (fn [x] (if (= x 7) (error \"seven\") x)) (range 20))
+                      (catch error e (condition-message e)))"))
+
 (test native-typed-code
   ;; Step 5 of M1.8: declared types compile to unboxed C with Phase 0's results and errors.
   (native-matches (uiop:read-file-string
@@ -514,8 +531,8 @@ referred in place of skein.core's."
 ;;; What the native backend can't compile yet: errors with locations
 
 (test native-unsupported
-  (build-fails "(ns u3) (println (chan))" "can't use skein.core/chan yet")
-  (build-fails "(ns u4) (def f pmap)" "can't use skein.core/pmap yet")
+  (build-fails "(ns u3) (println (in-ns 'u3))" "can't use skein.core/in-ns yet")
+  (build-fails "(ns u4) (def f in-ns)" "can't use skein.core/in-ns yet")
   (build-fails "(ns u5) (let [^:mutable x 0] (fn [] (set! x 1)))"
                "can't set! the ^:mutable local x")
   (build-fails "(ns u6) (println (inc 1 2))" "wrong number of arguments (2) passed to skein.core/inc"))
@@ -531,8 +548,11 @@ referred in place of skein.core's."
     (declare (ignore out))
     (is (= skein.cli:+exit-failure+ code))
     (is (search "file not found" err)))
-  (with-program (file "(ns bc) (println (chan))")
-    (multiple-value-bind (code out err) (run-cli "build" (namestring file))
+  (with-program (file "(ns bc) (println (in-ns 'bc))")
+    ;; -o keeps the executable in the temporary directory if the build ever succeeds.
+    (multiple-value-bind (code out err)
+        (run-cli "build" (namestring file)
+                 "-o" (namestring (make-pathname :name "bc-native" :type nil :defaults file)))
       (declare (ignore out))
       (is (= skein.cli:+exit-failure+ code))
       (is (search "error: " err))

@@ -33,8 +33,9 @@ export fn sk_init() void {
     @import("cond.zig").ensureBuiltins();
     @import("objects.zig").ensureBuiltins();
     // The main thread's multiple-values buffer holds values between a return and the
-    // let-values* that reads them. (Threads register theirs in M1.8 step 6.)
+    // let-values* that reads them. (Worker threads register theirs: tasks.zig.)
     gc.addRoots(sk_mv_buffer()[0..64]);
+    @import("tasks.zig").init();
 }
 
 export fn sk_too_many_values(count: u32) noreturn {

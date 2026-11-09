@@ -114,6 +114,7 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
         .transient_map => put(out, "#<transient map>"),
         .transient_set => put(out, "#<transient set>"),
         .condition, .condition_type, .restart => @import("cond.zig").write(v, out),
+        .task, .nursery, .chan => @import("tasks.zig").write(v, out),
         else => put(out, "#<object>"),
     }
 }

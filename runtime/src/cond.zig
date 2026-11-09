@@ -27,7 +27,7 @@ const print = @import("print.zig");
 const hash = @import("hash.zig");
 const Value = @import("value.zig").Value;
 
-pub const Kind = enum(u32) { block = 1, unwind = 2, handlers = 3, restarts = 4 };
+pub const Kind = enum(u32) { block = 1, unwind = 2, handlers = 3, restarts = 4, scope = 5 };
 
 /// `sk_frame` up to its jmp_buf, which only C touches.
 pub const Frame = extern struct {
@@ -157,11 +157,15 @@ pub const Builtin = enum {
     unsupported_operation_error,
     transient_error,
     namespace_error,
+    // Concurrency (DESIGN §13, M1.8 step 6): cancelled is not an error.
+    cancelled,
+    timeout,
+    task_cancelled_error,
 
     fn parent(b: Builtin) ?Builtin {
         return switch (b) {
             .condition => null,
-            .@"error", .warning => .condition,
+            .@"error", .warning, .cancelled => .condition,
             else => .@"error",
         };
     }

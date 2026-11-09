@@ -198,7 +198,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   3. ✅ The rest of skein.core's functions, and multiple values.
   4. ✅ The object system: classes, instances, generic functions with dispatch caches.
   5. ✅ Value structs, typed arrays and `defsoa`; declarations compiled to unboxed code (n-body).
-  6. Concurrency on OS threads: nurseries, tasks, futures, channels, `pmap`, `skein.jobs`.
+  6. ✅ Concurrency on OS threads: nurseries, tasks, futures, channels, `pmap`, `skein.jobs`.
 
 **Exit:** every example with an `.expected` file passes natively on all three platforms; the n-body benchmark is within 1.5× of C.
 
@@ -275,6 +275,10 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
   - Macros run at compile time: skein.core's are compiled into the compiler, and a program's own run in an interpreter (D-050).
   - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native in M1.8, before self-hosting (D-050).
+- Native concurrency (D-057):
+  - Tasks, nurseries and channels share one lock, and waiters poll every 20 ms; fine for Phase 1's thread pool, replaced by the fiber scheduler in Phase 2.
+  - Tasks, nurseries and channels are of class `any` natively, and print as in Phase 0.
+  - Other runtime locks (names, classes, condition types) are taken without `gc.blocking`. Code that holds one must not allocate, or a collection could wait for a thread that is waiting for that lock.
 - Native typed code (D-056):
   - Only `f64`, `f32`, `fixnum` and `(array f64/f32/fixnum)` are unboxed. Other declared types (`i32`, `u8`, classes, structs) are neither unboxed nor checked natively yet.
   - Inference is per function and simple: declared locals, plus immutable `let` locals whose init has a float type, or an integer type that can't overflow.
@@ -286,7 +290,6 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - Every generic function call allocates its cache key. An inline cache per call site would avoid that if dispatch shows up in profiles.
   - Built-in classes print with Skein's names (`integer`, `string`), not Phase 0's CL ones (`fixnum`, `simple-character-string`).
 - Native multiple values (D-053):
-  - Each thread needs its own registered buffer; only the main thread's is a GC root until threads arrive (step 6).
   - A runtime function that calls compiled code (`reduce`, `apply`, lazy seqs) passes on whatever values that code's last call left. `apply` does so on purpose, as in CL. For `reduce`, in the rare case of a reducing function that returns several values, the caller sees them instead of one value.
 - Native conditions (D-047):
   - No top-level `abort`/`continue`/`exit` restarts exist natively; Phase 0's come from `skein run` and SBCL.

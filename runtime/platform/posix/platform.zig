@@ -51,7 +51,17 @@ pub const Mutex = struct {
     pub fn unlock(m: *Mutex) void {
         _ = c.pthread_mutex_unlock(&m.inner);
     }
+
+    /// Lock `m` if it is free; return whether it did.
+    pub fn tryLock(m: *Mutex) bool {
+        return c.pthread_mutex_trylock(&m.inner) == .SUCCESS;
+    }
 };
+
+/// Give up the rest of this thread's time slice.
+pub fn yieldThread() void {
+    _ = c.sched_yield();
+}
 
 /// A condition variable, used with `Mutex`.
 pub const Condition = struct {
@@ -66,7 +76,39 @@ pub const Condition = struct {
     pub fn broadcast(cond: *Condition) void {
         _ = c.pthread_cond_broadcast(&cond.inner);
     }
+
+    /// Like `wait`, but return after at most `nanos` nanoseconds.
+    pub fn timedWait(cond: *Condition, m: *Mutex, nanos: u64) void {
+        var now: c.timespec = undefined;
+        _ = c.clock_gettime(c.CLOCK.REALTIME, &now);
+        const total = @as(u64, @intCast(now.nsec)) + nanos;
+        var until: c.timespec = now;
+        until.sec += @intCast(total / std.time.ns_per_s);
+        until.nsec = @intCast(total % std.time.ns_per_s);
+        _ = c.pthread_cond_timedwait(&cond.inner, &m.inner, &until);
+    }
 };
+
+/// Start a detached thread running `f(arg)` with a stack of `stack_size` bytes.
+pub fn spawnThread(f: *const fn (?*anyopaque) callconv(.c) ?*anyopaque, arg: ?*anyopaque, stack_size: usize) bool {
+    var attr: c.pthread_attr_t = undefined;
+    if (c.pthread_attr_init(&attr) != .SUCCESS) return false;
+    defer _ = c.pthread_attr_destroy(&attr);
+    _ = c.pthread_attr_setstacksize(&attr, stack_size);
+    var thread: c.pthread_t = undefined;
+    if (c.pthread_create(&thread, &attr, f, arg) != .SUCCESS) return false;
+    _ = c.pthread_detach(thread);
+    return true;
+}
+
+extern "c" fn sysconf(name: c_int) c_long;
+
+/// The number of CPUs online.
+pub fn cpuCount() usize {
+    const name: c_int = if (builtin.os.tag == .macos) 58 else 84; // _SC_NPROCESSORS_ONLN
+    const n = sysconf(name);
+    return if (n > 0) @intCast(n) else 1;
+}
 
 /// The address range of the current thread's stack: [low, high). Stacks grow down.
 pub const StackBounds = struct { low: usize, high: usize };
