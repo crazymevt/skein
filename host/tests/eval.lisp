@@ -463,7 +463,14 @@ BODY with *SOURCE-PATHS* set to it."
   (evals-to "(nil? nil)" t)
   (is (skein-false-p (ev "(nil? false)")))
   (evals-to "(false? false)" t)
-  (evals-to "(identical? :a :a)" t))
+  (evals-to "(identical? :a :a)" t)
+  ;; Regression: comparing NaN trapped on x86-64 instead of returning false.
+  (is (skein-false-p (ev "(= ##NaN ##NaN)")))
+  (is (skein-false-p (ev "(== ##NaN ##NaN)")))
+  (is (skein-false-p (ev "(< ##NaN 1.0)")))
+  (is (skein-false-p (ev "(>= 1.0 ##NaN)")))
+  (is (skein-false-p (ev "(zero? ##NaN)")))
+  (is (skein-false-p (ev "(= [##NaN] [##NaN])"))))
 
 (test printing
   (is (string= (format nil "1 a :k nil true false \\b~%")

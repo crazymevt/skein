@@ -10,7 +10,7 @@ collections are equal when their elements are equal, whatever their type."
 (defun map-p (x) (typep x '(or array-map hash-map)))
 
 (defun float-equal (a b)
-  (= a b))
+  (without-nan-traps (= a b)))
 
 (defun equiv (a b)
   "Skein's = on two values (DESIGN §7): value equality for numbers, strings, characters
@@ -130,7 +130,7 @@ vectors by length, then element by element; nil sorts first and false before tru
     (cond ((and (null a) (null b)) 0)
           ((null a) -1)
           ((null b) 1)
-          ((and (realp a) (realp b)) (cmp (< a b) (= a b)))
+          ((and (realp a) (realp b)) (without-nan-traps (cmp (< a b) (= a b))))
           ((and (stringp a) (stringp b))
            (cmp (string< a b) (string= a b)))
           ((and (characterp a) (characterp b)) (cmp (char< a b) (char= a b)))
