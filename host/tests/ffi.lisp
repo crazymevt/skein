@@ -52,16 +52,20 @@
                    (error () :error)))))
 
 (test slow-calls-warn-unless-blocking
-  (let ((warned '()))
+  ;; Sleep 20 ms: usleep(20000), or Sleep(20) from kernel32 on Windows.
+  (let ((warned '())
+        (sleep #+win32 "(ffi/defcfun pause \"Sleep\" void [ms u32])
+                        (ffi/defcfun ^:blocking pause-blocking \"Sleep\" void [ms u32])
+                        (def delay 20)"
+               #-win32 "(ffi/defcfun pause \"usleep\" i32 [us u32])
+                        (ffi/defcfun ^:blocking pause-blocking \"usleep\" i32 [us u32])
+                        (def delay 20000)"))
     (handler-bind ((skein.ffi::slow-foreign-call
                      (lambda (w) (push (princ-to-string w) warned) (muffle-warning w))))
-      (ffi-ev "(ffi/defcfun usleep \"usleep\" i32 [us u32])
-               (ffi/defcfun ^:blocking usleep-blocking \"usleep\" i32 [us u32])
-               (usleep-blocking 20000) (usleep 20000) (usleep 20000)"))
-    #+win32 (pass "usleep is not available on Windows")
-    #-win32 (progn
-              (is (= 1 (length warned)) "warns once per function, not per call: ~S" warned)
-              (is (search "usleep took more than 10 ms" (first warned))))))
+      (ffi-ev (format nil "~A (pause-blocking delay) (pause delay) (pause delay)" sleep)))
+    (is (= 1 (length warned)) "warns once per function, not per call: ~S" warned)
+    (is (search #+win32 "Sleep took more than 10 ms" #-win32 "usleep took more than 10 ms"
+                (first warned)))))
 
 ;;; Structs, unions and memory
 
@@ -200,7 +204,7 @@
              "the C function skein_no_such_function_xyz was not found")
   (ffi-fails "(ffi/deflibrary nolib {:macos \"libnope42.dylib\" :linux \"libnope42.so\"
                                      :windows \"nope42.dll\"})"
-             "libnope42")
+             "nope42")
   (ffi-fails "(ffi/defcfun f \"abs\" i32 [x no-such-type])" "unknown foreign type no-such-type")
   (ffi-fails "(ffi/defcfun f \"abs\" i32 [x])" "C parameters look like")
   (ffi-fails "(ffi/defcstruct point (x i32) (y i32))
