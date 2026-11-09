@@ -12,3 +12,4 @@
 (prn (peek [1 2]) (pop [1 2]) (peek '(1 2)) (pop '(1 2)) (max 1 5 3) (min 2 1) (abs -3) (mod -7 3) (rem -7 3) (quot 7 2) (compare 1 2) (compare "b" "a"))
 (prn (vector? []) (map? {}) (set? #{}) (list? '()) (coll? []) (string? "") (keyword? :a) (symbol? 'a) (number? 1) (integer? 1.0) (float? 1.0) (fn? inc) (some? nil) (true? true) (false? nil) (char? \a))
 (prn ((constantly 3) 1 2) (identity 4) (:a {:a 1}) (:b {:a 1} :d) (assoc [1 2] 2 3) (assoc nil :a 1) (dissoc {:a 1 :b 2} :a) (disj #{1 2} 1) (hash-map :a 1) (hash-set 1 2) (list 1 2) (vector 1 2))
+(prn (int \a) (int \λ) (int \u00e9) (char 97) (char 955) (char \z) (int 3.9) (int -3.9) (int 2.5f) (int 12345678901234567890))

@@ -883,6 +883,35 @@ const table = [_]Entry{
             return num.kind(v) == .f32 or num.kind(v) == .f64;
         }
     }.t)),
+    // int and char convert between numbers and characters, as in Clojure.
+    e("int", 1, 1, struct {
+        fn f(a: Args) Value {
+            const x = a[0];
+            if (x.isChar()) return Value.fromFixnum(x.toChar());
+            switch (num.kind(x)) {
+                .int => return x,
+                .f32, .f64 => {
+                    const d = num.toF64(x);
+                    if (std.math.isNan(d) or @abs(d) >= 0x1p126)
+                        rt.raise(.unsupported_operation_error, "int of {s} is not supported natively yet", .{typeName(x)});
+                    return num.fromI128(@intFromFloat(@trunc(d)));
+                },
+                .other => rt.raise(.@"error", "int needs a number or a char, not {s}", .{typeName(x)}),
+            }
+        }
+    }.f),
+    e("char", 1, 1, struct {
+        fn f(a: Args) Value {
+            const x = a[0];
+            if (x.isChar()) return x;
+            if (x.isFixnum()) {
+                const n = x.toFixnum();
+                if (n >= 0 and n <= 0x10FFFF and !(n >= 0xD800 and n <= 0xDFFF))
+                    return Value.fromChar(@intCast(n));
+            }
+            rt.raise(.@"error", "char needs a code point, not {s}", .{typeName(x)});
+        }
+    }.f),
     e("char?", 1, 1, pred(struct {
         fn t(v: Value) bool {
             return v.isChar();

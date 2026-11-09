@@ -27,6 +27,13 @@
                          (every? #(< -1 % 5) (repeatedly 200 #(rand-int 5)))
                          (= #{0 1 2} (set (repeatedly 300 #(rand-int 3))))
                          (every? #(and (<= 0 %) (< % 2.5)) (repeatedly 100 #(rand 2.5)))]"))))
+  ;; int and char convert between chars and code points, as in Clojure.
+  (is (string= "[97 955 233 \\a \\λ \\z 0]"
+               (pr (ev "[(int \\a) (int \\λ) (int \\u00e9) (char 97) (char 955) (char \\z)
+                         (int (char 0))]"))))
+  (fails "(char -1)" "char needs a code point, not -1")
+  (fails "(char 55296)" "char needs a code point, not 55296")
+  (fails "(int \"a\")" "int needs a number or a char")
   (fails "(rand-int 0)" "rand-int needs a positive integer")
   (fails "(rand -1)" "rand needs a positive number"))
 

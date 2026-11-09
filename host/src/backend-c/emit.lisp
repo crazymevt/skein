@@ -251,7 +251,7 @@ yet. The message names the milestone that adds it."))
     "compare-and-set!" "transient" "persistent!" "conj!" "assoc!" "dissoc!" "disj!" "pop!"
     "nil?" "some?" "true?" "false?" "vector?" "map?" "set?" "list?" "seq?" "coll?" "string?"
     "keyword?" "symbol?" "number?" "integer?" "float?" "char?" "boolean?" "fn?" "atom?"
-    "mapv" "%no-matching-case"
+    "mapv" "%no-matching-case" "int" "char"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

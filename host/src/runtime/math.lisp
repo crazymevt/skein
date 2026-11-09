@@ -4,7 +4,8 @@
 (in-package #:skein.runtime)
 
 ;;; ------------------------------------------------------------------------------------
-;;; Conversions (skein.core): named after the types they produce.
+;;; Conversions (skein.core): named after the types they produce. int also gives a
+;;; char's code point, and char the character with a code point, as in Clojure.
 
 (declaim (inline to-f32 to-f64 to-int float-arg))
 
@@ -15,7 +16,18 @@
   (if (typep x 'double-float) x (coerce x 'double-float)))
 
 (defun to-int (x)
-  (if (integerp x) x (values (truncate x))))
+  (cond ((integerp x) x)
+        ((characterp x) (char-code x))
+        ((realp x) (values (truncate x)))
+        (t (skein-error 'skein-error nil "int needs a number or a char, not ~A"
+                        (readable-string x)))))
+
+(defun to-char (x)
+  "The character with code point X, as Clojure's char; a character is returned as it is."
+  (cond ((characterp x) x)
+        ((and (integerp x) (<= 0 x #x10FFFF) (not (<= #xD800 x #xDFFF))) (code-char x))
+        (t (skein-error 'skein-error nil "char needs a code point, not ~A"
+                        (readable-string x)))))
 
 (defun float-arg (x)
   "X as a float: floats stay as they are, other numbers become f64."
@@ -24,6 +36,7 @@
 (defcore "f32" (x) (to-f32 x))
 (defcore "f64" (x) (to-f64 x))
 (defcore "int" (x) (to-int x))
+(defcore "char" (x) (to-char x))
 
 (define-inline "f32" (x) (1 1) `(to-f32 ,x))
 (define-inline "f64" (x) (1 1) `(to-f64 ,x))
