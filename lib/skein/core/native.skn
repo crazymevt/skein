@@ -1,0 +1,12 @@
+(ns skein.core.native
+  "skein.core's functions written in Skein for native programs (M1.8, D-051). Phase 0
+implements them in CL; natively, the C backend compiles this namespace into every program
+and sends calls of skein.core functions the Zig runtime lacks to the definitions here. On
+the host it is an ordinary namespace, so the tests compare it with Phase 0's versions.
+
+Definitions may use only what the C backend compiles at the current step of M1.8.")
+
+(defn update
+  "m with the value at k replaced by (f old-value args...)."
+  ([m k f] (assoc m k (f (get m k))))
+  ([m k f & args] (assoc m k (apply f (get m k) args))))

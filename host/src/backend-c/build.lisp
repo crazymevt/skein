@@ -10,19 +10,22 @@
        (let ((head (skein.syntax:syntax-datum (first (skein.syntax:syntax-datum form)))))
          (and (sym-p head) (null (sym-namespace head)) (sym-name head)))))
 
+(defvar *translated* '()
+  "The names of the namespaces already translated into the program being built.")
+
+(defparameter *native-library* "skein.core.native"
+  "The namespace of skein.core's functions written in Skein (D-051), which every native
+program includes.")
+
 (defun translate-form (form)
   "Translate one top-level syntax object. ns and defmacro forms run on the host at
-compile time and produce no code; everything else becomes C."
+compile time and produce no code; everything else becomes C. After an ns form, the
+namespaces it requires are translated first."
   (let ((head (form-head form)))
     (cond ((member head '("ns" "defmacro") :test #'equal)
            (skein.backend.cl:eval-toplevel form)
-           (when (and (string= head "ns")
-                      (remove-if (lambda (ns) (string= (namespace-name ns) "skein.core"))
-                                 (skein.runtime:namespace-requires *current-namespace*)))
-             (error 'c-backend-error
-                    :location (skein.syntax:syntax-location form)
-                    :message "programs that require other namespaces build natively from ~
-                              M1.8; for now a native program is one file")))
+           (when (string= head "ns")
+             (translate-requires *current-namespace*)))
           (t
            (let* ((env (skein.expander:make-env :namespace *current-namespace*))
                   (expanded (skein.expander:macroexpand form env)))
@@ -32,21 +35,49 @@ compile time and produce no code; everything else becomes C."
                  (emit-toplevel (skein.expander:analyze-toplevel expanded
                                                                  *current-namespace*))))))))
 
-(defun translate-file (path)
-  "Translate the Skein program in PATH to C source text. Its -main, if any, is called
-with no arguments after the top-level forms run."
-  (let ((*unit* (make-unit))
-        (*current-namespace* (ensure-namespace "user"))
-        (skein.runtime:*source-paths* (skein.backend.cl:program-source-paths path))
-        (file (namestring path)))
+(defun translate-requires (namespace)
+  "Translate the namespaces that NAMESPACE requires at run time and the program doesn't
+include yet, in the order its ns form requires them. Each one's own requires come first,
+so every namespace's code runs after the code of the namespaces it uses."
+  (dolist (dep (reverse (skein.runtime:namespace-requires namespace)))
+    (let ((name (namespace-name dep)))
+      (unless (or (string= name "skein.core") (member name *translated* :test #'string=))
+        (push name *translated*)
+        (let ((path (skein.backend.cl::find-namespace-file name)))
+          (unless path
+            (error 'c-backend-error :location nil
+                                    :message (format nil "cannot find namespace ~A" name)))
+          (translate-source path))))))
+
+(defun translate-source (path)
+  "Translate every form of the Skein file at PATH, starting in namespace user. Returns
+the namespace current at its end."
+  (let ((*current-namespace* (ensure-namespace "user")))
     (with-open-file (s path :external-format :utf-8)
-      (let ((reader (skein.reader:make-reader s :file file :namespace "user")))
+      (let ((reader (skein.reader:make-reader
+                     s :file (namestring path) :namespace "user"
+                     :resolve-alias (lambda (alias)
+                                      (let ((ns (skein.runtime:find-alias *current-namespace*
+                                                                          alias)))
+                                        (and ns (namespace-name ns)))))))
         (loop
           (setf (skein.reader:reader-namespace reader) (namespace-name *current-namespace*))
           (let ((form (skein.reader:read-form reader :eof-value :eof)))
-            (when (eq form :eof) (return))
-            (translate-form form)))))
-    (let* ((main (skein.runtime:find-own-var *current-namespace* "-main"))
+            (when (eq form :eof) (return *current-namespace*))
+            (translate-form form)))))))
+
+(defun translate-file (path)
+  "Translate the Skein program in PATH, with the namespaces it requires and skein.core's
+library in Skein, to C source text. Its -main, if any, is called with the command-line
+arguments after the top-level forms run."
+  (let ((*unit* (make-unit))
+        (*translated* (list *native-library*))
+        (skein.runtime:*source-paths* (skein.backend.cl:program-source-paths path)))
+    ;; Like every namespace a program requires, the library is loaded on the host too.
+    (skein.runtime:require-namespace *native-library*)
+    (translate-source (skein.backend.cl::find-namespace-file *native-library*))
+    (let* ((ns (translate-source path))
+           (main (skein.runtime:find-own-var ns "-main"))
            (main-c (and main (gethash main (unit-vars *unit*)))))
       (program-text *unit* (file-namestring path) main-c))))
 

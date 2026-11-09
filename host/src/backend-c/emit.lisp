@@ -259,13 +259,20 @@ yet. The message names the milestone that adds it."))
   "The skein.core functions the native runtime has (runtime/src/core.zig). Calls to the
 arithmetic, comparison and printing ones are compiled inline.")
 
+(defun library-var (name)
+  "The var of skein.core function NAME in the library written in Skein (D-051), or NIL."
+  (let ((ns (skein.runtime:find-namespace "skein.core.native")))
+    (and ns (skein.runtime:find-own-var ns name))))
+
 (defun native-core-function (node var)
-  "The startup constant holding skein.core function VAR, or a compile error."
+  "A C expression for skein.core function VAR: the runtime's function object (a startup
+constant), the library's var, or a compile error."
   (let ((name (var-name var)))
-    (unless (member name *native-core-functions* :test #'string=)
-      (unsupported node "the native backend can't use skein.core/~A yet; most of skein.core ~
-                         arrives in M1.8" name))
-    (startup-constant (list :core name) (format nil "sk_core(~A)" (c-string-literal name)))))
+    (cond ((member name *native-core-functions* :test #'string=)
+           (startup-constant (list :core name) (format nil "sk_core(~A)" (c-string-literal name))))
+          ((library-var name) (emit-global-ref node (library-var name)))
+          (t (unsupported node "the native backend can't use skein.core/~A yet; most of ~
+                                skein.core arrives in M1.8" name)))))
 
 (defparameter *builtin-condition-types*
   '("arithmetic-error" "type-error" "index-error" "arity-error" "unbound-var-error"
@@ -280,9 +287,13 @@ arithmetic, comparison and printing ones are compiled inline.")
                               (format nil "sk_builtin_condition_type(~A)"
                                       (c-string-literal (var-name var))))
             (native-core-function node var))
-        (temp (format nil "sk_var_get(~A, ~A, ~A)" (var-c-name var)
-                      (c-string-literal (skein.runtime:var-qualified-name var))
-                      (c-string-literal (location-string node)))))))
+        (emit-global-ref node var))))
+
+(defun emit-global-ref (node var)
+  "Read VAR's value, checking that it is bound."
+  (temp (format nil "sk_var_get(~A, ~A, ~A)" (var-c-name var)
+                (c-string-literal (skein.runtime:var-qualified-name var))
+                (c-string-literal (location-string node)))))
 
 (defun emit-if (node)
   (let ((test (emit (if-node-test node)))

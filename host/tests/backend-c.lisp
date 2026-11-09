@@ -192,6 +192,67 @@
   (native-matches (uiop:read-file-string
                    (asdf:system-relative-pathname "skein" "tests/fixtures/native-core.skn"))))
 
+;;; Programs of several namespaces, and skein.core's library in Skein (M1.8, D-051)
+
+(test native-program-of-several-namespaces
+  ;; Requires with :as and :refer, a private function, a macro from a required namespace,
+  ;; shared requires translated once and in order, and -main with arguments.
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("app/util.skn" "(ns app.util)
+(def greeting \"hello\")
+(defn- secret [] 41)
+(defn answer [] (inc (secret)))
+(defmacro twice [x] `(do ~x ~x))
+(println \"loading app.util\")")
+                             ("app/more.skn" "(ns app.more (:require [app.util :as u]))
+(defn shout [s] (str s \"! \" (u/answer)))
+(println \"loading app.more\")")
+                             ("app/main.skn" "(ns app.main (:require [app.util :as u :refer [answer]]
+                                    [app.more]))
+(u/twice (println u/greeting (answer)))
+(println (app.more/shout \"x\"))
+(defn -main [& args] (println \"main\" args))"))
+        (let* ((file (merge-pathnames "app/main.skn" dir))
+               (expected (with-output-to-string (*standard-output*)
+                           (skein.backend.cl:run-file file))))
+          (multiple-value-bind (out err code) (native-run file)
+            (is (eql 0 code) "native exit code ~A, stderr: ~A" code err)
+            (is (string= expected out) "native output differs:~%--- skein run:~%~A--- native:~%~A"
+                expected out))))))
+
+(defmacro library-matches (&rest templates)
+  "Each template, with % replaced by a skein.core function's name, gives the same printed
+value on the host as with % replaced by skein.core.native's version of the function."
+  `(dolist (template (list ,@templates))
+     (flet ((value-of (name)
+              (handler-case
+                  (pr (ev (format nil "(ns lib-test (:require [skein.core.native]))~%~A"
+                                  (substitute-name template name))))
+                (skein.runtime:skein-error (e) (format nil "error: ~A"
+                                                       (skein.runtime:skein-error-message e))))))
+       (let ((core (value-of "skein.core/~A")) (lib (value-of "skein.core.native/~A")))
+         (is (string= core lib) "~A: Phase 0 gives ~A, skein.core.native ~A" template core lib)))))
+
+(defun substitute-name (template qualified)
+  "TEMPLATE, \"(% args)\" with % naming a function, with % replaced: QUALIFIED is a
+format string for the qualified name, given the name."
+  (let* ((open (position #\( template))
+         (end (position-if (lambda (c) (member c '(#\Space #\)))) template :start open))
+         (name (subseq template (1+ open) end)))
+    (concatenate 'string (subseq template 0 (1+ open)) (format nil qualified name)
+                 (subseq template end))))
+
+(test native-library-matches-phase-0
+  (library-matches "(update {:a 1} :a inc)" "(update {:a 1} :b (fnil inc 0))"
+                   "(update [1 2] 0 + 10 20)" "(update nil :k (constantly 1))"))
+
+(test native-library-routing
+  (native-matches "(ns libroute)
+(prn (update {:n 1} :n inc) (update [1 2] 1 * 10) (update {} :k (fn [_] :new)))
+(def f update)
+(prn (f {:a [1]} :a conj 2))"))
+
 (test native-closures
   (native-matches "(ns closures)
 (defn adder [n] (fn [x] (+ x n)))

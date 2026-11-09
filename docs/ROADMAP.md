@@ -193,7 +193,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - `core.skn`, seqs, transducers, the object system (classes, generic functions with dispatch caches), value structs and typed arrays, declarations, and concurrency on OS threads, compiled natively.
 - The runtime (Zig) keeps the foundations: the seq protocol over every collection, lazy-seq cells, objects and generic-function dispatch, typed arrays and threads. The library built on them (`map`, `filter`, `partition`, transducers, `group-by`, ...) is written in Skein as `skein.core.native`, compiled into every native program, and tested against Phase 0 (D-051).
 - Steps, in order:
-  1. Programs of several namespaces: a native program includes every namespace it requires, and `skein.core.native`.
+  1. ✅ Programs of several namespaces: a native program includes every namespace it requires, and `skein.core.native`.
   2. Seqs: `seq`/`first`/`rest` over every collection, lazy seqs, the seq library, `reduced` and transducers.
   3. The rest of skein.core's functions, and multiple values.
   4. The object system: classes, instances, generic functions with dispatch caches.
@@ -270,6 +270,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - GC (D-045): a nursery segment promoted for one pinned object keeps its whole 256 KiB until the next major collection; consider moving pinned objects' neighbors out, or smaller pinning granularity. Marking is stop-the-world; incremental marking (DESIGN §18.1) and `with-frame-arena` (§18.2) are still to do.
 - FFI callbacks from foreign threads work as SBCL allows; DESIGN §14.3's attach-as-fiber behavior waits for Phase 2.
 - Reader in Skein (D-048): building it natively (M1.9) needs `pr-str`, `parse-long`, `%decimal-to-float` (Zig's `parseFloat` is correctly rounded) and an `apply` that takes more than 256 arguments, or a string builder, since string literals are made with `(apply str chars)`. `skein run` still uses the CL reader until the front end is self-hosted.
+- `skein build` loads a program's required namespaces on the host, running their top-level code, because their macros must exist to expand the program. Self-hosting (M1.9) should load them for syntax only (phase 1).
 - Expander in Skein (D-049), for self-hosting (M1.9):
   - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
   - Macros run at compile time: skein.core's are compiled into the compiler, and a program's own run in an interpreter (D-050).
