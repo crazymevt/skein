@@ -1,0 +1,1484 @@
+(ns skein.compiler.c
+  "The C backend (D-044), written in Skein (M1.9, D-059): a port of the Phase 0 backend
+(host/src/backend-c/emit.lisp and typed.lisp) that turns Core IR as data (from
+skein.compiler.expander) into the same C11 program text.
+
+Each node is emitted as statements that leave its value in a C expression (usually a
+fresh temporary): the ANF step of docs/CORE-IR.md, done while emitting. Declared types
+(DESIGN §12, D-056) let locals of f64, f32 and fixnum live unboxed in C variables.
+
+The Lisp backend keeps its emission state in special variables. Here it is a map passed
+down every call, st:
+  :unit     an atom: the program being built (make-unit)
+  :ctx      an atom: the function being emitted (its C text, locals and types)
+  :mv       whether the multiple values of the node being emitted matter (D-053)
+  :tail-mv  while a node's statements are emitted, whether its own values matter
+  :targets  loop or arity id -> recur target
+  :frames   C names of the frames the code is inside, in this function, innermost first
+  :safety   the safety level: 0 drops bounds and overflow checks
+  :ns       the namespace whose top-level form is being emitted
+
+Namespaces and vars belong to the image the compiler runs in, reached through skein.core's
+% functions, as in skein.compiler.expander."
+  (:require [skein.compiler.reader :as reader]))
+
+;;; ------------------------------------------------------------------------------------
+;;; Errors
+
+(defcondition c-backend-error [error]
+  "Something the C backend can't compile yet, with the location of the form."
+  (message :reader c-backend-error-message)
+  (location :reader c-backend-error-location)
+  (:report (fn [c] (if (c-backend-error-location c)
+                     (str (c-backend-error-message c) " at "
+                          (reader/format-location (c-backend-error-location c)))
+                     (c-backend-error-message c)))))
+
+(defn- unsupported [node & parts]
+  (error c-backend-error :message (apply str parts) :location (when node (:loc node))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Strings
+
+(defn- concat-strings
+  "One string of the strings in parts, joined pairwise, so that long texts take n log n."
+  [parts]
+  (loop [ps (vec parts)]
+    (case (count ps)
+      0 ""
+      1 (first ps)
+      (recur (loop [i 0 out []]
+               (if (< i (count ps))
+                 (recur (+ i 2) (conj out (if (< (inc i) (count ps))
+                                            (str (nth ps i) (nth ps (inc i)))
+                                            (nth ps i))))
+                 out))))))
+
+(defn- join [sep xs] (concat-strings (interpose sep xs)))
+
+(defn- hex
+  "n (a non-negative integer) in upper-case hexadecimal, padded with zeros to digits."
+  [n digits]
+  (let [s (loop [n n acc ()]
+            (if (zero? n)
+              (concat-strings acc)
+              (let [d (rem n 16)]
+                (recur (quot n 16) (cons (subs "0123456789ABCDEF" d (inc d)) acc)))))]
+    (str (concat-strings (repeat (- digits (count s)) "0")) s)))
+
+(defn- utf8-bytes
+  "The UTF-8 encoding of string s, as a vector of bytes."
+  [s]
+  (reduce (fn [acc ch]
+            (let [c (int ch)]
+              (cond (< c 128) (conj acc c)
+                    (< c 2048) (conj acc (+ 192 (quot c 64)) (+ 128 (rem c 64)))
+                    (< c 65536) (conj acc (+ 224 (quot c 4096)) (+ 128 (rem (quot c 64) 64))
+                                      (+ 128 (rem c 64)))
+                    :else (conj acc (+ 240 (quot c 262144)) (+ 128 (rem (quot c 4096) 64))
+                                (+ 128 (rem (quot c 64) 64)) (+ 128 (rem c 64))))))
+          []
+          s))
+
+(defn- c-string-literal
+  "A C string literal for the UTF-8 encoding of s. Octal escapes take at most three
+digits, so a following digit can't extend them, unlike \\x."
+  [s]
+  (concat-strings
+   (-> ["\""]
+       (into (map (fn [b]
+                    (cond (= b 34) "\\\""
+                          (= b 92) "\\\\"
+                          (<= 32 b 126) (str (char b))
+                          :else (str "\\" (quot b 64) (rem (quot b 8) 8) (rem b 8))))
+                  (utf8-bytes s)))
+       (conj "\""))))
+
+(defn- utf8-length [s] (count (utf8-bytes s)))
+
+(defn- c-comment
+  "s made safe inside /* */."
+  [s]
+  (concat-strings (loop [cs (seq s) prev nil out []]
+                    (if cs
+                      (let [c (first cs)]
+                        (recur (next cs) c (conj out (if (and (= c \/) (= prev \*)) "_" (str c)))))
+                      out))))
+
+(defn- c-identifier [s]
+  (concat-strings (map (fn [ch]
+                         (let [c (int ch)]
+                           (if (or (<= 97 c 122) (<= 65 c 90) (<= 48 c 57)) (str ch) "_")))
+                       s)))
+
+(defn- location-string [node] (reader/format-location (when node (:loc node))))
+
+(defn- location-literal [node] (c-string-literal (location-string node)))
+
+;;; ------------------------------------------------------------------------------------
+;;; The program being built, and the function being emitted
+
+(defn make-unit
+  "An empty program, to which emit-toplevel adds top-level forms."
+  []
+  (atom {:counter 0
+         ;; var -> C name of its global
+         :vars {}
+         ;; [c-name namespace-name var-name], in order
+         :var-decls []
+         ;; [c-name init-expression] for constants made at startup, in order
+         :constants []
+         ;; [kind ...] -> C name, for constants already made
+         :constant-cache {}
+         ;; function definitions (C text) and their prototypes, in order
+         :functions []
+         :prototypes []
+         ;; [fobj-name code-name display-name] for function objects made at startup
+         :fn-objects []
+         ;; the lines of the program body (the top-level forms)
+         :body (atom [])
+         ;; block tag id -> true if the block's multiple values matter
+         :block-mv {}}))
+
+(defn- fresh [st prefix]
+  (str prefix (:counter (swap! (:unit st) update :counter inc))))
+
+(defn- make-ctx
+  "The emission state of one function, whose C lines go to the atom out."
+  [out]
+  (atom {:out out
+         :indent 1
+         ;; local or block tag id -> C expression naming it
+         :locals {}
+         ;; ids of locals of enclosing functions that this function captured
+         :captured #{}
+         ;; block tag id -> C name of its frame, for the blocks of this function
+         :blocks {}
+         ;; true if the function calls setjmp (it has a block* or unwind-protect), so its
+         ;; locals are declared volatile: a longjmp back into it must see their values
+         :volatile false
+         ;; local id -> static type, for locals held unboxed or known to be arrays
+         :types {}
+         ;; typed array local id -> the C variable holding its length
+         :array-counts {}}))
+
+(defn- id-of [x] (or (:local/id x) (:tag/id x)))
+
+(defn- get-local [st x] (get (:locals @(:ctx st)) (id-of x)))
+
+(defn- set-local! [st x c-expr] (swap! (:ctx st) assoc-in [:locals (id-of x)] c-expr))
+
+(def ^:private indents (atom {}))
+
+(defn- indentation [n]
+  (or (get @indents n)
+      (let [s (concat-strings (repeat (* 2 n) " "))]
+        (swap! indents assoc n s)
+        s)))
+
+(defn- stmt
+  "Write one line of C, made of parts, at the current indentation."
+  [st & parts]
+  (let [ctx @(:ctx st)]
+    (swap! (:out ctx) conj (str (indentation (:indent ctx)) (concat-strings parts) "\n"))))
+
+(defn- with-block
+  "Write header (ending in \"{\"), what (f) writes one level in, then \"}\"."
+  [st header f]
+  (stmt st header)
+  (swap! (:ctx st) update :indent inc)
+  (f)
+  (swap! (:ctx st) update :indent dec)
+  (stmt st "}"))
+
+(defn- value-type
+  "The C type of a local or temporary in the function being emitted."
+  [st]
+  (if (:volatile @(:ctx st)) "volatile sk_value" "sk_value"))
+
+(defn- temp
+  "Store expr in a fresh temporary and return its name."
+  [st expr]
+  (let [nm (fresh st "t")]
+    (stmt st (value-type st) " " nm " = " expr ";")
+    nm))
+
+;;; ------------------------------------------------------------------------------------
+;;; Vars and constants
+
+(defn- var-ns-name [var] (%namespace-name (%var-namespace var)))
+
+(defn- core-var? [var] (= (var-ns-name var) "skein.core"))
+
+(defn- startup-constant
+  "A global made once at startup by the C expression init; key dedupes it."
+  [st key init]
+  (or (get (:constant-cache @(:unit st)) key)
+      (let [nm (fresh st "k")]
+        (swap! (:unit st) (fn [u] (-> u
+                                      (update :constants conj [nm init])
+                                      (assoc-in [:constant-cache key] nm))))
+        nm)))
+
+(def ^:private fixnum-min -2305843009213693952)
+(def ^:private fixnum-max 2305843009213693951)
+
+(defn- optional-c-string [s] (if s (c-string-literal s) "NULL"))
+
+(def ^:private constant-expr)
+
+(defn- collection-constant
+  "A startup constant built by constructor from the constants elements (made first)."
+  [st value constructor elements node]
+  (let [exprs (mapv (fn [x] (constant-expr st x node)) elements)]
+    (startup-constant st [:collection (pr-str value)]
+                      (if (seq exprs)
+                        (str constructor "(" (count exprs) ", (const sk_value[]){"
+                             (join ", " exprs) "})")
+                        (str constructor "(0, NULL)")))))
+
+(defn- constant-expr [st value node]
+  (cond (nil? value) "SK_NIL"
+        (false? value) "SK_FALSE"
+        (true? value) "SK_TRUE"
+        (integer? value)
+        (if (<= fixnum-min value fixnum-max)
+          (str "SK_FIXNUM(INT64_C(" value "))")
+          (startup-constant st [:integer value] (str "sk_integer(\"" value "\")")))
+        (instance? 'f64 value)
+        (let [bits (%f64-bits value)]
+          (startup-constant st [:f64 bits] (str "sk_f64(sk_bits_f64(UINT64_C(0x" (hex bits 16)
+                                                ")))")))
+        (instance? 'f32 value) (str "SK_F32_BITS(UINT32_C(0x" (hex (%f32-bits value) 8) "))")
+        (char? value) (str "SK_CHAR(" (int value) ")")
+        (string? value)
+        (startup-constant st [:string value]
+                          (str "sk_string(" (c-string-literal value) ", " (utf8-length value)
+                               ")"))
+        (keyword? value)
+        (startup-constant st [:keyword (namespace value) (name value)]
+                          (str "sk_keyword(" (optional-c-string (namespace value)) ", "
+                               (c-string-literal (name value)) ")"))
+        (symbol? value)
+        (startup-constant st [:symbol (namespace value) (name value)]
+                          (str "sk_symbol(" (optional-c-string (namespace value)) ", "
+                               (c-string-literal (name value)) ")"))
+        (vector? value) (collection-constant st value "sk_vector_of" (vec value) node)
+        (list? value) (collection-constant st value "sk_list_of" (vec value) node)
+        (map? value)
+        (collection-constant st value "sk_map_of"
+                             (reduce-kv (fn [acc k v] (conj acc k v)) [] value) node)
+        (set? value) (collection-constant st value "sk_set_of" (vec (seq value)) node)
+        :else (unsupported node "the native backend can't compile the constant "
+                           (pr-str value) " yet")))
+
+(defn- var-c-name [st var]
+  (or (get (:vars @(:unit st)) var)
+      (let [nm (fresh st "var")]
+        (swap! (:unit st) (fn [u] (-> u
+                                      (assoc-in [:vars var] nm)
+                                      (update :var-decls conj
+                                              [nm (var-ns-name var) (%var-name var)]))))
+        nm)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Static types (DESIGN §12, D-056): :f64 :f32 :int (any int64_t), :bool (a C
+;;; condition), [:array element] for a primitive array of :f64, :f32 or :int (fixnum), or
+;;; nil for a boxed value of unknown type.
+
+(defn- scalar-type? [type] (contains? #{:f64 :f32 :int :bool} type))
+(defn- numeric-type? [type] (contains? #{:f64 :f32 :int} type))
+(defn- array-type? [type] (vector? type))
+
+(defn- c-type
+  "The C type that holds a value of type."
+  [type]
+  (case type :f64 "double" :f32 "float" :int "int64_t" :bool "int" "sk_value"))
+
+(defn- decl-type
+  "The C type of a local of type in the function being emitted (volatile if it calls
+setjmp)."
+  [st type]
+  (str (if (:volatile @(:ctx st)) "volatile " "") (c-type type)))
+
+(defn- declared-type
+  "The static type for the Skein type data (as from ^type or declare), or nil."
+  [data]
+  (cond (and (symbol? data) (nil? (namespace data)))
+        (case (name data) "f64" :f64 "f32" :f32 "fixnum" :int nil)
+        (and (list? data) (seq data))
+        (let [[head element] data]
+          (when (and (symbol? head) (= (name head) "array"))
+            (when-let [e (declared-type element)] [:array e])))
+        :else nil))
+
+(defn- declared-fixnum? [local]
+  (let [data @(:local/type local)]
+    (and (symbol? data) (nil? (namespace data)) (= (name data) "fixnum"))))
+
+(defn- local-static-type [st local] (get (:types @(:ctx st)) (:local/id local)))
+
+(defn- note-type! [st local type]
+  (when type (swap! (:ctx st) assoc-in [:types (:local/id local)] type)))
+
+(defn- primitive-name [call]
+  (let [f (:fn call)]
+    (when (and (= :var-ref (:op f)) (core-var? (:var f)))
+      (%var-name (:var f)))))
+
+(defn- contagion [types]
+  (cond (some #{:f64} types) :f64
+        (some #{:f32} types) :f32
+        :else :int))
+
+(defn- join-types [a b]
+  (cond (= a :recur) b
+        (= b :recur) a
+        (= a b) a
+        :else nil))
+
+(def ^:private node-type)
+
+(defn- primitive-type
+  "The static type of a call to a skein.core primitive with typed arguments, or nil."
+  [st call]
+  (let [nm (primitive-name call)
+        args (:args call)
+        types (mapv (fn [a] (node-type st a)) args)
+        n (count args)
+        is (fn [& names] (some #{nm} names))
+        numeric (fn [] (every? numeric-type? types))
+        [t0 t1 t2] types]
+    (when nm
+      (or (cond (is "+" "*" "-") (and (>= n 1) (numeric) (contagion types))
+                (is "/") (and (= n 2) (numeric)
+                              (if (every? (fn [ty] (= ty :int)) types) :f64 (contagion types)))
+                (is "inc" "dec") (and (= n 1) (numeric) t0)
+                (is "<" ">" "<=" ">=" "==") (and (>= n 2) (numeric) :bool)
+                (is "zero?" "pos?" "neg?") (and (= n 1) (numeric) :bool)
+                (is "not") (and (= n 1) (= t0 :bool) :bool)
+                (is "sqrt") (and (= n 1) (case t0 :f32 :f32 :f64 :f64 :int :f64 nil))
+                (is "aget") (and (= n 2) (array-type? t0) (= t1 :int) (second t0))
+                (is "aset!") (and (= n 3) (array-type? t0) (= t1 :int) (= t2 (second t0)) t2)
+                (is "count") (and (= n 1) (array-type? t0) :int))
+          nil))))
+
+(defn- node-type
+  "The static type of node's value, :recur if it always jumps, or nil."
+  [st node]
+  (case (:op node)
+    :const (let [v (:value node)]
+             (cond (and (integer? v) (<= fixnum-min v fixnum-max)) :int
+                   (instance? 'f64 v) :f64
+                   (instance? 'f32 v) :f32
+                   :else nil))
+    :local-ref (local-static-type st (:local node))
+    :the (or (declared-type (:type node)) (node-type st (:expr node)))
+    :locally (node-type st (:body node))
+    :let (node-type st (:body node))
+    :do (when-let [f (last (:forms node))] (node-type st f))
+    :if (join-types (node-type st (:then node)) (node-type st (:else node)))
+    :loop (let [ty (node-type st (:body node))] (if (= ty :recur) nil ty))
+    :recur :recur
+    :call (primitive-type st node)
+    nil))
+
+(defn- overflowing?
+  "True if node is integer arithmetic, whose result may not fit in an int64_t: Skein
+integers become bignums, so such a result is only unboxed where a typed integer is
+required (a fixnum local, an index, a comparison), never into an inferred local or a
+boxed value."
+  [st node]
+  (and (= :int (node-type st node))
+       (= :call (:op node))
+       (contains? #{"+" "-" "*" "inc" "dec"} (primitive-name node))))
+
+(defn- node-children
+  "The nodes directly inside node, not counting the bodies of nested functions."
+  [node]
+  (case (:op node)
+    (:const :var-ref :local-ref :fn) []
+    :if [(:test node) (:then node) (:else node)]
+    :do (:forms node)
+    :def (if (:init node) [(:init node)] [])
+    (:let :loop) (conj (mapv second (:bindings node)) (:body node))
+    :letfn [(:body node)]
+    :recur (:args node)
+    :set [(:value node)]
+    :call (into [(:fn node)] (:args node))
+    :the [(:expr node)]
+    :locally [(:body node)]
+    :unwind-protect [(:body node) (:cleanup node)]
+    :block [(:body node)]
+    :return-from [(:value node)]
+    :values (:args node)
+    :let-values (conj (mapv second (:bindings node)) (:body node))
+    :throw-condition [(:condition node)]
+    :handler-bind (conj (vec (mapcat identity (:bindings node))) (:body node))
+    :restart-bind (conj (vec (mapcat rest (:bindings node))) (:body node))))
+
+(defn- infer-locals
+  "Record the static types of the locals that node binds (outside nested functions): a
+declared type, or for an immutable let local, the type of its init."
+  [st node]
+  (let [walk (fn walk [n]
+               (case (:op n)
+                 :let (do (doseq [[l init] (:bindings n)]
+                            (walk init)
+                            (note-type! st l (or (declared-type @(:local/type l))
+                                                 (and (not (:local/mutable? l))
+                                                      (let [ty (node-type st init)]
+                                                        (and (or (numeric-type? ty)
+                                                                 (array-type? ty))
+                                                             (not (overflowing? st init))
+                                                             ty))))))
+                          (walk (:body n)))
+                 :loop (do (doseq [[l init] (:bindings n)]
+                             (walk init)
+                             (note-type! st l (declared-type @(:local/type l))))
+                           (walk (:body n)))
+                 :fn nil
+                 (doseq [c (node-children n)] (walk c))))]
+    (walk node)))
+
+(defn- note-parameter-types [st arities]
+  (doseq [a arities
+          p (:params a)]
+    (note-type! st p (declared-type @(:local/type p)))))
+
+(defn- policy-safety [st policy]
+  (let [entry (some (fn [[quality level]] (when (= quality "safety") [level])) policy)]
+    (if entry (first entry) (:safety st))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Boxing and unboxing
+
+(defn- box
+  "expr, a C value of type, as an sk_value."
+  [st expr type]
+  (case type
+    :f64 (temp st (str "sk_f64(" expr ")"))
+    :f32 (str "sk_from_f32(" expr ")")
+    :int (str "sk_from_i64(" expr ")")
+    :bool (str "SK_BOOL(" expr ")")
+    expr))
+
+(defn- unbox
+  "expr, an sk_value, as a C value of type, checking that it has that type."
+  [st expr type node]
+  (cond (nil? type) expr
+        (array-type? type) (str "sk_check_array(" expr ", "
+                                (case (second type) :f64 9 :f32 8 :int 10) ", "
+                                (location-literal node) ")")
+        :else (case type
+                :f64 (str "sk_to_f64(" expr ", " (location-literal node) ")")
+                :f32 (str "sk_to_f32(" expr ", " (location-literal node) ")")
+                :int (str "sk_to_fixnum(" expr ", " (location-literal node) ")")
+                :bool (str "SK_TRUTHY(" expr ")"))))
+
+(defn- convert
+  "expr, a C value of static type have, as want. Arithmetic converts numbers by
+contagion; with strict (a declared type), a different type is a type error, checked by
+boxing and unboxing as Phase 0 checks it at run time."
+  [st expr have want node strict]
+  (cond (= have want) expr
+        (nil? want) (box st expr have)
+        (and (not strict) (= want :f64) (contains? #{:int :f32} have))
+        (str "((double)(" expr "))")
+        (and (not strict) (= want :f32) (= have :int)) (str "((float)(" expr "))")
+        (= want :bool) (str "((void)(" expr "), 1)")
+        :else (unbox st (box st expr have) want node)))
+
+(defn- typed-temp [st expr type]
+  (let [nm (fresh st "v")]
+    (stmt st (c-type type) " " nm " = " expr ";")
+    nm))
+
+(defn- typed-literal [value type]
+  (case type
+    :int (str "INT64_C(" value ")")
+    :f64 (str "sk_bits_f64(UINT64_C(0x" (hex (%f64-bits value) 16) "))")
+    :f32 (str "sk_bits_f32(UINT32_C(0x" (hex (%f32-bits value) 8) "))")))
+
+(defn- array-count-var
+  "The C variable holding the length of the typed array local that node reads, if any."
+  [st node]
+  (when (= :local-ref (:op node))
+    (get (:array-counts @(:ctx st)) (:local/id (:local node)))))
+
+(defn- note-array-count
+  "After local (a typed array) is bound to the C variable nm, read its length once."
+  [st local nm]
+  (when (array-type? (local-static-type st local))
+    (let [cnt (str nm "_count")]
+      (stmt st "const int64_t " cnt " = sk_prim_count(" nm ");")
+      (swap! (:ctx st) assoc-in [:array-counts (:local/id local)] cnt))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Nodes
+
+(def ^:private emit-node)
+(def ^:private emit-typed)
+(def ^:private emit-if)
+(def ^:private emit-loop)
+
+(defn- emit
+  "Emit node's statements; return a C expression for its value, or :recur if it jumped.
+When (:mv st) is true, they also leave node's multiple values in the thread's registers."
+  [st node]
+  (emit-node (assoc st :tail-mv (:mv st) :mv false) node))
+
+(defn- emit-tail
+  "Emit node, a tail part of the node being emitted, whose values are that node's."
+  [st node]
+  (emit (assoc st :mv (:tail-mv st)) node))
+
+(defn- single-value
+  "expr, the value of a node that has one value: say so if its values matter."
+  [st expr]
+  (when (:tail-mv st) (stmt st "sk_mv_reset();"))
+  expr)
+
+(defn- emit-as
+  "Emit node; return a C expression for its value as want (a static type, nil for an
+sk_value, or :void when the value is not needed), or :recur if it jumped."
+  ([st node want] (emit-as st node want false))
+  ([st node want strict]
+   (let [have (node-type st node)]
+     (cond (= want :void)
+           ;; Typed expressions can have effects (aset!), so they become statements.
+           (do (if (or (scalar-type? have) (array-type? have))
+                 (let [expr (emit-typed st node have)]
+                   (when (string? expr) (stmt st "(void)" expr ";")))
+                 (emit st node))
+               nil)
+           (and (or (scalar-type? have) (array-type? have))
+                ;; Integer arithmetic going into a boxed value may need a bignum.
+                (not (and (nil? want) (overflowing? st node))))
+           (let [expr (emit-typed st node have)]
+             (if (= expr :recur) :recur (convert st expr have want node strict)))
+           :else (let [expr (emit st node)]
+                   (if (= expr :recur) :recur (unbox st expr want node)))))))
+
+(defn- bind-local
+  "Declare a C variable for local and return its name."
+  [st local]
+  (let [nm (str "l_" (c-identifier (:local/name local)) "_" (:local/id local))]
+    (set-local! st local nm)
+    nm))
+
+(defn- local-store
+  "A C expression for value-node's value as stored in local: of local's static type,
+checked against its declared type."
+  [st local value-node]
+  (let [type (local-static-type st local)
+        declared (declared-type @(:local/type local))
+        expr (emit-as st value-node type (boolean declared))]
+    (if (and (not= expr :recur) (= type :int) (declared-fixnum? local) (> (:safety st) 0)
+             (not= (node-type st value-node) :recur))
+      (str "sk_fixnum_range(" expr ", " (location-literal value-node) ")")
+      expr)))
+
+(defn- emit-let [st bindings]
+  (doseq [[local init] bindings]
+    (let [value (local-store st local init)
+          value (if (= value :recur) "0" value)]
+      (stmt st (decl-type st (local-static-type st local)) " " (bind-local st local) " = "
+            value ";")
+      (note-array-count st local (get-local st local)))))
+
+(defn- emit-args
+  "Emit args left to right into temporaries; return their names."
+  [st args]
+  (mapv (fn [a]
+          (let [v (emit st a)]
+            (when (= v :recur) (unsupported a "recur used as an argument"))
+            ;; Constants (SK_... macros) are safe to use as they are.
+            (if (and (>= (count v) 3) (= "SK_" (subs v 0 3)))
+              v
+              (temp st v))))
+        args))
+
+(defn- emit-values
+  "values: the first value, or nil; the values themselves if they matter."
+  [st node]
+  (let [args (emit-args st (:args node))
+        n (count args)]
+    (cond (:tail-mv st)
+          (if (seq args)
+            (let [array (fresh st "mv")]
+              (stmt st "const sk_value " array "[] = {" (join ", " args) "};")
+              (temp st (str "sk_mv_set(" n ", " array ")")))
+            (temp st "sk_mv_set(0, NULL)"))
+          (seq args) (first args)
+          :else "SK_NIL")))
+
+(defn- emit-let-values
+  "let-values*: each init's values, read from the registers right after it runs."
+  [st node]
+  (doseq [[locals init] (:bindings node)]
+    (let [v (emit (assoc st :mv true) init)
+          cnt (fresh st "mvc")
+          v (if (= v :recur) "SK_NIL" v)]
+      (stmt st "int32_t " cnt " = sk_mv_count;")
+      (doseq [[i l] (map-indexed vector locals)]
+        (stmt st (value-type st) " " (bind-local st l) " = sk_mv_get(" cnt ", " v ", " i
+              ");"))))
+  (emit-tail st (:body node)))
+
+(def ^:private native-core-functions
+  "The skein.core functions the native runtime has (runtime/src/core.zig). Calls to the
+arithmetic, comparison and printing ones are compiled inline. The tests check that this
+is the Lisp backend's list."
+  #{"+" "-" "*" "/" "<" ">" "<=" ">=" "==" "=" "not=" "inc" "dec" "max" "min" "abs" "mod"
+    "rem" "quot" "compare" "zero?" "pos?" "neg?" "not" "identical?" "identity" "constantly"
+    "println" "print" "prn" "pr" "list" "vector" "hash-map" "%map-literal" "hash-set"
+    "%set-literal" "vec" "count" "conj" "assoc" "dissoc" "disj" "get" "nth" "contains?"
+    "empty?" "first" "rest" "next" "cons" "peek" "pop" "keys" "vals" "reduce" "apply"
+    "str" "pr-str" "hash-of" "odd?" "even?" "subs" "keyword" "symbol" "name" "namespace"
+    "atom" "deref" "reset!" "swap!" "compare-and-set!" "transient" "persistent!" "conj!"
+    "assoc!" "dissoc!" "disj!" "pop!" "nil?" "some?" "true?" "false?" "vector?" "map?"
+    "set?" "list?" "seq?" "coll?" "string?" "keyword?" "symbol?" "number?" "integer?"
+    "float?" "char?" "boolean?" "fn?" "atom?" "%no-matching-case" "int" "char"
+    ;; Seqs (M1.8)
+    "seq" "%lazy-seq" "realized?" "sequential?" "reduced" "reduced?" "unreduced"
+    "ensure-reduced" "%eduction"
+    ;; Step 3 of M1.8
+    "f64" "f32" "sqrt" "rand" "rand-int" "gensym" "parse-long" "boolean" "associative?"
+    "counted?" "ifn?"
+    ;; The object system (step 4)
+    "equiv" "initialize" "update-instance-for-redefined-class" "make" "with" "slot"
+    "set-slot!" "%set-slot!" "update-slot!" "cell" "instance?" "class-of" "class-name"
+    "class-slots" "class-precedence-list" "generic-methods" "%define-class" "%class"
+    "%eql-specializer" "%define-generic"
+    ;; Structs and typed arrays (step 5)
+    "%make-array" "aget" "aset!" "array?" "struct?" "view" "as-bytes" "update!"
+    ;; Concurrency (step 6)
+    "%with-nursery" "%spawn" "%future" "%with-timeout" "%on-main-thread" "%spawn-pinned"
+    "drain-main-thread!" "check-cancelled" "sleep" "cancel!" "cancelled?" "done?" "task?"
+    "cpu-count" "chan" "chan?" ">!" "<!" "close!" "alts!" "timeout-chan"
+    ;; skein.io's primitives (M1.9)
+    "%read-file" "%write-file" "%file-exists?" "%run-process"
+    ;; Conditions and restarts (M1.5)
+    "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
+    "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
+    "restart-name" "restart-report" "%condition-type" "%define-condition" "%condition-slot"})
+
+(def ^:private builtin-condition-types
+  "The skein.core vars that hold built-in condition types."
+  #{"arithmetic-error" "type-error" "index-error" "arity-error" "unbound-var-error"
+    "not-callable-error" "unsupported-operation-error" "transient-error" "namespace-error"
+    "cancelled" "timeout" "task-cancelled-error"})
+
+(defn- library-var
+  "The var of skein.core function nm in the library written in Skein (D-051), or nil."
+  [nm]
+  (when-let [ns (%find-namespace "skein.core.native")]
+    (%find-own-var ns nm)))
+
+(defn- emit-global-ref
+  "Read var's value, checking that it is bound."
+  [st node var]
+  (temp st (str "sk_var_get(" (var-c-name st var) ", " (c-string-literal (%var-qualified-name var))
+                ", " (location-literal node) ")")))
+
+(defn- native-core-function
+  "A C expression for skein.core function var: the runtime's function object (a startup
+constant), the library's var, or a compile error."
+  [st node var]
+  (let [nm (%var-name var)]
+    (cond (contains? native-core-functions nm)
+          (startup-constant st [:core nm] (str "sk_core(" (c-string-literal nm) ")"))
+          (library-var nm) (emit-global-ref st node (library-var nm))
+          :else (unsupported node "the native backend can't use skein.core/" nm " yet"))))
+
+(defn- emit-var-ref [st node]
+  (let [var (:var node)]
+    (if (core-var? var)
+      (if (contains? builtin-condition-types (%var-name var))
+        (startup-constant st [:condition-type (%var-name var)]
+                          (str "sk_builtin_condition_type(" (c-string-literal (%var-name var))
+                               ")"))
+        (native-core-function st node var))
+      (emit-global-ref st node var))))
+
+(defn- emit-if
+  "if; with type, its value is computed as that static type."
+  ([st node] (emit-if st node nil))
+  ([st node type]
+   (let [test (emit-as st (:test node) :bool)
+         result (fresh st "t")]
+     (stmt st (decl-type st type) " " result (if type "" " = SK_NIL") ";")
+     (let [branch (fn [n] (if type (emit-as st n type) (emit-tail st n)))
+           then-recur (atom false)
+           else-recur (atom false)]
+       (with-block st (str "if (" test ") {")
+         (fn [] (let [v (branch (:then node))]
+                  (if (= v :recur) (reset! then-recur true) (stmt st result " = " v ";")))))
+       (with-block st "else {"
+         (fn [] (let [v (branch (:else node))]
+                  (if (= v :recur) (reset! else-recur true) (stmt st result " = " v ";")))))
+       (if (and @then-recur @else-recur) :recur result)))))
+
+;;; loop* and recur. A recur target is a label plus the C names of its locals.
+
+(defn- emit-loop
+  "loop*; with type, its value is computed as that static type."
+  ([st node] (emit-loop st node nil))
+  ([st node type]
+   (emit-let st (:bindings node))
+   (let [label (fresh st "loop")
+         result (fresh st "t")
+         locals (mapv first (:bindings node))]
+     (stmt st (decl-type st type) " " result (if type "" " = SK_NIL") ";")
+     (stmt st label ": ;")
+     (stmt st "SK_POLL();")
+     (let [inner (assoc-in st [:targets (:id node)]
+                           {:label label :names (mapv (fn [l] (get-local st l)) locals)
+                            :locals locals :frames (:frames st)})
+           v (if type (emit-as inner (:body node) type) (emit-tail inner (:body node)))]
+       (when-not (= v :recur) (stmt st result " = " v ";")))
+     result)))
+
+(defn- emit-recur [st node]
+  (let [target (or (get (:targets st) (:target node))
+                   (unsupported node "recur outside its loop or function"))
+        ;; Each value is computed first, as the local it goes to stores it.
+        values (mapv (fn [a l]
+                       (let [v (local-store st l a)
+                             type (local-static-type st l)]
+                         (if (= v :recur)
+                           (if type "0" "SK_NIL")
+                           (typed-temp st v type))))
+                     (:args node) (:locals target))
+        ;; recur can leave blocks (block* passes tail position through): pop them.
+        left (take (- (count (:frames st)) (count (:frames target))) (:frames st))]
+    (when (seq left)
+      (stmt st "sk_frame_pop(&" (last left) ");"))
+    (doseq [[nm v] (map vector (:names target) values)]
+      (stmt st nm " = " v ";"))
+    (stmt st "goto " (:label target) ";")
+    :recur))
+
+;;; Functions and closures
+
+(defn- free-locals
+  "The locals fn-node refers to but does not bind (its captured values), in order of
+first use. Locals have unique ids, so binding is a set, not a scope. The block tags of
+enclosing blocks it returns from count as locals: it captures their tokens."
+  [fn-node]
+  (let [bound (atom #{})
+        refs (atom [])
+        seen (atom #{})
+        bind (fn [l] (swap! bound conj (id-of l)))
+        use (fn [l] (when-not (contains? @seen (id-of l))
+                      (swap! seen conj (id-of l))
+                      (swap! refs conj l)))
+        walk (fn walk [n]
+               (case (:op n)
+                 (:const :var-ref) nil
+                 :local-ref (use (:local n))
+                 :fn (do (when (:self n) (bind (:self n)))
+                         (doseq [a (:arities n)]
+                           (doseq [p (:params a)] (bind p))
+                           (when (:rest a) (bind (:rest a)))
+                           (walk (:body a))))
+                 (:let :loop) (do (doseq [[l i] (:bindings n)] (bind l) (walk i))
+                                  (walk (:body n)))
+                 :letfn (do (doseq [[l] (:bindings n)] (bind l))
+                            (doseq [[_ f] (:bindings n)] (walk f))
+                            (walk (:body n)))
+                 :set (do (use (:local n)) (walk (:value n)))
+                 :block (do (bind (:tag n)) (walk (:body n)))
+                 :return-from (do (use (:tag n)) (walk (:value n)))
+                 :let-values (do (doseq [[ls i] (:bindings n)]
+                                   (doseq [l ls] (bind l))
+                                   (walk i))
+                                 (walk (:body n)))
+                 (doseq [c (node-children n)] (walk c))))]
+    (walk fn-node)
+    (filterv (fn [l] (not (contains? @bound (id-of l)))) @refs)))
+
+(defn- uses-setjmp?
+  "True if node, outside nested functions, has a block* or unwind-protect."
+  [node]
+  (or (contains? #{:block :unwind-protect} (:op node))
+      (boolean (some uses-setjmp? (node-children node)))))
+
+(defn- emit-arity [st arity]
+  (let [n (count (:params arity))
+        rest-local (:rest arity)]
+    (with-block st (str (if rest-local "if (argc >= " "if (argc == ") n ") {")
+      (fn []
+        ;; A parameter with a declared type is checked and unboxed on entry.
+        (doseq [[i p] (map-indexed vector (:params arity))]
+          (let [type (local-static-type st p)]
+            (stmt st (decl-type st type) " " (bind-local st p) " = "
+                  (unbox st (str "argv[" i "]") type arity) ";")
+            (note-array-count st p (get-local st p))))
+        (when rest-local
+          (stmt st (value-type st) " " (bind-local st rest-local) " = sk_rest_list(argc, argv, "
+                n ");"))
+        (let [label (fresh st "top")
+              locals (if rest-local (conj (vec (:params arity)) rest-local) (vec (:params arity)))
+              names (mapv (fn [p] (get-local st p)) locals)]
+          (stmt st label ": ;")
+          (stmt st "SK_POLL();")
+          ;; A function's values are those of its body.
+          (let [v (emit (-> st
+                            (assoc-in [:targets (:id arity)]
+                                      {:label label :names names :locals locals
+                                       :frames (:frames st)})
+                            (assoc :mv true))
+                        (:body arity))]
+            (when-not (= v :recur) (stmt st "return " v ";"))))))))
+
+(defn- emit-fn
+  "Emit fn-node's C function. Returns [C expression for the function value, the locals
+it captured]. A function that captures nothing is made once, at startup."
+  [st node]
+  (let [code (fresh st "fn")
+        display (or (:name node) "fn")
+        captured (free-locals node)
+        out (atom [])
+        fst (assoc st :ctx (make-ctx out) :targets {} :frames ())]
+    (swap! (:ctx fst) assoc :volatile
+           (boolean (some (fn [a] (uses-setjmp? (:body a))) (:arities node))))
+    (note-parameter-types fst (:arities node))
+    (doseq [a (:arities node)] (infer-locals fst (:body a)))
+    (when (:self node) (set-local! fst (:self node) "self"))
+    (doseq [[i l] (map-indexed vector captured)]
+      (set-local! fst l (str "SK_CAPTURED(self, " i ")"))
+      (swap! (:ctx fst) update :captured conj (id-of l)))
+    (swap! out conj (str "static sk_value " code
+                         "(sk_value self, uint32_t argc, const sk_value *argv) {\n"))
+    (stmt fst "(void)self; (void)argv;")
+    (doseq [arity (:arities node)] (emit-arity fst arity))
+    (stmt fst "return sk_arity_error(self, argc, " (location-literal node) ");")
+    (swap! out conj "}\n")
+    (swap! (:unit st) (fn [u] (-> u
+                                  (update :prototypes conj
+                                          (str "static sk_value " code "(sk_value self, "
+                                               "uint32_t argc, const sk_value *argv);"))
+                                  (update :functions conj (concat-strings @out)))))
+    (if (empty? captured)
+      (let [fobj (fresh st "fobj")]
+        (swap! (:unit st) update :fn-objects conj [fobj code display])
+        [fobj []])
+      [(temp st (str "sk_closure(" code ", " (c-string-literal display) ", " (count captured)
+                     ", (const sk_value[]){"
+                     (join ", " (mapv (fn [l]
+                                        (box st (or (get-local st l)
+                                                    (unsupported node "internal error: "
+                                                                 (or (:local/name l)
+                                                                     (:tag/name l))
+                                                                 " is not in scope"))
+                                             (when (:local/id l) (local-static-type st l))))
+                                      captured))
+                     "})"))
+       captured])))
+
+(defn- emit-letfn
+  "letfn: make each closure with nil for the letfn locals it uses, then fill those in,
+so the functions can call each other."
+  [st node]
+  (let [bindings (:bindings node)]
+    (doseq [[local] bindings]
+      (stmt st (value-type st) " " (bind-local st local) " = SK_NIL;"))
+    (let [made (mapv (fn [[local f]]
+                       (let [[expr captured] (emit-fn st f)]
+                         (stmt st (get-local st local) " = " expr ";")
+                         [local captured]))
+                     bindings)]
+      (doseq [[local captured] made
+              [i c] (map-indexed vector captured)]
+        (when (some (fn [[l]] (= (id-of l) (id-of c))) bindings)
+          (stmt st "sk_closure_set(" (get-local st local) ", " i ", " (get-local st c) ");"))))
+    (emit-tail st (:body node))))
+
+;;; Non-local exits and conditions (M1.5, D-047). Frames live in the C function's own
+;;; stack frame; runtime/src/cond.zig keeps them on a per-thread chain.
+
+(defn- emit-block
+  "block*: a frame that return-from* unwinds to. Its token (the frame's serial) is what
+closures capture to return from it."
+  [st node]
+  (let [frame (fresh st "fr")
+        result (fresh st "t")
+        tag (:tag node)]
+    (stmt st "sk_frame " frame ";")
+    (stmt st "sk_frame_push(&" frame ", SK_FRAME_BLOCK);")
+    (stmt st (value-type st) " " result " = SK_NIL;")
+    (swap! (:ctx st) (fn [c] (-> c
+                                 (assoc-in [:blocks (id-of tag)] frame)
+                                 (assoc-in [:locals (id-of tag)]
+                                           (str "SK_BLOCK_TOKEN(" frame ")")))))
+    (swap! (:unit st) assoc-in [:block-mv (id-of tag)] (:tail-mv st))
+    (with-block st (str "if (SK_SETJMP(" frame ".jb) == 0) {")
+      (fn [] (let [v (emit-tail (update st :frames conj frame) (:body node))]
+               (when-not (= v :recur)
+                 (stmt st result " = " v ";")
+                 (stmt st "sk_frame_pop(&" frame ");")))))
+    (with-block st "else {"
+      (fn [] (stmt st result " = " frame ".value;")
+        (stmt st "sk_frame_pop(&" frame ");")))
+    result))
+
+(defn- emit-return-from [st node]
+  (let [tag (:tag node)
+        v (emit (assoc st :mv (get-in @(:unit st) [:block-mv (id-of tag)])) (:value node))
+        v (if (= v :recur) "SK_NIL" v)
+        frame (get (:blocks @(:ctx st)) (id-of tag))]
+    (if frame
+      (stmt st "sk_unwind_to(&" frame ", " v ");")
+      (stmt st "sk_return_from("
+            (or (get-local st tag)
+                (unsupported node "internal error: no token for the block " (:tag/name tag)))
+            ", " v ");"))
+    "SK_NIL"))
+
+(defn- emit-unwind-protect
+  "The body runs under an unwind-protect frame. Whether it finishes or an unwind passes
+through, the frame is popped and the cleanup runs; an unwind then continues."
+  [st node]
+  (let [frame (fresh st "fr")
+        unwinding (fresh st "uw")
+        result (fresh st "t")]
+    (stmt st "sk_frame " frame ";")
+    (stmt st "sk_frame_push(&" frame ", SK_FRAME_UNWIND);")
+    (stmt st "volatile int " unwinding " = 0;")
+    (stmt st (value-type st) " " result " = SK_NIL;")
+    (with-block st (str "if (SK_SETJMP(" frame ".jb) == 0) {")
+      (fn [] (let [v (emit-tail (update st :frames conj frame) (:body node))]
+               (when-not (= v :recur) (stmt st result " = " v ";"))
+               (stmt st "sk_frame_pop(&" frame ");"))))
+    (with-block st "else {"
+      (fn [] (stmt st unwinding " = 1;")))
+    ;; The cleanup keeps the values of the body, or of the unwind it interrupted.
+    (let [saved (fresh st "mvs")
+          saved-count (fresh st "mvn")]
+      (stmt st "sk_value " saved "[SK_MV_MAX]; int32_t " saved-count " = sk_mv_count;")
+      (stmt st "if (" saved-count " > 0) memcpy(" saved ", sk_mv_values, sizeof(sk_value) * "
+            "(size_t)" saved-count ");")
+      (emit st (:cleanup node))
+      (stmt st "sk_mv_count = " saved-count ";")
+      (stmt st "if (" saved-count " > 0) memcpy(sk_mv_values, " saved ", sizeof(sk_value) * "
+            "(size_t)" saved-count ");"))
+    (stmt st "if (" unwinding ") sk_continue_unwind(&" frame ");")
+    result))
+
+(defn- emit-cluster-body
+  "Emit body inside the cluster frame (already pushed), pop it and return the value."
+  [st frame body]
+  (let [result (fresh st "t")]
+    (stmt st (value-type st) " " result " = SK_NIL;")
+    (let [v (emit-tail (update st :frames conj frame) body)]
+      (when-not (= v :recur) (stmt st result " = " v ";"))
+      (stmt st "sk_frame_pop(&" frame ");")
+      result)))
+
+(defn- every-other [xs start]
+  (loop [i start out []]
+    (if (< i (count xs)) (recur (+ i 2) (conj out (nth xs i))) out)))
+
+(defn- emit-handler-bind
+  "handler-bind*: the types and handlers are evaluated in order, then pushed as a cluster."
+  [st node]
+  (let [bindings (:bindings node)]
+    (if (empty? bindings)
+      (emit-tail st (:body node))
+      (let [pairs (emit-args st (vec (mapcat identity bindings)))
+            types (fresh st "ty")
+            fns (fresh st "hf")
+            frame (fresh st "fr")]
+        (stmt st "sk_value " types "[] = {" (join ", " (every-other pairs 0)) "};")
+        (stmt st "const sk_value " fns "[] = {" (join ", " (every-other pairs 1)) "};")
+        (stmt st "sk_frame " frame ";")
+        (stmt st "sk_frame_push_handlers(&" frame ", " (count bindings) ", " types ", " fns
+              ");")
+        (emit-cluster-body st frame (:body node))))))
+
+(defn- emit-restart-bind
+  "restart-bind*: names are symbols; functions and reports are evaluated in order."
+  [st node]
+  (let [bindings (:bindings node)]
+    (if (empty? bindings)
+      (emit-tail st (:body node))
+      (let [names (mapv (fn [b] (constant-expr st (first b) node)) bindings)
+            values (emit-args st (vec (mapcat rest bindings)))
+            rn (fresh st "rn")
+            rf (fresh st "rf")
+            rr (fresh st "rr")
+            frame (fresh st "fr")]
+        (stmt st "sk_value " rn "[] = {" (join ", " names) "};")
+        (stmt st "const sk_value " rf "[] = {" (join ", " (every-other values 0)) "};")
+        (stmt st "const sk_value " rr "[] = {" (join ", " (every-other values 1)) "};")
+        (stmt st "sk_frame " frame ";")
+        (stmt st "sk_frame_push_restarts(&" frame ", " (count bindings) ", " rn ", " rf ", " rr
+              ");")
+        (emit-cluster-body st frame (:body node))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Calls
+
+(def ^:private builtin-class-names
+  "The built-in class names of DESIGN §8.3 (besides condition, error and warning), which
+%class finds unqualified."
+  #{"any" "object" "nil-class" "integer" "float" "f32" "f64" "number" "char" "string"
+    "keyword" "symbol" "vector" "hash-map" "hash-set" "list" "seq" "fn" "atom"})
+
+(defn- const-node [loc value] {:op :const :loc loc :value value})
+
+(defn- core-ref? [f nm]
+  (and (= :var-ref (:op f)) (core-var? (:var f)) (= (%var-name (:var f)) nm)))
+
+(defn- qualify-condition-type-call
+  "args, with the symbol in a call (skein.core/%condition-type 'name \"ns\") or
+(skein.core/%class 'name \"ns\") qualified by the namespace its var is in, which the
+compiler knows from the program's ns form and requires, so the runtime can find the type
+or class by its full name (D-047, D-054)."
+  [f args]
+  (if (and (or (core-ref? f "%condition-type") (core-ref? f "%class"))
+           (= (count args) 2) (= :const (:op (first args))) (= :const (:op (second args)))
+           (symbol? (:value (first args))) (string? (:value (second args))))
+    (let [sym (:value (first args))
+          ns (%find-namespace (:value (second args)))
+          qualified (cond (nil? ns) sym
+                          (namespace sym)
+                          (let [target (%find-alias ns (namespace sym))]
+                            (if target (symbol (%namespace-name target) (name sym)) sym))
+                          (contains? #{"condition" "error" "warning"} (name sym)) sym
+                          (and (core-ref? f "%class") (contains? builtin-class-names (name sym)))
+                          sym
+                          :else (let [var (%resolve-var ns (name sym))]
+                                  (if var (symbol (var-ns-name var) (name sym)) sym)))]
+      (into [(const-node (:loc (first args)) qualified)] (rest args)))
+    args))
+
+(defn- core-call?
+  "True if f is skein.core/nm called with n arguments, the first a quoted symbol."
+  [f nm args n]
+  (and (core-ref? f nm) (= (count args) n) (= :const (:op (first args)))
+       (symbol? (:value (first args)))))
+
+(defn- define-method-call? [f args]
+  (and (core-ref? f "%define-method")
+       (= (count args) 6) (= :const (:op (first args))) (= :const (:op (second args)))
+       (symbol? (:value (first args))) (string? (:value (second args)))))
+
+(defn- define-method-target
+  "For (skein.core/%define-method 'name \"ns\" ...), a C expression for the generic
+function's var, or for a skein.core generic function itself. Phase 0 looks the name up
+when the method is defined; natively it is resolved here, from the image the compiler
+runs in (D-054): a var that holds a generic function, else the namespace's own var."
+  [st node args]
+  (let [sym (:value (first args))
+        ns (%ensure-namespace (:value (second args)))
+        found (if (namespace sym)
+                (let [target (or (%find-alias ns (namespace sym))
+                                 (%find-namespace (namespace sym)))]
+                  (when target (%find-own-var target (name sym))))
+                (%resolve-var ns (name sym)))
+        var (if (and found (%generic? (%var-value found)))
+              found
+              (%intern-var ns (name sym)))]
+    (if (core-var? var)
+      (native-core-function st node var)
+      (var-c-name st var))))
+
+(defn- index-of-char [s ch]
+  (loop [i 0 cs (seq s)]
+    (cond (nil? cs) nil
+          (= (first cs) ch) i
+          :else (recur (inc i) (next cs)))))
+
+(defn- qualified-type-symbol
+  "sym, a type in a make-array or a struct field, qualified if it names a struct (by its
+definition in the image) so the runtime finds it by its full name (D-055)."
+  [st sym]
+  (let [def-name (when (nil? (namespace sym)) (%struct-def-name sym (:ns st)))]
+    (if def-name
+      (let [slash (index-of-char def-name \/)]
+        (symbol (subs def-name 0 slash) (subs def-name (inc slash))))
+      sym)))
+
+(defn- qualified-fields
+  "A struct's fields constant ([[name type]...]) with struct types qualified."
+  [st fields]
+  (mapv (fn [f]
+          (let [items (vec f)]
+            (if (and (second items) (symbol? (second items)))
+              [(first items) (qualified-type-symbol st (second items))]
+              items)))
+        fields))
+
+(defn- set-struct-var!
+  "If the namespace being compiled has the var nm (made when the definition ran at compile
+time), set it to expr."
+  [st nm expr]
+  (when-let [var (%find-own-var (:ns st) nm)]
+    (stmt st "sk_var_set(" (var-c-name st var) ", " expr ");")))
+
+(defn- emit-define-struct
+  "(%define-struct 'name value? '[[field type]...]): define the struct natively, then set
+the vars Phase 0 defines for it, which the image made when the form ran at compile time:
+the constructor, name? and name-field (D-055)."
+  [st node args]
+  (let [nm (:value (first args))
+        short (name nm)
+        fields (seq (:value (nth args 2)))
+        def (temp st (str "sk_define_struct(" (constant-expr st nm node) ", "
+                          (emit st (second args)) ", "
+                          (constant-expr st (qualified-fields st (:value (nth args 2))) node)
+                          ")"))]
+    (set-struct-var! st short (str "sk_struct_constructor(" def ")"))
+    (set-struct-var! st (str short "?") (str "sk_struct_predicate(" def ")"))
+    (doseq [[i f] (map-indexed vector fields)]
+      (set-struct-var! st (str short "-" (name (nth f 0)))
+                       (str "sk_struct_accessor(" def ", " i ")")))
+    (single-value st "SK_NIL")))
+
+(defn- emit-define-soa
+  "(%define-soa 'name '[[field type]...]): as emit-define-struct, for defsoa's vars: the
+type, make-name and a function per field."
+  [st node args]
+  (let [nm (:value (first args))
+        short (name nm)
+        fields (seq (:value (second args)))
+        def (temp st (str "sk_define_soa(" (constant-expr st nm node) ", "
+                          (constant-expr st (qualified-fields st (:value (second args))) node)
+                          ")"))]
+    (set-struct-var! st short def)
+    (set-struct-var! st (str "make-" short) (str "sk_soa_maker(" def ")"))
+    (doseq [[i f] (map-indexed vector fields)]
+      (set-struct-var! st (name (nth f 0)) (str "sk_soa_field(" def ", " i ")")))
+    (single-value st "SK_NIL")))
+
+(def ^:private inline-primitives
+  "skein.core functions whose calls compile to inline C (other core functions are called
+through their function objects)."
+  #{"+" "*" "-" "/" "<" ">" "<=" ">=" "==" "=" "not=" "inc" "dec" "zero?" "pos?" "neg?"
+    "not" "nil?" "identical?" "println" "print" "prn" "pr"})
+
+(defn- fold [f values]
+  (reduce (fn [acc v] (str f "(" acc ", " v ")")) values))
+
+(defn- chain
+  "(op a b c) as (op a b) and (op b c), all true."
+  [f values]
+  (if (nil? (nnext values))
+    (str f "(" (first values) ", " (second values) ")")
+    (str "SK_BOOL("
+         (join " && " (map (fn [[a b]] (str "SK_TRUTHY(" f "(" a ", " b "))"))
+                           (partition 2 1 values)))
+         ")")))
+
+(defn- check-arity [node nm n min max]
+  (when-not (and (<= min n) (or (nil? max) (<= n max)))
+    (unsupported node "wrong number of arguments (" n ") passed to skein.core/" nm)))
+
+(def ^:private comparison-functions
+  {"<" "sk_lt" ">" "sk_gt" "<=" "sk_le" ">=" "sk_ge" "==" "sk_num_eq" "=" "sk_equal"})
+
+(defn- emit-primitive [st node nm args]
+  (let [n (count args)
+        values (emit-args st args)
+        one (fn [] (check-arity node nm n 1 1) (first values))
+        flag (fn [b] (if b "1" "0"))
+        print-call (fn [readably newline]
+                     (if (seq values)
+                       (let [array (fresh st "args")]
+                         (stmt st "const sk_value " array "[] = {" (join ", " values) "};")
+                         (str "sk_print(" n ", " array ", " (flag readably) ", " (flag newline)
+                              ")"))
+                       (str "sk_print(0, NULL, " (flag readably) ", " (flag newline) ")")))]
+    (temp st
+          (case nm
+            "+" (case n
+                  0 "SK_FIXNUM(0)"
+                  1 (str "sk_check_number(\"+\", " (first values) ")")
+                  (fold "sk_add" values))
+            "*" (case n
+                  0 "SK_FIXNUM(1)"
+                  1 (str "sk_check_number(\"*\", " (first values) ")")
+                  (fold "sk_mul" values))
+            "-" (do (check-arity node nm n 1 nil)
+                    (if (= n 1)
+                      (str "sk_mul(SK_FIXNUM(-1), " (first values) ")")
+                      (fold "sk_sub" values)))
+            ;; Phase 0 inlines / with exactly two arguments, so that is all it accepts.
+            "/" (do (check-arity node nm n 2 2) (fold "sk_div" values))
+            ("<" ">" "<=" ">=" "==" "=")
+            (do (check-arity node nm n 1 nil)
+                (if (= n 1) "SK_TRUE" (chain (get comparison-functions nm) values)))
+            "not=" (do (check-arity node nm n 1 nil)
+                       (if (= n 1)
+                         "SK_FALSE"
+                         (str "SK_BOOL(!SK_TRUTHY(" (chain "sk_equal" values) "))")))
+            "inc" (str "sk_add(" (one) ", SK_FIXNUM(1))")
+            "dec" (str "sk_sub(" (one) ", SK_FIXNUM(1))")
+            "zero?" (str "sk_num_eq(" (one) ", SK_FIXNUM(0))")
+            "pos?" (str "sk_gt(" (one) ", SK_FIXNUM(0))")
+            "neg?" (str "sk_lt(" (one) ", SK_FIXNUM(0))")
+            "not" (str "SK_BOOL(!SK_TRUTHY(" (one) "))")
+            "nil?" (str "SK_BOOL(" (one) " == SK_NIL)")
+            "identical?" (do (check-arity node nm n 2 2)
+                             (str "SK_BOOL(" (first values) " == " (second values) ")"))
+            "println" (print-call false true)
+            "print" (print-call false false)
+            "prn" (print-call true true)
+            "pr" (print-call true false)
+            (unsupported node "the native backend can't call skein.core/" nm " yet")))))
+
+(defn- emit-call [st node]
+  (let [f (:fn node)
+        args (qualify-condition-type-call f (:args node))]
+    (cond (core-call? f "%define-struct" args 3) (emit-define-struct st node args)
+          (core-call? f "%define-soa" args 2) (emit-define-soa st node args)
+          :else
+          (let [args (if (core-call? f "%make-array" args 2)
+                       (into [(const-node (:loc (first args))
+                                          (qualified-type-symbol st (:value (first args))))]
+                             (rest args))
+                       args)]
+            (cond (define-method-call? f args)
+                  (let [target (define-method-target st node args)
+                        more (emit-args st (drop 2 args))]
+                    (single-value st (temp st (str "sk_define_method(" target
+                                                   (concat-strings (map (fn [a] (str ", " a))
+                                                                        more))
+                                                   ")"))))
+                  (and (= :var-ref (:op f)) (core-var? (:var f))
+                       (contains? inline-primitives (%var-name (:var f))))
+                  (single-value st (emit-primitive st node (%var-name (:var f)) args))
+                  :else
+                  (let [fv (emit st f)
+                        values (emit-args st args)]
+                    ;; A compiled callee sets the values it returns; the runtime's
+                    ;; functions don't, so start from one value.
+                    (when (:tail-mv st) (stmt st "sk_mv_reset();"))
+                    (temp st (if (seq values)
+                               (let [array (fresh st "args")]
+                                 (stmt st "const sk_value " array "[] = {" (join ", " values)
+                                       "};")
+                                 (str "sk_call(" fv ", " (count values) ", " array ")"))
+                               (str "sk_call(" fv ", 0, NULL)")))))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Typed code (D-056)
+
+(defn- emit-typed-primitive
+  "A call to a skein.core primitive whose arguments have static types (primitive-type)."
+  [st node type]
+  (let [nm (primitive-name node)
+        args (:args node)
+        types (mapv (fn [a] (node-type st a)) args)
+        checked (> (:safety st) 0)
+        is (fn [& names] (some #{nm} names))
+        operands (fn [ty] (mapv (fn [a] (typed-temp st (emit-as st a ty) ty)) args))
+        fold (fn [template vals]
+               (reduce (fn [acc v] (template acc v)) vals))]
+    (cond
+      (is "+" "*" "-")
+      (let [vals (operands type)
+            op (cond (is "+") "+" (is "*") "*" :else "-")]
+        (cond (and (is "-") (= (count vals) 1))
+              (if (and (= type :int) checked)
+                (str "sk_sub_i64(0, " (first vals) ")")
+                (str "(-" (first vals) ")"))
+              (= (count vals) 1) (first vals)
+              (= type :int)
+              (if checked
+                (let [f (cond (is "+") "add" (is "*") "mul" :else "sub")]
+                  (fold (fn [a b] (str "sk_" f "_i64(" a ", " b ")")) vals))
+                (fold (fn [a b] (str "((int64_t)((uint64_t)" a " " op " (uint64_t)" b "))"))
+                      vals))
+              :else (fold (fn [a b] (str "(" a " " op " " b ")")) vals)))
+      (is "/")
+      (let [vals (operands type)]
+        (fold (if checked
+                (fn [a b] (str "sk_div_" (name type) "(" a ", " b ")"))
+                (fn [a b] (str "(" a " / " b ")")))
+              vals))
+      (is "inc" "dec")
+      (let [v (first (operands type))
+            sign (if (is "inc") "+" "-")]
+        (if (and (= type :int) checked)
+          (str "sk_" (if (is "inc") "add" "sub") "_i64(" v ", 1)")
+          (str "(" v " " sign " 1)")))
+      (is "<" ">" "<=" ">=" "==")
+      (let [vals (operands (contagion types))]
+        (str "(" (join " && " (map (fn [[a b]] (str a " " nm " " b)) (partition 2 1 vals)))
+             ")"))
+      (is "zero?" "pos?" "neg?")
+      (let [v (first (operands (first types)))]
+        (str "(" v " " (cond (is "zero?") "==" (is "pos?") ">" :else "<") " 0)"))
+      (is "not") (str "(!" (emit-as st (first args) :bool) ")")
+      (is "sqrt")
+      (let [v (first (operands type))]
+        (str (if (= type :f32) "sqrtf" "sqrt") "(" v ")"))
+      (is "aget" "aset!" "count")
+      (let [count-var (array-count-var st (first args))
+            array (typed-temp st (emit-as st (first args) (first types)) nil)
+            ;; An array's length never changes, so a typed local's is read once.
+            cnt (or count-var (str "sk_prim_count(" array ")"))
+            element (name (second (first types)))]
+        (cond (is "count") cnt
+              (is "aget")
+              (let [i (typed-temp st (emit-as st (second args) :int) :int)]
+                (when checked (stmt st "sk_index_check(" i ", " cnt ");"))
+                (str "sk_aget_" element "_unchecked(" array ", " i ")"))
+              :else
+              (let [i (typed-temp st (emit-as st (second args) :int) :int)
+                    v (typed-temp st (emit-as st (nth args 2) type) type)]
+                (when checked (stmt st "sk_index_check(" i ", " cnt ");"))
+                (str "sk_aset_" element "_unchecked(" array ", " i ", " v ")"))))
+      :else (unsupported node "internal error: no typed form of skein.core/" nm))))
+
+(defn- emit-typed
+  "Emit node, whose static type is type; return a C expression of type's C type."
+  [st node type]
+  (let [st (assoc st :tail-mv false)]
+    (case (:op node)
+      :const (typed-literal (:value node) type)
+      :local-ref (get-local st (:local node))
+      :the (emit-as st (:expr node) type true)
+      :locally (emit-typed (assoc st :safety (policy-safety st (:policy node))) (:body node)
+                           type)
+      :let (do (emit-let st (:bindings node))
+               (emit-typed st (:body node) type))
+      :do (loop [forms (seq (:forms node))]
+            (when forms
+              (if (next forms)
+                (do (emit-as st (first forms) :void) (recur (next forms)))
+                (emit-typed st (first forms) type))))
+      :if (emit-if st node type)
+      :loop (emit-loop st node type)
+      :call (emit-typed-primitive st node type))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Dispatch
+
+(defn- emit-node [st node]
+  (case (:op node)
+    :const (single-value st (constant-expr st (:value node) node))
+    :local-ref
+    (let [local (:local node)]
+      (single-value st (box st (or (get-local st local)
+                                   (unsupported node "internal error: no C variable for the "
+                                                "local " (:local/name local)))
+                            (local-static-type st local))))
+    :var-ref (single-value st (emit-var-ref st node))
+    :if (emit-if st node)
+    :do (loop [forms (seq (:forms node)) value "SK_NIL"]
+          (if forms
+            (let [v (if (next forms)
+                      (emit-as st (first forms) :void)
+                      (emit-tail st (first forms)))]
+              (if (= v :recur) v (recur (next forms) v)))
+            value))
+    ;; def returns the var, as in Phase 0.
+    :def (let [nm (var-c-name st (:var node))]
+           (when (:init node)
+             (let [init (emit st (:init node))]
+               (stmt st "sk_var_set(" nm ", " init ");")))
+           (single-value st nm))
+    :fn (single-value st (first (emit-fn st node)))
+    :let (do (emit-let st (:bindings node))
+             (emit-tail st (:body node)))
+    :loop (emit-loop st node)
+    :recur (emit-recur st node)
+    ;; A primitive on typed values is computed unboxed, then boxed.
+    :call (let [type (node-type st node)]
+            (if (and (scalar-type? type) (not (overflowing? st node)))
+              (single-value st (box st (emit-typed st node type) type))
+              (emit-call st node)))
+    :the (let [type (declared-type (:type node))]
+           (if (scalar-type? type)
+             (single-value st (box st (emit-as st (:expr node) type true) type))
+             (emit-tail st (:expr node))))
+    :locally (emit-tail (assoc st :safety (policy-safety st (:policy node))) (:body node))
+    :letfn (emit-letfn st node)
+    :set (let [local (:local node)]
+           (when (contains? (:captured @(:ctx st)) (:local/id local))
+             (unsupported node "a closure can't set! the ^:mutable local " (:local/name local)
+                          " of an enclosing function yet"))
+           (let [v (local-store st local (:value node))]
+             (stmt st (get-local st local) " = " v ";")
+             (single-value st (box st v (local-static-type st local)))))
+    :block (emit-block st node)
+    :return-from (emit-return-from st node)
+    :unwind-protect (emit-unwind-protect st node)
+    :handler-bind (emit-handler-bind st node)
+    :restart-bind (emit-restart-bind st node)
+    :throw-condition (let [c (emit st (:condition node))]
+                       (stmt st "sk_throw_condition(" c ");")
+                       "SK_NIL")
+    :values (emit-values st node)
+    :let-values (emit-let-values st node)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Top-level forms and the whole program
+
+(defn emit-toplevel
+  "Emit the Core IR node of a top-level form of the namespace ns into unit's program
+body."
+  [unit node ns]
+  (let [st {:unit unit :ctx (make-ctx (:body @unit)) :mv false :tail-mv false :targets {}
+            :frames () :safety 1 :ns ns}]
+    (swap! (:ctx st) assoc :volatile (uses-setjmp? node))
+    (infer-locals st node)
+    (with-block st "{"
+      (fn [] (let [v (emit st node)]
+               (when-not (= v :recur) (stmt st "(void)" v ";")))))))
+
+(defn program-text
+  "The C text of the program in unit, made from the file source-name. If main-var (the
+-main var, or nil) was compiled, main calls it with the command-line arguments."
+  [unit source-name main-var]
+  (let [u @unit
+        main-c (when main-var (get (:vars u) main-var))
+        decls (into {} (map (fn [[nm ns var-name]] [nm (str ns "/" var-name)]) (:var-decls u)))
+        globals (vec (concat (map first (:var-decls u)) (map first (:constants u))
+                             (map first (:fn-objects u))))
+        out (atom [])
+        put (fn [& parts] (swap! out conj (concat-strings parts)))]
+    (put "/* Generated by skein build from " (c-comment source-name) ". Do not edit. */\n\n")
+    (put "#include \"skein.h\"\n#include <string.h>\n\n")
+    (put "static double sk_bits_f64(uint64_t bits) {\n  double d;\n  "
+         "memcpy(&d, &bits, sizeof d);\n  return d;\n}\n\n")
+    (put "static float sk_bits_f32(uint32_t bits) {\n  float f;\n  "
+         "memcpy(&f, &bits, sizeof f);\n  return f;\n}\n\n")
+    ;; Every global value lives in one array, registered with the garbage collector as
+    ;; roots, so it keeps its objects alive and is updated when they move.
+    (put "static sk_value sk_globals[" (max 1 (count globals)) "];\n")
+    (doseq [[i nm] (map-indexed vector globals)]
+      (put "#define " nm " sk_globals[" i "]"
+           (if-let [d (get decls nm)] (str " /* " (c-comment d) " */") "")
+           "\n"))
+    (put "\n")
+    (doseq [p (:prototypes u)] (put p "\n"))
+    (put "\n")
+    (doseq [f (:functions u)] (put f "\n"))
+    (put "static void sk_program_init(void) {\n")
+    (put "  for (size_t i = 0; i < sizeof sk_globals / sizeof sk_globals[0]; i++) "
+         "sk_globals[i] = SK_UNBOUND;\n")
+    (put "  sk_register_roots(sk_globals, sizeof sk_globals / sizeof sk_globals[0]);\n")
+    (doseq [[nm ns var-name] (:var-decls u)]
+      (put "  " nm " = sk_var(" (c-string-literal ns) ", " (c-string-literal var-name) ");\n"))
+    (doseq [[nm init] (:constants u)]
+      (put "  " nm " = " init ";\n"))
+    (doseq [[fobj code display] (:fn-objects u)]
+      (put "  " fobj " = sk_fn(" code ", " (c-string-literal display) ");\n"))
+    (put "}\n\nstatic void sk_program_body(void) {\n" (concat-strings @(:body u)) "}\n\n")
+    (put "int main(int argc, char **argv) {\n  (void)argc;\n  (void)argv;\n  "
+         "sk_init();\n  sk_program_init();\n  sk_program_body();\n")
+    ;; -main gets the command-line arguments, as `skein run` passes them.
+    (when main-c
+      (put "  if (sk_var_value(" main-c ") != SK_UNBOUND) {\n    "
+           "sk_value main_args[64];\n    uint32_t n = 0;\n    "
+           "for (int i = 1; i < argc && n < 64; i++) main_args[n++] = "
+           "sk_string(argv[i], strlen(argv[i]));\n    "
+           "sk_call(sk_var_value(" main-c "), n, main_args);\n  }\n"))
+    (put "  sk_finish();\n  return 0;\n}\n")
+    (concat-strings @out)))

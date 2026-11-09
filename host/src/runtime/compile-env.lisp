@@ -84,3 +84,25 @@ received to that form's metadata (as data), for %syntax-meta.")
   (bool (and (typep c 'skein-error) (skein-error-location c))))
 
 (defcore "%skein-error?" (c) (bool (typep c 'skein-error)))
+
+;;; For the C backend in Skein (lib/skein/compiler/c.skn, M1.9 step 2)
+
+(defcore "%ensure-namespace" (name) (ensure-namespace name))
+
+(defcore "%generic?" (x)
+  ;; True if X is a generic function.
+  (bool (typep x 'skein-generic)))
+
+(defcore "%struct-def-name" (sym ns)
+  ;; The qualified name ("ns/name") of the struct type that the symbol SYM names in the
+  ;; namespace NS, or nil.
+  (let ((def (find-struct-def sym (namespace-name ns))))
+    (and def (struct-def-name def))))
+
+(defcore "%f64-bits" (x)
+  ;; The IEEE 754 bits of the f64 X, as a non-negative integer.
+  (ldb (byte 64 0) (sb-kernel:double-float-bits x)))
+
+(defcore "%f32-bits" (x)
+  ;; The IEEE 754 bits of the f32 X, as a non-negative integer.
+  (ldb (byte 32 0) (sb-kernel:single-float-bits x)))

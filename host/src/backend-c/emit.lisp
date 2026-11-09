@@ -197,6 +197,11 @@ yet. The message names the milestone that adds it."))
 ;;; ------------------------------------------------------------------------------------
 ;;; Nodes
 
+(defvar *safety* 1
+  "The safety level of the code being emitted: 0 drops bounds and overflow checks
+(typed.lisp). Declared here, before emit-node binds it for a locally node; declared later,
+that binding was lexical, so (safety 0) was lost outside typed expressions.")
+
 (defvar *mv* nil
   "True while emitting a node whose multiple values matter (D-053): the body of a
 function, the init of a let-values*, or a tail part of such a node.")

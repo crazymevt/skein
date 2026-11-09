@@ -33,6 +33,11 @@ namespaces it requires are translated first."
              (translate-requires *current-namespace*)))
           (t (translate-compiled form)))))
 
+(defvar *translate-hook* nil
+  "For the tests of the C backend written in Skein (M1.9): a function called with :form,
+each expanded top-level form and its namespace, just before the form is emitted, and at
+the end with :program, the -main var (or NIL) and the source file's name.")
+
 (defun translate-compiled (form)
   "Translate FORM to C, expanding it; a (do ...) expansion's forms are top-level forms."
   (let* ((env (skein.expander:make-env :namespace *current-namespace*))
@@ -40,7 +45,10 @@ namespaces it requires are translated first."
     (if (skein.expander:toplevel-do-p expanded)
         (dolist (sub (rest (skein.syntax:syntax-datum expanded)))
           (translate-form sub))
-        (emit-toplevel (skein.expander:analyze-toplevel expanded *current-namespace*)))))
+        (progn
+          (when *translate-hook*
+            (funcall *translate-hook* :form expanded *current-namespace*))
+          (emit-toplevel (skein.expander:analyze-toplevel expanded *current-namespace*))))))
 
 (defun translate-requires (namespace)
   "Translate the namespaces that NAMESPACE requires at run time and the program doesn't
@@ -86,6 +94,8 @@ arguments after the top-level forms run."
     (let* ((ns (translate-source path))
            (main (skein.runtime:find-own-var ns "-main"))
            (main-c (and main (gethash main (unit-vars *unit*)))))
+      (when *translate-hook*
+        (funcall *translate-hook* :program main (file-namestring path)))
       (program-text *unit* (file-namestring path) main-c))))
 
 ;;; ------------------------------------------------------------------------------------

@@ -11,9 +11,6 @@
 
 (in-package #:skein.backend.c)
 
-(defvar *safety* 1
-  "The safety level of the code being emitted: 0 drops bounds and overflow checks.")
-
 (defun scalar-type-p (type) (member type '(:f64 :f32 :int :bool)))
 (defun numeric-type-p (type) (member type '(:f64 :f32 :int)))
 

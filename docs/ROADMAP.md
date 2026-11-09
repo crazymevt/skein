@@ -210,7 +210,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - At compile time (phase 1) it runs, in every namespace, only `ns`, `defmacro`, defs whose value is a function, and struct, class and condition definitions (D-058).
 - Steps, in order:
   1. ✅ `skein.io`: `read-file`, `write-file`, `file-exists?` and `run-process`, in Phase 0 and natively.
-  2. The C backend in Skein, running on the host on the Skein expander's IR: the same C as the Lisp backend for every example and native fixture.
+  2. ✅ The C backend in Skein, running on the host on the Skein expander's IR: the same C as the Lisp backend for every example and native fixture.
   3. The compile-time environment natively: namespaces and vars at run time, symbol copies, identity tables, calling macros, and skein.core's macros compiled into the compiler.
   4. A Core IR interpreter in Skein for phase-1 code: a program's macros and the functions they call.
   5. The driver in Skein (`skeinc build`): finding namespaces, running phase 1, writing C and running zig. On the host it gives the same C as `skein build`.
@@ -284,6 +284,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
   - Macros run at compile time: skein.core's are compiled into the compiler, and a program's own run in an interpreter (D-050).
   - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native in M1.8, before self-hosting (D-050).
+- C backend in Skein (D-059), for step 3 of M1.9: natively, the compiler needs the `%` functions it uses on the host: `%ensure-namespace`, `%generic?`, `%struct-def-name`, `%f64-bits` and `%f32-bits`, besides the expander's (`host/src/runtime/compile-env.lisp`). The lists of native skein.core functions and condition types are written in both backends until the Lisp one retires.
 - Native concurrency (D-057):
   - Tasks, nurseries and channels share one lock, and waiters poll every 20 ms; fine for Phase 1's thread pool, replaced by the fiber scheduler in Phase 2.
   - Tasks, nurseries and channels are of class `any` natively, and print as in Phase 0.

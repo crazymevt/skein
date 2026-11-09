@@ -729,3 +729,24 @@ Date: 2026-11-09 · Status: Accepted
   - A macro that reads a `def` of computed data, rather than calling a function, works in Phase 0 but not natively. The phase-1 interpreter reports it as an unbound var.
   - The C backend moves to Skein and is tested against the Lisp one, as the reader and expander were.
 
+## D-059: The C backend in Skein
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 2 of M1.9 ports the C backend (`host/src/backend-c/emit.lisp` and `typed.lisp`, about 1,400 lines) to Skein, so the native compiler can include it. It must turn the Skein expander's Core IR maps (D-049) into the same C as the Lisp backend. The Lisp backend keeps its state in special variables, which native Skein doesn't have.
+- **Decision:**
+  - **`skein.compiler.c`** in `lib/skein/compiler/c.skn` ports both files function by function, with the same messages and the condition `c-backend-error`. Its interface is `make-unit`, `emit-toplevel` (a top-level form's IR and its namespace) and `program-text`.
+  - **State as a map:** what the Lisp backend binds dynamically (`*mv*`, `*tail-mv*`, `*targets*`, `*frames*`, `*safety*`, the current namespace) is a map passed down every call and changed with `assoc`. The program being built and the function being emitted are atoms in it. Locals, block tags and recur targets are keyed by their ids.
+  - **The image:** like the expander, the backend reaches namespaces, vars, struct definitions and generic functions through skein.core's `%` functions. Step 2 adds `%ensure-namespace`, `%generic?`, `%struct-def-name`, `%f64-bits` and `%f32-bits` to Phase 0; the native compiler needs them in step 3.
+  - **Testing:**
+    - The Lisp `translate-file` calls a test hook just before it emits each top-level form; the hook runs the Skein expander and backend on that form, with the image in the same state.
+    - The two C programs must be identical once local names (`l_name_id`) and gensym numbers are renumbered: each expander numbers locals with its own counter, and the macros both call share one gensym counter.
+    - A program that can't be built must fail with the same message and location from both.
+    - This runs on every `.skn` file in the repository (33 give C, up to 1 MB of it; 7 fail the same way) and on every program the C backend tests build.
+    - The tables of native functions and condition types exist in both backends until the Lisp one retires; a test checks that they are equal.
+- **Alternatives:**
+  - Records for the state. They would pull the object system into the compiler's hot path for no gain over maps.
+  - Dynamic vars (`binding`) for the state. Native code doesn't support them yet.
+  - Comparing generated programs by running them. That is weaker than comparing their text, and much slower.
+- **Consequences:**
+  - The port found a bug in the Lisp backend: `emit.lisp` bound `*safety*` before `typed.lisp` declared it special, so `(safety 0)` from a declaration was lost outside typed expressions. The variable is now declared in `emit.lisp`, with a regression test.
+  - The compiler's own files don't build natively yet: the reader needs `%decimal-to-float` natively, and the expander needs the compile-time `%` functions (step 3).
+

@@ -41,6 +41,7 @@
   `(if (not (zig-available-p))
        (skip "zig is not installed")
        (with-program (file ,source)
+         (backends-match-p file)
          (let ((expected (phase0-output file)))
            (multiple-value-bind (out err code) (native-run file)
              (is (eql 0 code) "native exit code ~A, stderr: ~A" code err)
@@ -52,6 +53,7 @@
   `(if (not (zig-available-p))
        (skip "zig is not installed")
        (with-program (file ,source)
+         (backends-match-p file)
          (multiple-value-bind (out err code) (native-run file)
            (declare (ignore out))
            (is (eql 1 code) "expected exit code 1, got ~A" code)
@@ -61,6 +63,7 @@
 (defmacro build-fails (source message)
   "Building SOURCE natively signals a C-BACKEND-ERROR with MESSAGE."
   `(with-program (file ,source)
+     (backends-match-p file)
      (let ((e (handler-case (progn (skein.backend.c:translate-file file) nil)
                 (skein.backend.c:c-backend-error (e) e))))
        (is (not (null e)) "building should fail with ~S" ,message)
@@ -400,6 +403,25 @@ referred in place of skein.core's."
                    "(%pdotimes 1.5 (fn [i] i))"
                    "(try (pmap (fn [x] (if (= x 7) (error \"seven\") x)) (range 20))
                       (catch error e (condition-message e)))"))
+
+(defun count-matches (needle text)
+  "How many times NEEDLE occurs in TEXT."
+  (loop for start = 0 then (+ i (length needle))
+        for i = (search needle text :start2 start)
+        while i count t))
+
+(test native-safety-0-drops-checks
+  ;; Regression (M1.9 step 2): (safety 0) from a declaration was ignored outside typed
+  ;; expressions, so a declared fixnum loop local was still range-checked.
+  (with-program (file "(ns s0)
+(defn total [n]
+  (declare (optimize (safety 0)))
+  (loop [^fixnum i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) acc)))
+(defn checked [n] (loop [^fixnum i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) acc)))
+(prn (total 10) (checked 10))")
+    (let ((c (skein.backend.c:translate-file file)))
+      (is (= 2 (count-matches "sk_fixnum_range(" c))
+          "only the checked function has range checks:~%~A" c))))
 
 (test native-typed-code
   ;; Step 5 of M1.8: declared types compile to unboxed C with Phase 0's results and errors.
