@@ -34,6 +34,9 @@
                (:file "ir/ir")
                (:file "expander/package")
                (:file "expander/env")
+               (:file "expander/data")
+               (:file "expander/syntax-quote")
+               (:file "expander/destructure")
                (:file "expander/expander")
                (:file "expander/macros")
                (:file "backend-cl/package")
@@ -56,6 +59,7 @@
                (:file "eval")
                (:file "collections")
                (:file "seqs")
+               (:file "macros")
                (:file "cli"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!

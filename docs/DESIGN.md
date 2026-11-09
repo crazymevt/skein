@@ -106,7 +106,7 @@ Notes:
 - **Floats:** a decimal point needs digits on both sides (`5.` and `.5` are not floats; `.5` reads as a symbol). The `f` suffix makes an `f32` and needs a float (`1.0f`, `1e5f`; `1f` is an error). Floats are correctly rounded. A literal too large for its type is an error; one too small rounds to zero.
 - **Strings:** escapes are `\n \t \r \b \f \" \\` and `\uXXXX`. A UTF-16 surrogate pair of `\u` escapes combines into one code point; a lone surrogate is an error. A CRLF line ending inside a string literal reads as `\n`, so source files behave the same whatever line endings they were checked out with.
 - **Characters:** `\x` for any single character, the names `newline space tab backspace formfeed return`, and `\uXXXX` (not a surrogate).
-- **Symbols and keywords** may contain any character except whitespace, commas and `` " ; @ ^ ` ~ ( ) [ ] { } \ ``. A symbol can't start with a digit, or with `+` or `-` followed by a digit, since that reads as a number. At most one `/` separates the namespace (`ns/name`); `/` alone and `ns//` name division. Parts may not start or end with `:` or contain `::`. `::alias/kw` is not supported yet.
+- **Symbols and keywords** may contain any character except whitespace, commas and `` " ; @ ^ ` ~ ( ) [ ] { } \ ``. Symbols compare by value (`=`), not identity. A symbol can't start with a digit, or with `+` or `-` followed by a digit, since that reads as a number. At most one `/` separates the namespace (`ns/name`); `/` alone and `ns//` name division. Parts may not start or end with `:` or contain `::`. `::alias/kw` uses an alias of the current namespace.
 - **Metadata:** `^sym`, `^"str"` and `^(type form)` mean `{:tag ...}`; `^:kw` means `{:kw true}`; `^{...}` is used as is. Stacked metadata merges, with the outer (leftmost) entry winning. Metadata can be attached only to symbols and collections.
 - **Prefix forms** read as lists: `'x` → `(quote x)`, `` `x `` → `(skein.core/syntax-quote x)`, `~x` → `(skein.core/unquote x)`, `~@x` → `(skein.core/unquote-splicing x)`, `@x` → `(skein.core/deref x)`.
 - **`#(...)`** reads as `(fn [%1 %2 ...] body)`, with parameters up to the highest `%N` used, plus `& %&` if `%&` appears; `%` means `%1`. `#()` forms cannot nest.
@@ -130,7 +130,7 @@ Only `nil` and `false` are falsy. Everything else is truthy, including `0`, `""`
 ### 4.4 Phases
 Following Racket, code runs either at **compile time (phase 1)**, which is macro expansion, or at **run time (phase 0)**.
 
-- A macro body runs at phase 1. Any function a macro *calls* during expansion must come from a namespace required **for syntax**: `(:require-for-syntax [my.helpers :as h])`.
+- A macro body runs at phase 1. Any function a macro *calls* during expansion must come from `skein.core`, from the macro's own namespace (definitions earlier in the file), or from a namespace required **for syntax**, `(:require-for-syntax [my.helpers :as h])`, including what that namespace itself requires (D-033).
 - The same namespace may be instantiated separately in each phase. State created at compile time is **not** visible at run time.
 - **Why:** when cross-compiling, phase 1 runs on the build machine and phase 0 code is compiled for the target. Mixing them, as Common Lisp's `eval-when` does, causes subtle cross-compilation bugs.
 - **Phase 0 implementation note:** the SBCL host runs both phases in one image. It must still *record* phase information and *warn* when phase-0 code is called during expansion without `:require-for-syntax`. Phase 1 of the roadmap (the native compiler) enforces the rule.
@@ -168,7 +168,7 @@ Following Racket, code runs either at **compile time (phase 1)**, which is macro
 
 ### 5.4 Destructuring
 Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
-`[a b & rest :as all]`, `{:keys [x y] :or {y 0} :as m}`, `{:strs [...]}`, nested patterns.
+`[a b & rest :as all]`, `{:keys [x y] :or {y 0} :as m}`, `{:strs [...]}`, `{:syms [...]}`, `{x :x}`, namespaced keys (`{:keys [ns/a]}` or `{:ns/keys [a]}`), nested patterns, and keyword arguments (`[& {:keys [a]}]`). The front end's `destructure` function (callable from macros) turns a binding vector with patterns into one that binds only symbols; the `fn` special form destructures its parameters by wrapping its body in `let`.
 
 ## 6. Data types
 
@@ -395,7 +395,8 @@ Skein adopts the **Common Lisp condition system**, which separates *signaling* a
 ## 11. Macros
 
 ### 11.1 Phase 0–1: `defmacro` with namespace-resolving syntax-quote
-- `defmacro` receives syntax objects and returns syntax.
+- `defmacro` receives its arguments as **plain data** (lists, vectors, maps, symbols) and returns data, as in Clojure (D-033). The expander keeps the source location and metadata of every symbol and collection the macro passes through unchanged; new forms get the location of the macro call. Syntax objects stay internal until hygienic macros arrive (§11.2).
+- The built-in bootstrap macros are `ns`, `defmacro`, `defn` and `defn-`. The other core macros (§5.2) are written in Skein in `lib/skein/core.skn`.
 - **Syntax-quote** (`` ` ``) resolves symbols to their fully qualified names at the macro's definition site, as Clojure does. `` `(when ~x (log ~y)) `` expands to `skein.core/when` and `my.ns/log`, so macros don't accidentally capture or get shadowed by the user's local names.
 - `x#` inside syntax-quote generates a unique symbol (an auto-gensym).
 - `&form` and `&env` are available, as in Clojure.

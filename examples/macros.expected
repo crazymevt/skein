@@ -1,0 +1,7 @@
+unless works
+twice: 202
+slime (3 hp) / bat (1 hp)
+x 1 y 2 more (3 4)
+pairs: ([1 0] [2 1])
+threaded: 120
+case: (:one :few :many)

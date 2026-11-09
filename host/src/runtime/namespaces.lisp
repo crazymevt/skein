@@ -11,7 +11,10 @@
   (mappings (make-hash-table :test 'equal :synchronized t) :read-only t)
   (refers (make-hash-table :test 'equal :synchronized t) :read-only t)
   (aliases (make-hash-table :test 'equal :synchronized t) :read-only t)
-  (loaded-p nil))
+  (loaded-p nil)
+  ;; Namespaces this one requires at run time (phase 0) and for syntax (phase 1).
+  (requires '())
+  (syntax-requires '()))
 
 (defstruct (var (:constructor %make-var (namespace name)) (:copier nil))
   "A Skein var: a named global cell. Calls to globals read the var each time, which
@@ -28,6 +31,10 @@ is what makes redefinition visible to existing callers."
       (documentation 'namespace-p 'function) "Return true if the argument is a namespace."
       (documentation 'namespace-loaded-p 'function)
       "Return true once a namespace's source has started loading."
+      (documentation 'namespace-requires 'function)
+      "Return the namespaces this namespace requires at run time."
+      (documentation 'namespace-syntax-requires 'function)
+      "Return the namespaces this namespace requires for syntax (:require-for-syntax)."
       (documentation 'var-p 'function) "Return true if the argument is a var."
       (documentation 'var-namespace 'function) "Return the namespace a var belongs to."
       (documentation 'var-name 'function) "Return the unqualified name of a var."
@@ -114,9 +121,15 @@ referred var, then a public var of skein.core. Returns NIL if there is none."
   "Return true if VAR has a value."
   (not (eq (var-value var) +unbound+)))
 
+(defvar *expansion-context* nil
+  "While a macro defined in Skein runs, a cons of its var and the location of the form
+being expanded; NIL otherwise. Used to check phase rules (DESIGN §4.4).")
+
 (declaim (inline var-get))
 (defun var-get (var location)
-  "Return VAR's value. Signals UNBOUND-VAR-ERROR, reporting LOCATION, if it has none."
+  "Return VAR's value. Signals UNBOUND-VAR-ERROR, reporting LOCATION, if it has none.
+While a macro runs, also checks that VAR may be used at expansion time."
+  (when *expansion-context* (check-phase var))
   (let ((value (var-value var)))
     (if (eq value +unbound+)
         (skein-error 'unbound-var-error location "var ~A is unbound" (var-qualified-name var))
@@ -126,6 +139,48 @@ referred var, then a public var of skein.core. Returns NIL if there is none."
   "Set VAR's root value to VALUE and return VAR."
   (setf (var-value var) value)
   var)
+
+;;; Phases (DESIGN §4.4, D-033). A macro defined in namespace M may use, while it runs,
+;;; vars of skein.core, of M itself, and of the namespaces M requires for syntax together
+;;; with everything those require. Anything else is a phase violation; Phase 0 warns.
+
+(define-condition phase-warning (warning)
+  ((message :initarg :message :reader phase-warning-message)
+   (location :initarg :location :initform nil :reader phase-warning-location))
+  (:report (lambda (c stream)
+             (format stream "~A~@[ at ~A~]" (phase-warning-message c)
+                     (and (phase-warning-location c)
+                          (skein.syntax:format-location (phase-warning-location c))))))
+  (:documentation "Warns that a macro used a var at expansion time (phase 1) from a
+namespace that is not available for syntax."))
+
+(sb-ext:define-load-time-global **phase-warned** (make-hash-table :test 'equal :synchronized t))
+
+(defun syntax-namespaces (ns)
+  "Return the namespaces whose vars a macro defined in NS may use while it runs."
+  (let ((seen (list +core+ ns)))
+    (labels ((visit (n)
+               (unless (member n seen)
+                 (push n seen)
+                 (mapc #'visit (namespace-requires n))
+                 (mapc #'visit (namespace-syntax-requires n)))))
+      (mapc #'visit (namespace-syntax-requires ns))
+      seen)))
+
+(defun check-phase (var)
+  (destructuring-bind (macro . location) *expansion-context*
+    (let ((macro-ns (var-namespace macro)))
+      (unless (member (var-namespace var) (syntax-namespaces macro-ns))
+        (let ((key (cons (var-qualified-name macro) (var-qualified-name var))))
+          (unless (gethash key **phase-warned**)
+            (setf (gethash key **phase-warned**) t)
+            (warn 'phase-warning
+                  :location location
+                  :message (format nil "macro ~A uses ~A while expanding; require ~A with ~
+                                        :require-for-syntax in ~A"
+                                   (var-qualified-name macro) (var-qualified-name var)
+                                   (namespace-name (var-namespace var))
+                                   (namespace-name macro-ns)))))))))
 
 ;;; Loading namespaces
 

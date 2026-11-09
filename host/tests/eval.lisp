@@ -328,7 +328,8 @@ when they are given."
       (is (string= "hidden" (skein.runtime::function-display-name
                              (skein.runtime:var-value h))))))
   (compile-fails "(cond 1)" "cond needs an even number of forms")
-  (compile-fails "(when)" "when needs a test"))
+  (compile-fails "(when)" "wrong number of arguments (0) passed to macro skein.core/when"
+                 :line 1 :column 1))
 
 (test macroexpand
   (let ((env (skein.expander:make-env :namespace (skein.runtime:ensure-namespace "user"))))
@@ -390,6 +391,8 @@ BODY with *SOURCE-PATHS* set to it."
                         (fresh-ns) lib)
                 22)
       (evals-to (format nil "(ns ~A (:require ~A)) (~A/twice 4)" (fresh-ns) lib lib) 8)
+      (is (eq (kw "k" lib) (ev (format nil "(ns ~A (:require [~A :as u])) ::u/k" (fresh-ns) lib)))
+          "::alias/kw resolves the alias")
       (compile-fails (format nil "(ns ~A (:require [~A :as u])) (u/secret)" (fresh-ns) lib)
                      "is private")
       (fails (format nil "(ns ~A (:require [~A :refer [secret]]))" (fresh-ns) lib)

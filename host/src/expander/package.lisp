@@ -11,7 +11,7 @@
                 #:intern-kw #:truthy-p
                 #:namespace-name #:find-namespace #:find-alias #:resolve-var #:find-own-var
                 #:intern-var #:var-macro-p #:var-private-p #:var-dynamic-p #:var-value
-                #:var-namespace #:var-qualified-name #:def-var #:+core+
+                #:var-namespace #:var-name #:var-qualified-name #:def-var #:+core+
                 #:*current-namespace*)
   (:export
    #:compile-error

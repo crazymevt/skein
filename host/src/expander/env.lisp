@@ -96,6 +96,10 @@ exist. The location is the offending form's."))
 (defun s-sym (name location &optional namespace)
   (make-syntax :kind :atom :datum (intern-sym name namespace) :location location))
 
+(defun core-sym (name location)
+  "A symbol naming a skein.core var, qualified so user definitions cannot shadow it."
+  (s-sym name location "skein.core"))
+
 (defun s-atom (value location)
   (make-syntax :kind :atom :datum value :location location))
 

@@ -29,7 +29,7 @@ All nodes include `location`. "Body" fields hold one node; a multi-form body bec
 | `do-node` | `forms` | `(do e1 e2 ...)` | evaluate in order, return the last. `(do)` becomes a `nil` constant |
 | `def-node` | `var`, `init` | `(def name value?)` | set the var's root value to `init` (if present) and return the var. The var is interned when the form is expanded, so the body can refer to it |
 | `fn-node` | `name`, `self`, `arities` | `(fn name? ...)` | a closure. `self` is the local bound to the function itself when the form has a name, else `nil` |
-| `arity` | `params`, `rest`, `body`, `recur-p` | one `([params] body...)` | `params` is a list of locals; `rest` is the local after `&`, or `nil`. `recur-p` is true if some `recur` targets this arity |
+| `arity` | `params`, `rest`, `body`, `recur-p` | one `([params] body...)` | `params` is a list of locals; `rest` is the local after `&`, or `nil`. `recur-p` is true if some `recur` targets this arity. A destructuring parameter becomes a fresh local, and the body is wrapped in `skein.core/let` to destructure it |
 | `let-node` | `bindings`, `body` | `(let* [x 1 y 2] ...)` | sequential binding; `bindings` is a list of `(local . init-node)` |
 | `letfn-node` | `bindings`, `body` | `(letfn* [(f [..] ..)] ...)` | every local is in scope in every function; `bindings` is a list of `(local . fn-node)` |
 | `loop-node` | `bindings`, `body`, `recur-p` | `(loop* [x 0] ...)` | like `let-node`, and a target for `recur` |

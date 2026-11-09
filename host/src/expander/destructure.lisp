@@ -1,0 +1,103 @@
+;;;; Destructuring (DESIGN §5.4), as the skein.core function `destructure` that the let,
+;;;; loop, doseq and for macros call while expanding. It works on plain data (D-033).
+
+(in-package #:skein.expander)
+
+(defun d-sym (name) (intern-sym name "skein.core"))
+(defun d-list (&rest xs) (skein.runtime:list-from-cl xs))
+
+(defun d-error (control &rest args)
+  (error 'skein.runtime:skein-error :location nil :message (apply #'format nil control args)))
+
+(defun keyword-named-p (x name)
+  (and (kw-p x) (null (skein.runtime:kw-namespace x)) (string= (kw-name x) name)))
+
+(defun named-key (kind s)
+  "For an entry S of a :keys, :strs or :syms vector (KIND is that keyword, possibly
+namespaced, as in :ns/keys), return the local symbol to bind and the lookup key form."
+  (let* ((s-ns (cond ((sym-p s) (sym-namespace s))
+                     ((kw-p s) (skein.runtime:kw-namespace s))
+                     (t (d-error "~A needs symbols, not ~A" (skein.runtime:readable-string kind)
+                                 (skein.runtime:readable-string s)))))
+         (ns (or (skein.runtime:kw-namespace kind) s-ns))
+         (name (if (sym-p s) (sym-name s) (kw-name s)))
+         (local (if (and (sym-p s) (null s-ns)) s (intern-sym name))))
+    (values local
+            (cond ((string= (kw-name kind) "keys") (intern-kw name ns))
+                  ((string= (kw-name kind) "strs") name)
+                  (t (d-list (intern-sym "quote") (intern-sym name ns)))))))
+
+(defun destructure (bindings)
+  "Turn a binding vector that may contain destructuring patterns into one that binds
+only symbols, as a CL list of alternating names and init forms."
+  (let ((out '()))
+    (labels ((bind (name init) (push name out) (push init out))
+             (fresh (prefix) (intern-sym (skein.runtime:gensym-name prefix)))
+             (pb (pattern value)
+               (cond ((sym-p pattern)
+                      (when (string= (sym-name pattern) "&")
+                        (d-error "& must be followed by a binding inside a vector pattern"))
+                      (bind pattern value))
+                     ((skein.runtime:pvector-p pattern) (pvec pattern value))
+                     ((skein.runtime:map-p pattern) (pmap pattern value))
+                     (t (d-error "unsupported binding form: ~A"
+                                 (skein.runtime:readable-string pattern)))))
+             (pvec (pattern value)
+               (let ((g (fresh "vec__"))
+                     (items (skein.runtime:vector-to-list pattern))
+                     (n 0))
+                 (bind g value)
+                 (loop while items
+                       do (let ((item (pop items)))
+                            (cond ((and (sym-p item) (string= (sym-name item) "&")
+                                        (null (sym-namespace item)))
+                                   (unless items (d-error "& must be followed by a binding"))
+                                   (pb (pop items) (d-list (d-sym "nthnext") g n)))
+                                  ((keyword-named-p item "as")
+                                   (unless (and items (sym-p (first items)))
+                                     (d-error ":as must be followed by a symbol"))
+                                   (bind (pop items) g))
+                                  (t (pb item (d-list (d-sym "nth") g n nil))
+                                     (incf n)))))))
+             (pmap (pattern value)
+               (let* ((g (fresh "map__"))
+                      (entries (loop for e in (skein.runtime:seq-to-cl pattern)
+                                     collect (cons (skein.runtime:vector-nth e 0)
+                                                   (skein.runtime:vector-nth e 1))))
+                      (as (cdr (assoc-if (lambda (k) (keyword-named-p k "as")) entries)))
+                      (defaults (cdr (assoc-if (lambda (k) (keyword-named-p k "or")) entries))))
+                 (bind g value)
+                 (bind g (d-list (intern-sym "if") (d-list (d-sym "seq?") g)
+                                 (d-list (d-sym "apply") (d-sym "hash-map") g)
+                                 g))
+                 (when as (bind as g))
+                 (flet ((lookup (local key)
+                          (let ((default (and defaults (sym-p local)
+                                              (skein.runtime:coll-get defaults local
+                                                                      skein.runtime::+not-found+))))
+                            (if (and default (not (eq default skein.runtime::+not-found+)))
+                                (d-list (d-sym "get") g key default)
+                                (d-list (d-sym "get") g key)))))
+                   (loop for (k . v) in entries
+                         do (cond ((or (keyword-named-p k "as") (keyword-named-p k "or")))
+                                  ((and (kw-p k) (member (kw-name k) '("keys" "strs" "syms")
+                                                         :test #'string=))
+                                   (unless (skein.runtime:pvector-p v)
+                                     (d-error "~A needs a vector of names"
+                                              (skein.runtime:readable-string k)))
+                                   (dolist (s (skein.runtime:vector-to-list v))
+                                     (multiple-value-bind (local key) (named-key k s)
+                                       (bind local (lookup local key)))))
+                                  (t (if (sym-p k)
+                                         (bind k (lookup k v))
+                                         (pb k (d-list (d-sym "get") g v))))))))))
+      (unless (skein.runtime:pvector-p bindings)
+        (d-error "bindings must be a vector, not ~A" (skein.runtime:readable-string bindings)))
+      (let ((items (skein.runtime:vector-to-list bindings)))
+        (when (oddp (length items))
+          (d-error "a binding vector needs an even number of forms"))
+        (loop for (pattern init) on items by #'cddr do (pb pattern init))))
+    (nreverse out)))
+
+(skein.runtime:defcore "destructure" (bindings)
+  (skein.runtime:vector-from-list (destructure bindings)))

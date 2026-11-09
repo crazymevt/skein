@@ -23,8 +23,18 @@ location of the problem, or NIL; the report appends it as \"at file:line:col\"."
 (define-condition not-callable-error (skein-error) ()
   (:documentation "Signaled when code calls a value that is not a function or keyword."))
 
-(define-condition arity-error (skein-error) ()
-  (:documentation "Signaled when a function is called with the wrong number of arguments."))
+(define-condition arity-error (skein-error)
+  ((function-name :initarg :function-name :initform nil :reader arity-error-function-name)
+   (argument-count :initarg :argument-count :initform nil
+                   :reader arity-error-argument-count))
+  (:documentation "Signaled when a function is called with the wrong number of arguments.
+ARITY-ERROR-FUNCTION-NAME and ARITY-ERROR-ARGUMENT-COUNT give the function's name and the
+number of arguments it received."))
+
+(setf (documentation 'arity-error-function-name 'function)
+      "Return the name of the function an ARITY-ERROR is about."
+      (documentation 'arity-error-argument-count 'function)
+      "Return how many arguments the function in an ARITY-ERROR received.")
 
 (define-condition namespace-error (skein-error) ()
   (:documentation "Signaled when a namespace or a var in it cannot be found or loaded."))

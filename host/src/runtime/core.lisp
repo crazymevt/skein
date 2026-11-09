@@ -58,6 +58,31 @@
 (defcore "false?" (x) (bool (false-p x)))
 (defcore "identity" (x) x)
 
+;;; Macro support
+
+(defvar *skein-gensym-counter* 0)
+
+(defun gensym-name (prefix)
+  "Return a fresh symbol name: PREFIX followed by a unique number."
+  (format nil "~A~D" prefix (incf *skein-gensym-counter*)))
+
+(defcore "gensym" (&optional (prefix "G__"))
+  (intern-sym (gensym-name (if (sym-p prefix) (sym-name prefix) prefix))))
+
+(defcore "%error" (message &rest args)
+  (skein-error 'skein-error nil "~A" (if args
+                                         (format nil "~{~A~^ ~}" (mapcar #'display-string
+                                                                         (cons message args)))
+                                         message)))
+
+(defcore "%no-matching-case" (value)
+  (skein-error 'skein-error nil "no case clause matches ~A" (readable-string value)))
+
+(defcore "%set-macro!" (name)
+  (let ((var (find-own-var *current-namespace* (sym-string name "a macro name"))))
+    (setf (var-macro-p var) t)
+    var))
+
 ;;; Strings and printing
 
 (defcore "str" (&rest xs)
@@ -97,6 +122,15 @@
 
 (defcore "%require" (name alias)
   (let ((ns (require-namespace (sym-string name "a namespace name"))))
+    (pushnew ns (namespace-requires *current-namespace*))
+    (when alias
+      (setf (gethash (sym-string alias "an alias") (namespace-aliases *current-namespace*))
+            ns))
+    nil))
+
+(defcore "%require-for-syntax" (name alias)
+  (let ((ns (require-namespace (sym-string name "a namespace name"))))
+    (pushnew ns (namespace-syntax-requires *current-namespace*))
     (when alias
       (setf (gethash (sym-string alias "an alias") (namespace-aliases *current-namespace*))
             ns))

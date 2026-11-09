@@ -1,0 +1,255 @@
+(ns skein.core
+  "Core macros, written in Skein (DESIGN §5.2). The special forms, the primitive functions
+and the bootstrap macros ns, defmacro, defn and defn- are built into the host.")
+
+;;; Order matters: each macro may use only the macros defined above it.
+
+(defmacro comment
+  "Ignore the body; evaluate to nil."
+  [& body]
+  nil)
+
+(defmacro let
+  "Bind names sequentially, with destructuring (DESIGN §5.4)."
+  [bindings & body]
+  `(let* ~(destructure bindings) ~@body))
+
+(defmacro when
+  "If test is true, evaluate the body; otherwise nil."
+  [test & body]
+  `(if ~test (do ~@body)))
+
+(defmacro when-not
+  "If test is false, evaluate the body; otherwise nil."
+  [test & body]
+  `(if ~test nil (do ~@body)))
+
+(defmacro if-not
+  "Like if, with the branches swapped."
+  ([test then] `(if ~test nil ~then))
+  ([test then else] `(if ~test ~else ~then)))
+
+(defmacro cond
+  "Evaluate the first expression whose test is true. Use :else as a final test."
+  [& clauses]
+  (when clauses
+    (when-not (next clauses)
+      (%error "cond needs an even number of forms"))
+    `(if ~(first clauses)
+       ~(second clauses)
+       (cond ~@(next (next clauses))))))
+
+(defmacro and
+  "Evaluate forms left to right; return the first falsy value, or the last value."
+  ([] true)
+  ([x] x)
+  ([x & more] `(let* [and# ~x] (if and# (and ~@more) and#))))
+
+(defmacro or
+  "Evaluate forms left to right; return the first truthy value, or the last value."
+  ([] nil)
+  ([x] x)
+  ([x & more] `(let* [or# ~x] (if or# or# (or ~@more)))))
+
+(defn- binding-pair [bindings what]
+  (when-not (and (vector? bindings) (= 2 (count bindings)))
+    (%error what "needs a binding vector of one name and one test"))
+  bindings)
+
+(defmacro if-let
+  "If test is true, bind it with destructuring and evaluate then; otherwise else."
+  ([bindings then] `(if-let ~bindings ~then nil))
+  ([bindings then else]
+   (let [[form test] (binding-pair bindings "if-let")]
+     `(let* [temp# ~test]
+        (if temp# (let [~form temp#] ~then) ~else)))))
+
+(defmacro when-let
+  "If test is true, bind it with destructuring and evaluate the body."
+  [bindings & body]
+  (let [[form test] (binding-pair bindings "when-let")]
+    `(let* [temp# ~test]
+       (when temp# (let [~form temp#] ~@body)))))
+
+(defmacro if-some
+  "Like if-let, but tests for non-nil (false counts as present)."
+  ([bindings then] `(if-some ~bindings ~then nil))
+  ([bindings then else]
+   (let [[form test] (binding-pair bindings "if-some")]
+     `(let* [temp# ~test]
+        (if (nil? temp#) ~else (let [~form temp#] ~then))))))
+
+(defmacro when-some
+  "Like when-let, but tests for non-nil."
+  [bindings & body]
+  (let [[form test] (binding-pair bindings "when-some")]
+    `(let* [temp# ~test]
+       (if (nil? temp#) nil (let [~form temp#] ~@body)))))
+
+(defmacro loop
+  "Like loop*, with destructuring. recur supplies new values for the whole patterns."
+  [bindings & body]
+  (let [pairs (partition 2 bindings)]
+    (when-not (even? (count bindings))
+      (%error "loop needs an even number of binding forms"))
+    (if (every? (fn [[b _]] (symbol? b)) pairs)
+      `(loop* ~bindings ~@body)
+      (let [names (map (fn [[b _]] (if (symbol? b) b (gensym "loop__"))) pairs)]
+        `(let [~@(mapcat (fn [[b init] g] (if (symbol? b) [b init] [g init b g]))
+                         pairs names)]
+           (loop* [~@(mapcat (fn [g] [g g]) names)]
+             (let [~@(mapcat (fn [[b _] g] (if (symbol? b) [] [b g])) pairs names)]
+               ~@body)))))))
+
+(defmacro letfn
+  "Bind mutually recursive local functions: (letfn [(f [x] ...) (g [y] ...)] body)."
+  [fnspecs & body]
+  `(letfn* ~fnspecs ~@body))
+
+(defmacro lazy-seq
+  "A lazy seq whose body runs the first time the seq is needed."
+  [& body]
+  `(%lazy-seq (fn [] ~@body)))
+
+(defmacro case
+  "Compare e with constants (or lists of constants) and evaluate the matching expression.
+An odd final form is the default; with no default and no match, signal an error."
+  [e & clauses]
+  (let [g (gensym "case__")
+        pairs (partition 2 clauses)
+        test (fn [k]
+               (if (list? k)
+                 `(or ~@(map (fn [x] `(= ~g '~x)) k))
+                 `(= ~g '~k)))]
+    `(let* [~g ~e]
+       (cond ~@(mapcat (fn [[k v]] [(test k) v]) pairs)
+             :else ~(if (odd? (count clauses))
+                      (last clauses)
+                      `(%no-matching-case ~g))))))
+
+;;; Threading
+
+(defmacro ->
+  "Thread x through the forms, as the first argument of each."
+  [x & forms]
+  (loop [x x forms forms]
+    (if forms
+      (let [form (first forms)]
+        (recur (if (seq? form) `(~(first form) ~x ~@(next form)) (list form x))
+               (next forms)))
+      x)))
+
+(defmacro ->>
+  "Thread x through the forms, as the last argument of each."
+  [x & forms]
+  (loop [x x forms forms]
+    (if forms
+      (let [form (first forms)]
+        (recur (if (seq? form) `(~@form ~x) (list form x))
+               (next forms)))
+      x)))
+
+(defmacro as->
+  "Bind name to expr, then to the result of each form in turn."
+  [expr name & forms]
+  `(let [~name ~expr
+         ~@(interleave (repeat name) (butlast forms))]
+     ~(if (empty? forms) name (last forms))))
+
+(defmacro some->
+  "Like ->, but stop at the first nil."
+  [expr & forms]
+  (let [g (gensym)
+        steps (map (fn [step] `(if (nil? ~g) nil (-> ~g ~step))) forms)]
+    `(let [~g ~expr
+           ~@(interleave (repeat g) (butlast steps))]
+       ~(if (empty? steps) g (last steps)))))
+
+(defmacro some->>
+  "Like ->>, but stop at the first nil."
+  [expr & forms]
+  (let [g (gensym)
+        steps (map (fn [step] `(if (nil? ~g) nil (->> ~g ~step))) forms)]
+    `(let [~g ~expr
+           ~@(interleave (repeat g) (butlast steps))]
+       ~(if (empty? steps) g (last steps)))))
+
+(defmacro doto
+  "Evaluate x, call each form with it as the first argument, and return x."
+  [x & forms]
+  (let [g (gensym)]
+    `(let [~g ~x]
+       ~@(map (fn [f] (if (seq? f) `(~(first f) ~g ~@(next f)) `(~f ~g))) forms)
+       ~g)))
+
+;;; Loops
+
+(defmacro while
+  "Evaluate the body repeatedly while test is true. Returns nil."
+  [test & body]
+  `(loop [] (when ~test ~@body (recur))))
+
+(defmacro dotimes
+  "Evaluate the body with name bound to 0, 1, ... n-1. Returns nil."
+  [bindings & body]
+  (let [[i n] (binding-pair bindings "dotimes")]
+    `(let [n# ~n]
+       (loop [~i 0]
+         (when (< ~i n#)
+           ~@body
+           (recur (inc ~i)))))))
+
+(defn- doseq-code
+  "Code that runs body for the remaining seq-exprs, then evaluates continue."
+  [exprs body continue]
+  (if (empty? exprs)
+    `(do ~@body ~continue)
+    (let [[k v & more] exprs]
+      (cond
+        (= k :let) `(let ~v ~(doseq-code more body continue))
+        (= k :when) `(if ~v ~(doseq-code more body continue) ~continue)
+        (= k :while) `(when ~v ~(doseq-code more body continue))
+        :else (let [s (gensym "seq__")]
+                `(do (loop [~s (seq ~v)]
+                       (when ~s
+                         (let [~k (first ~s)]
+                           ~(doseq-code more body `(recur (next ~s))))))
+                     ~continue))))))
+
+(defmacro doseq
+  "Evaluate the body for each binding in the seq-exprs, which may also contain :let,
+:when and :while modifiers, as in for. Returns nil."
+  [seq-exprs & body]
+  (when-not (and (vector? seq-exprs) (even? (count seq-exprs)))
+    (%error "doseq needs a vector with an even number of forms"))
+  `(do ~(doseq-code (seq seq-exprs) body nil) nil))
+
+(defn- for-code
+  "Code for a lazy seq of the remaining results. next continues the innermost binding;
+done is what the innermost binding returns when a :while test fails."
+  [exprs body next done]
+  (if (empty? exprs)
+    `(cons ~body ~next)
+    (let [[k v & more] exprs]
+      (cond
+        (= k :let) `(let ~v ~(for-code more body next done))
+        (= k :when) `(if ~v ~(for-code more body next done) ~next)
+        (= k :while) `(if ~v ~(for-code more body next done) ~done)
+        :else (let [iter (gensym "iter__")
+                    s (gensym "s__")]
+                `(letfn* [(~iter [~s]
+                           (lazy-seq
+                             (let* [~s (seq ~s)]
+                               (if ~s
+                                 (let [~k (first ~s)]
+                                   ~(for-code more body `(~iter (rest ~s)) next))
+                                 ~next))))]
+                   (~iter ~v)))))))
+
+(defmacro for
+  "A lazy comprehension: (for [x xs :when (odd? x) y ys] [x y]). Supports :let, :when
+and :while modifiers."
+  [seq-exprs body]
+  (when-not (and (vector? seq-exprs) (even? (count seq-exprs)))
+    (%error "for needs a vector with an even number of forms"))
+  (for-code (seq seq-exprs) body () ()))

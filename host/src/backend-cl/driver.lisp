@@ -18,9 +18,13 @@ form that changes the namespace (like ns) affects the forms after it."
   "Read and evaluate every form on STREAM, naming FILE in locations. Returns the value of
 the last form. The current namespace is restored afterwards."
   (let* ((*current-namespace* *current-namespace*)
-         (reader (skein.reader:make-reader stream :file file
-                                                  :namespace (namespace-name
-                                                              *current-namespace*)))
+         (reader (skein.reader:make-reader
+                  stream :file file
+                         :namespace (namespace-name *current-namespace*)
+                         :resolve-alias (lambda (alias)
+                                          (let ((ns (skein.runtime:find-alias
+                                                     *current-namespace* alias)))
+                                            (and ns (namespace-name ns))))))
          (eof '#:eof)
          (value nil))
     (loop
@@ -66,13 +70,27 @@ namespace to start in; it defaults to the current one."
 
 (setf *namespace-loader* 'load-namespace)
 
+(defun library-directory ()
+  "Return the lib/ directory of the Skein checkout, which holds Skein's own namespaces."
+  (merge-pathnames "lib/" (uiop:pathname-parent-directory-pathname
+                           (asdf:system-source-directory "skein"))))
+
+(defun load-core-library ()
+  "Load skein.core's Skein source, lib/skein/core.skn, into the image."
+  (let ((*current-namespace* (ensure-namespace "user")))
+    (load-file (merge-pathnames "skein/core.skn" (library-directory)))))
+
 (defun run-file (path)
   "Run the Skein program in the file at PATH, as `skein run` does. Namespaces it requires
-are looked up next to it and in the current directory. Returns the last value."
+are looked up next to it, in the current directory and in lib/. Returns the last value."
   (let* ((*source-paths* (remove-duplicates
                           (list (uiop:pathname-directory-pathname (merge-pathnames path))
-                                (uiop:getcwd))
+                                (uiop:getcwd)
+                                (library-directory))
                           :test #'equal :key #'uiop:native-namestring :from-end t))
          (*current-namespace* (ensure-namespace "user")))
     (prog1 (load-file path)
       (finish-output *standard-output*))))
+
+;;; skein.core's macros are written in Skein, so load them whenever this system loads.
+(load-core-library)

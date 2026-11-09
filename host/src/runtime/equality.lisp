@@ -7,7 +7,9 @@
 collections are equal when their elements are equal, whatever their type."
   (typep x '(or plist empty-list pvector vseq aseq nseq kseq valseq sseq cseq lazy-seq)))
 
-(defun map-p (x) (typep x '(or array-map hash-map)))
+(defun map-p (x)
+  "Return true if X is a persistent map."
+  (typep x '(or array-map hash-map)))
 
 (defun float-equal (a b)
   (without-nan-traps (= a b)))
@@ -23,6 +25,9 @@ never equal; f32 and f64 compare by value."
                   (and (floatp b) (float-equal a b)))))
         ((eq a b) t)
         ((stringp a) (and (stringp b) (string= a b)))
+        ((sym-p a) (and (sym-p b)
+                        (string= (sym-name a) (sym-name b))
+                        (equal (sym-namespace a) (sym-namespace b))))
         ((sequential-p a) (and (sequential-p b) (sequential-equiv a b)))
         ((map-p a) (and (map-p b) (map-equiv a b)))
         ((hash-set-p a) (and (hash-set-p b) (set-equiv a b)))

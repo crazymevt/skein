@@ -37,5 +37,7 @@ at an index. Anything else signals NOT-CALLABLE-ERROR reporting LOCATION."
 (defun arity-error (name count location)
   "Signal ARITY-ERROR for function NAME called with COUNT arguments. LOCATION is where
 the function was defined; the message names it, since the call site is not known."
-  (skein-error 'arity-error nil "wrong number of arguments (~D) passed to ~A~@[ (defined at ~A)~]"
-               count name (and location (skein.syntax:format-location location))))
+  (error 'arity-error
+         :function-name name :argument-count count
+         :message (format nil "wrong number of arguments (~D) passed to ~A~@[ (defined at ~A)~]"
+                          count name (and location (skein.syntax:format-location location)))))

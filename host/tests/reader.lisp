@@ -246,6 +246,12 @@ x ; trailing
   (is (null (rd-all "  ; nothing here")))
   (reads-as (format nil "~Cx" (code-char #xFEFF)) "x"))
 
+(test alias-keywords
+  (with-input-from-string (s "::m/k")
+    (let ((r (skein.reader:make-reader s :resolve-alias (lambda (a) (and (string= a "m")
+                                                                         "skein.math")))))
+      (is (eq (kw "k" "skein.math") (skein.syntax:syntax-datum (skein.reader:read-form r)))))))
+
 (test reader-namespace-can-change-between-forms
   (with-input-from-string (s "::a ::b")
     (let ((r (skein.reader:make-reader s :namespace "one")))
@@ -361,7 +367,8 @@ x ; trailing
   (read-fails ":/" "invalid keyword" 1 1)
   (read-fails ":a/" "invalid keyword" 1 1)
   (read-fails ":::a" "invalid keyword" 1 1)
-  (read-fails "::a/b" "`::alias/name` keywords are not supported yet" 1 1)
+  (read-fails "::a/b" "no namespace alias `a` for `::a/b`" 1 1)
+  (read-fails "::a/" "invalid keyword" 1 1)
   (let ((e (handler-case (skein.reader:read-form-from-string "::k")
              (skein.reader:read-error (e) e))))
     (is (search "needs a current namespace" (skein.reader:read-error-message e)))))

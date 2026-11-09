@@ -1,0 +1,30 @@
+(ns macros)
+
+;; A macro receives its arguments as data and returns the code to run.
+(defmacro unless [test & body]
+  `(if ~test nil (do ~@body)))
+
+(unless false (println "unless works"))
+
+;; Auto-gensyms (name#) avoid capturing the caller's names.
+(defmacro twice [expr]
+  `(let [v# ~expr] (+ v# v#)))
+
+(def v 100)
+(println "twice:" (twice (inc v)))
+
+;; Destructuring in let, fn parameters, loop and for.
+(defn describe [{:keys [name hp] :or {hp 1}}]
+  (str name " (" hp " hp)"))
+
+(println (describe {:name "slime" :hp 3}) "/" (describe {:name "bat"}))
+
+(let [[x y & more] [1 2 3 4]]
+  (println "x" x "y" y "more" more))
+
+(println "pairs:" (for [x (range 3) y (range x) :when (odd? (+ x y))] [x y]))
+
+;; Threading macros.
+(println "threaded:" (->> (range 10) (filter even?) (map #(* % %)) (reduce +)))
+
+(println "case:" (map #(case % 1 :one (2 3) :few :many) [1 2 5]))

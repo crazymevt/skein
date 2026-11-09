@@ -1,6 +1,6 @@
-;;;; Built-in macros, written in CL until M0.5 moves them into lib/skein/core.skn.
-;;;; Each is a skein.core var flagged as a macro whose value is a CL function of
-;;;; (form env) that returns a syntax object.
+;;;; The built-in macros that lib/skein/core.skn needs before it can define the rest:
+;;;; ns, defmacro, defn and defn-. Each is a skein.core var whose macro flag is :SYNTAX
+;;;; and whose value is a CL function of (form env) that returns a syntax object.
 
 (in-package #:skein.expander)
 
@@ -9,11 +9,8 @@
      (def-var var (sb-int:named-lambda ,(format nil "skein.core/~A" name) (,form ,env)
                     (declare (ignorable ,env))
                     ,@body))
-     (setf (var-macro-p var) t)))
+     (setf (var-macro-p var) :syntax)))
 
-(defun core-sym (name location)
-  "A symbol naming a skein.core var, qualified so user definitions cannot shadow it."
-  (s-sym name location "skein.core"))
 
 (defun macro-args (form) (rest (items form)))
 
@@ -22,11 +19,12 @@
 (defun quoted (syntax)
   (s-list (loc syntax) (s-sym "quote" (loc syntax)) syntax))
 
-(defun require-calls (spec)
-  "Return the calls that load one :require spec: a.b or [a.b :as c :refer [x y]]."
+(defun require-calls (spec loader)
+  "Return the calls that load one :require spec: a.b or [a.b :as c :refer [x y]].
+LOADER is \"%require\" or \"%require-for-syntax\"."
   (let ((l (loc spec)))
     (cond ((sym-datum spec)
-           (list (s-list l (core-sym "%require" l) (quoted spec) (s-atom nil l))))
+           (list (s-list l (core-sym loader l) (quoted spec) (s-atom nil l))))
           ((vector-form-p spec)
            (destructuring-bind (name &rest options) (items spec)
              (unless (plain-name name)
@@ -52,7 +50,7 @@
                                      (push r refers)))
                                   (t (compile-error key "unknown require option ~A"
                                                     (syntax-to-string key)))))))
-               (cons (s-list l (core-sym "%require" l) (quoted name)
+               (cons (s-list l (core-sym loader l) (quoted name)
                              (if alias (quoted alias) (s-atom nil l)))
                      (loop for r in (nreverse refers)
                            collect (s-list l (core-sym "%refer" l) (quoted name)
@@ -75,14 +73,14 @@
                    append (let ((k (and (list-form-p clause) (items clause)
                                         (kw-p (syntax-datum (first (items clause))))
                                         (kw-name (syntax-datum (first (items clause)))))))
-                            ;; Phase tracking for :require-for-syntax arrives in M0.5;
-                            ;; until then it loads like :require.
                             (unless (member k '("require" "require-for-syntax") :test #'equal)
                               (compile-error clause "unknown ns clause ~A; expected ~
                                                      (:require ...)"
                                              (syntax-to-string clause)))
                             (loop for spec in (rest (items clause))
-                                  append (require-calls spec))))))))
+                                  append (require-calls spec (if (equal k "require")
+                                                                 "%require"
+                                                                 "%require-for-syntax")))))))))
 
 ;;; defn, defn-
 
@@ -113,58 +111,41 @@
 (define-builtin-macro "defn" (form env) (defn-expansion form nil))
 (define-builtin-macro "defn-" (form env) (defn-expansion form t))
 
-;;; let, loop. Destructuring arrives in M0.5; until then they are let* and loop*.
+;;; defmacro: (defmacro name doc? attr-map? [params] body...) or with several arities.
+;;; Each arity gets &form and &env parameters in front of the user's.
 
-(define-builtin-macro "let" (form env)
-  (apply #'s-list (loc form) (s-sym "let*" (loc form)) (macro-args form)))
-
-(define-builtin-macro "loop" (form env)
-  (apply #'s-list (loc form) (s-sym "loop*" (loc form)) (macro-args form)))
-
-;;; lazy-seq
-
-(define-builtin-macro "lazy-seq" (form env)
-  (let ((l (loc form)))
-    (s-list l (core-sym "%lazy-seq" l)
-            (apply #'s-list l (s-sym "fn" l) (s-vector l '()) (macro-args form)))))
-
-;;; Conditionals
-
-(define-builtin-macro "when" (form env)
-  (let ((args (macro-args form)) (l (loc form)))
-    (unless args (compile-error form "when needs a test"))
-    (s-list l (s-sym "if" l) (first args) (apply #'s-list l (s-sym "do" l) (rest args)))))
-
-(define-builtin-macro "when-not" (form env)
-  (let ((args (macro-args form)) (l (loc form)))
-    (unless args (compile-error form "when-not needs a test"))
-    (s-list l (s-sym "if" l) (first args) (s-atom nil l)
-            (apply #'s-list l (s-sym "do" l) (rest args)))))
-
-(define-builtin-macro "cond" (form env)
-  (let ((args (macro-args form)) (l (loc form)))
-    (when (oddp (length args))
-      (compile-error form "cond needs an even number of forms"))
-    (if (null args)
-        (s-atom nil l)
-        (s-list l (s-sym "if" l) (first args) (second args)
-                (apply #'s-list l (core-sym "cond" l) (cddr args))))))
-
-(define-builtin-macro "and" (form env)
-  (let ((args (macro-args form)) (l (loc form)))
-    (cond ((null args) (s-atom t l))
-          ((null (rest args)) (first args))
-          (t (let ((g (s-gensym "and" l)))
-               (s-list l (s-sym "let*" l) (s-vector l (list g (first args)))
-                       (s-list l (s-sym "if" l) g
-                               (apply #'s-list l (core-sym "and" l) (rest args))
-                               g)))))))
-
-(define-builtin-macro "or" (form env)
-  (let ((args (macro-args form)) (l (loc form)))
-    (cond ((null args) (s-atom nil l))
-          ((null (rest args)) (first args))
-          (t (let ((g (s-gensym "or" l)))
-               (s-list l (s-sym "let*" l) (s-vector l (list g (first args)))
-                       (s-list l (s-sym "if" l) g g
-                               (apply #'s-list l (core-sym "or" l) (rest args)))))))))
+(define-builtin-macro "defmacro" (form env)
+  (let* ((args (macro-args form))
+         (name (or (first args) (compile-error form "defmacro needs a name")))
+         (rest (rest args))
+         (l (loc form))
+         (doc nil))
+    (binding-name name "a macro name")
+    (when (and rest (eq (syntax-kind (first rest)) :atom) (stringp (syntax-datum (first rest))))
+      (setf doc (pop rest)))
+    (when (and rest (eq (syntax-kind (first rest)) :map))
+      (pop rest))
+    (flet ((with-implicit-params (vector)
+             (unless (vector-form-p vector)
+               (compile-error vector "defmacro parameters must be a vector, not ~A"
+                              (syntax-to-string vector)))
+             (s-vector (loc vector) (list* (s-sym "&form" (loc vector)) (s-sym "&env" (loc vector))
+                                           (items vector)))))
+      (let ((arities
+              (cond ((null rest) (compile-error form "defmacro needs a parameter vector"))
+                    ((vector-form-p (first rest))
+                     (list (apply #'s-list l (with-implicit-params (first rest)) (rest rest))))
+                    (t (loop for clause in rest
+                             collect (progn
+                                       (unless (and (list-form-p clause) (items clause))
+                                         (compile-error clause "expected an arity like ~
+                                                                ([params] body...)"))
+                                       (apply #'s-list (loc clause)
+                                              (with-implicit-params (first (items clause)))
+                                              (rest (items clause)))))))))
+        (s-list l (s-sym "do" l)
+                (apply #'s-list l (s-sym "def" l) name
+                       (append (and doc (list doc))
+                               (list (apply #'s-list l (s-sym "fn" l)
+                                            (s-sym (plain-name name) (loc name)) arities))))
+                (s-list l (core-sym "%set-macro!" l) (quoted name)))))))

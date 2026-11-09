@@ -214,3 +214,16 @@ Date: 2026-11-09 · Status: Accepted (lazy-seq realization and metadata approved
   - The reader and printer support `##Inf`, `##-Inf` and `##NaN` (completing D-029).
 - **Alternatives:** Clojure-style 32-element chunked seqs (faster lazy pipelines, but side effects run ahead); runtime metadata as in Clojure; writing the seq library in Skein now (portable, but slow until M0.8).
 - **Consequences:** Lazy pipelines are slower than Clojure's chunked ones; transducers are the fast path (`bench/README.md`). The seq library has to be ported or rewritten for the native runtime.
+
+## D-033: Macros see plain data; phase rules for macro helpers
+Date: 2026-11-09 · Status: Accepted (both choices approved by Jessie). Revises DESIGN §11.1 and §4.4.
+- **Context:** DESIGN §11.1 said `defmacro` "receives syntax objects and returns syntax". That would make ordinary Clojure macros (using `first`, `seq?`, `symbol?` on their arguments) need syntax accessors. DESIGN §4.4 required every function a macro calls to come from a namespace required for syntax, which rules out helper functions defined next to the macro.
+- **Decision:**
+  - Macros written in Skein receive and return plain data. Before calling a macro, the expander converts its form to data, giving each symbol and collection a fresh identity and recording the syntax it came from in a table. Afterwards, any object the macro passed through unchanged gets its original syntax back, so locations and metadata (`^:private`, `^i32`, `^:mutable`) survive; new forms get the macro call's location. Symbols therefore compare by value, not identity.
+  - Errors a macro signals without a location are reported at the macro call. Macro arity errors give the user's argument count, without `&form` and `&env`.
+  - Syntax-quote is expanded by the expander, not the reader, in the namespace where it appears: special forms and `&` stay unqualified, aliases are resolved, other symbols are qualified with their var's namespace or the current one, and `x#` names are replaced consistently within one syntax-quote.
+  - During expansion, a macro defined in namespace M may use vars from `skein.core`, from M itself, and from M's `:require-for-syntax` namespaces and everything they require. Other uses produce a `phase-warning`, once per macro and var, at the macro call's location. The check runs in `var-get` only while a macro is running.
+  - `ns`, `defmacro`, `defn` and `defn-` stay built into the host to bootstrap `lib/skein/core.skn`, which defines the other core macros in Skein and loads when the system loads.
+  - Destructuring is a front-end function, `skein.core/destructure`, used by the `let`, `loop`, `doseq` and `for` macros; the `fn` special form destructures parameters by wrapping its body in `let`.
+- **Alternatives:** Racket-style macros over syntax objects with explicit accessors; strict phase rules that require helper functions to live in a separate namespace.
+- **Consequences:** Clojure macros port with little change. Hygienic `define-syntax` (Phase 3) will work on syntax objects alongside `defmacro`. The native compiler must instantiate a macro's namespace (its earlier forms) at compile time, as Clojure's compiler does.

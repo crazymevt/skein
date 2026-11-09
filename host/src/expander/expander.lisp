@@ -116,11 +116,12 @@ signal a COMPILE-ERROR, or return NIL when ERRORP is false."
           (and var (var-macro-p var) var))))))
 
 (defun macroexpand-1 (form env)
-  "Expand FORM once if it is a macro call. Returns the expansion and T, or FORM and NIL."
+  "Expand FORM once if it is a macro call. Returns the expansion and T, or FORM and NIL.
+Built-in macros (written in CL) work on syntax; macros written in Skein see plain data."
   (let ((var (macro-var form env)))
-    (if var
-        (values (funcall (var-value var) form env) t)
-        (values form nil))))
+    (cond ((null var) (values form nil))
+          ((eq (var-macro-p var) :syntax) (values (funcall (var-value var) form env) t))
+          (t (values (expand-data-macro var form env) t)))))
 
 (defun macroexpand (form env)
   "Expand FORM until its head is no longer a macro. Returns the result and whether any
@@ -139,6 +140,12 @@ expansion happened."
            (name (plain-name head))
            (special (and name (gethash name *special-forms*))))
       (cond (special (funcall special form env tail))
+            ((core-head-p form "syntax-quote")
+             (analyze (expand-syntax-quote form env) env tail))
+            ((unquote-form-p form)
+             (compile-error form "~A is only allowed inside syntax-quote"
+                            (if (core-head-p form "unquote") "~ (unquote)"
+                                "~@ (unquote-splicing)")))
             ((macro-var form env)
              (analyze (macroexpand-1 form env) env tail))
             (t (make-call-node :location (loc form)
@@ -233,21 +240,39 @@ accepted and ignored until M0.8."
 ;;; fn
 
 (defun parse-params (vector)
-  "Parse a parameter vector into (values param-locals rest-local)."
+  "Parse a parameter vector into (values param-locals rest-local patterns). A parameter
+that is a destructuring pattern gets a fresh local; PATTERNS lists (pattern . local)."
   (unless (vector-form-p vector)
     (compile-error vector "fn parameters must be a vector, not ~A" (syntax-to-string vector)))
-  (let ((params '()) (rest nil) (forms (items vector)))
-    (loop while forms
-          do (let ((p (pop forms)))
-               (cond ((equal (plain-name p) "&")
-                      (unless (= (length forms) 1)
-                        (compile-error p "& must be followed by exactly one parameter"))
-                      (setf rest (make-binding-local (pop forms) "a rest parameter")))
-                     (t (push (make-binding-local p "a parameter") params)))))
-    (values (nreverse params) rest)))
+  (let ((params '()) (rest nil) (patterns '()) (forms (items vector)))
+    (flet ((param (p what)
+             (if (member (syntax-kind p) '(:vector :map))
+                 (let ((local (make-local (skein.runtime:gensym-name "p__"))))
+                   (push (cons p local) patterns)
+                   local)
+                 (make-binding-local p what))))
+      (loop while forms
+            do (let ((p (pop forms)))
+                 (cond ((equal (plain-name p) "&")
+                        (unless (= (length forms) 1)
+                          (compile-error p "& must be followed by exactly one parameter"))
+                        (setf rest (param (pop forms) "a rest parameter")))
+                       (t (push (param p "a parameter") params))))))
+    (values (nreverse params) rest (nreverse patterns))))
+
+(defun destructuring-body (patterns body location)
+  "Wrap BODY so that each (pattern . local) in PATTERNS is destructured with let."
+  (if (null patterns)
+      body
+      (list (apply #'s-list location (core-sym "let" location)
+                   (s-vector location (loop for (pattern . local) in patterns
+                                            append (list pattern
+                                                         (s-sym (local-name local) location))))
+                   body))))
 
 (defun analyze-arity (vector body env location)
-  (multiple-value-bind (params rest) (parse-params vector)
+  (multiple-value-bind (params rest patterns) (parse-params vector)
+    (setf body (destructuring-body patterns body location))
     (let* ((arity (make-arity :location location :params params :rest rest))
            (inner (with-locals env (append params (and rest (list rest))))))
       (setf (env-recur inner) arity

@@ -10,7 +10,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.2 Reader | ✅ |
 | M0.3 Core IR, expander skeleton, CL backend | ✅ |
 | M0.4 Persistent collections and seqs | ✅ |
-| M0.5 Macros and `skein.core` | ⬜ |
+| M0.5 Macros and `skein.core` | ✅ |
 | M0.6 Conditions and restarts | ⬜ |
 | M0.7 Object system | ⬜ |
 | M0.8 Declarations, value structs, typed arrays | ⬜ |
@@ -149,12 +149,14 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 
 - Phase 2: decide VS Code support for the native runtime's Swank server (a Swank-speaking extension or an LSP server); check SLY/Slynk compatibility (D-018).
 - Phase 2: decide whether FFI calls run on the fiber stack or the worker thread's native stack (D-024).
-- M0.3/M0.5: support `::alias/kw` keywords once namespace aliases exist; the reader needs a way to resolve aliases.
 - Phase 1: the seq library is written in CL for Phase 0 speed (D-032); port it to Skein (`lib/skein/core.skn`) with the front end, or reimplement it in the Zig runtime.
 - `atom` and `volatile` (DESIGN §6.3) have no milestone yet; atoms are listed in M0.9.
 - The HAMT has no Clojure-style ArrayNode for wide nodes; add one if map benchmarks call for it.
 - Sorted maps and sets, and persistent queues, are deferred (DESIGN §6.2).
 - Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031).
+- Startup: `lib/skein/core.skn` is compiled on every start, adding about 0.15 s (0.3 s total for `skein run`). Cache it, e.g. in a saved SBCL core, if this becomes annoying.
+- `defn` and `defn-` stay built in because they attach metadata (docstrings, `^:private`) to the name; move them to Skein if runtime metadata or a metadata helper for macros is added.
+- Core macros from DESIGN §5.2 that wait on later milestones: `try` and `defcondition` (M0.6), `defclass`, `defgeneric`, `defmethod` (M0.7), `defstruct` (M0.8), `with-nursery` (M0.9), `with-open` (needs `try`), `binding` (dynamic vars).
 - Arity errors name where the function was defined, not the call site; consider reporting the call site too (M0.6 or M0.11).
 - Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form (M0.6).
 - M0.8: calls currently go through `&rest` argument lists and a dispatch on the count; give fixed-arity functions direct CL lambda lists for speed.

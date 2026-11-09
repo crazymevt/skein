@@ -4,7 +4,7 @@
   (:use #:cl)
   (:export
    ;; Symbols and keywords
-   #:sym #:sym-p #:sym-name #:sym-namespace #:intern-sym
+   #:sym #:sym-p #:sym-name #:sym-namespace #:intern-sym #:copy-sym
    #:kw #:kw-p #:kw-name #:kw-namespace #:intern-kw
    ;; Booleans and truthiness
    #:+false+ #:false-p #:truthy-p #:bool
@@ -14,11 +14,13 @@
    ;; Errors
    #:skein-error #:skein-error-message #:skein-error-location
    #:unbound-var-error #:not-callable-error #:arity-error #:namespace-error
+   #:arity-error-function-name #:arity-error-argument-count
    ;; Namespaces and vars
    #:namespace #:namespace-p #:namespace-name #:namespace-loaded-p
    #:find-namespace #:ensure-namespace #:remove-namespace #:find-alias
    #:+core+ #:*current-namespace* #:*source-paths* #:*namespace-loader*
-   #:namespace-file-name #:require-namespace
+   #:namespace-file-name #:require-namespace #:namespace-requires #:namespace-syntax-requires
+   #:*expansion-context* #:phase-warning #:defcore #:gensym-name
    #:var #:var-p #:var-namespace #:var-name #:var-value #:var-macro-p #:var-dynamic-p
    #:var-private-p #:var-doc #:var-qualified-name
    #:+unbound+ #:intern-var #:find-own-var #:resolve-var #:var-bound-p #:var-get #:def-var
@@ -35,7 +37,7 @@
    ;; Seqs, equality and hashing (DESIGN §7)
    #:seq #:seq-first #:seq-next #:seq-rest #:seq-to-cl #:count-of
    #:coll-get #:coll-conj #:coll-assoc
-   #:equiv #:hash-of #:compare-values
+   #:equiv #:hash-of #:compare-values #:sequential-p #:map-p
    ;; Calling
    #:invoke-other #:kw-lookup
    ;; Printing

@@ -67,6 +67,11 @@
                                                          (format nil "~A/~A" namespace name)
                                                          name))))))))))
 
+(defun copy-sym (s)
+  "Return a fresh symbol equal to S (=, same hash) but not identical? to it. The expander
+gives macro arguments fresh symbols so it can track where each one came from."
+  (%make-sym (sym-namespace s) (sym-name s) (sym-hash s)))
+
 (defun intern-sym (name &optional namespace)
   "Return the Skein symbol NAME in NAMESPACE (a string, or NIL for an unqualified symbol)."
   (intern-in **syms** #'%make-sym name namespace 0))

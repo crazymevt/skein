@@ -26,11 +26,13 @@ gives the source location of the problem and READ-ERROR-MESSAGE describes it."))
   (max-arg 0 :type (integer 0))
   (rest-p nil))
 
-(defstruct (reader (:constructor %make-reader (stream file namespace)))
+(defstruct (reader (:constructor %make-reader (stream file namespace resolve-alias)))
   "The state of a reader over one character stream. See MAKE-READER."
   (stream nil :read-only t)
   (file nil :type (or null string) :read-only t)
   (namespace nil :type (or null string))
+  ;; A function from an alias name to a namespace name (or NIL), for ::alias/kw.
+  (resolve-alias nil)
   (line 1 :type (integer 1))
   (column 1 :type (integer 1))
   ;; Non-NIL while reading the body of #(...).
@@ -40,10 +42,11 @@ gives the source location of the problem and READ-ERROR-MESSAGE describes it."))
       "Return the current namespace name used to resolve ::keywords, or NIL.
 SETF it when the expander enters a new namespace.")
 
-(defun make-reader (stream &key file namespace)
+(defun make-reader (stream &key file namespace resolve-alias)
   "Return a reader over the character STREAM. FILE (a string) names the source in
-locations and errors. NAMESPACE is the current namespace name, used for ::keywords."
-  (let ((r (%make-reader stream file namespace)))
+locations and errors. NAMESPACE is the current namespace name, used for ::keywords.
+RESOLVE-ALIAS, if given, maps an alias name to a namespace name (or NIL) for ::alias/kw."
+  (let ((r (%make-reader stream file namespace resolve-alias)))
     ;; Skip a UTF-8 byte order mark at the start of the input.
     (when (eql (peek-char nil stream nil nil) (code-char #xFEFF))
       (read-char stream))
@@ -455,7 +458,13 @@ A valid name has at most one /, and its parts don't start or end with : or conta
   (if (and (> (length token) 1) (char= (char token 1) #\:))
       (let ((name (subseq token 2)))
         (when (find #\/ name)
-          (fail r line column "`::alias/name` keywords are not supported yet: `~A`" token))
+          (multiple-value-bind (alias kw-name) (split-qualified name)
+            (unless (and alias kw-name (string/= kw-name "/"))
+              (fail r line column "invalid keyword `~A`" token))
+            (let ((ns (and (reader-resolve-alias r) (funcall (reader-resolve-alias r) alias))))
+              (unless ns
+                (fail r line column "no namespace alias `~A` for `~A`" alias token))
+              (return-from parse-keyword (intern-kw kw-name ns)))))
         (unless (nth-value 1 (split-qualified name))
           (fail r line column "invalid keyword `~A`" token))
         (unless (reader-namespace r)
