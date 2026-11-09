@@ -661,7 +661,7 @@ skein bindgen SDL_video.h SDL_render.h ... -I /opt/homebrew/include --prefix SDL
 
 Live development is a first-class requirement, not an add-on.
 
-- **REPL connected to the running program.** In Phase 0 this is SBCL with SLIME/SLY or Alive. From Phase 2, the `skein` runtime has its own REPL server speaking the **Swank** protocol, so SLIME (and, after a compatibility check, SLY) connect to it directly (D-018).
+- **REPL connected to the running program.** In Phase 0 this is Skein's own text REPL, on the terminal and on a localhost socket (`skein dev`). From Phase 2, the `skein` runtime has its own REPL server speaking the **Swank** protocol, so SLIME (and, after a compatibility check, SLY) connect to it directly (D-018).
 - **Redefinition semantics:**
   - `defn`/`def`: the var is rebound, and every call through it sees the new definition on its next call. Frames already executing keep running the old code.
   - `defclass`: existing instances are updated (§8.4).
@@ -672,6 +672,14 @@ Live development is a first-class requirement, not an add-on.
 - **Error recovery:** unhandled errors suspend the fiber and open the debugger (§10). Restarts include `retry-frame`, `skip-frame`, `use-value` and `abort-fiber`.
 - **Inspector:** inspect any object, including class instances, value structs and arrays.
 - **State preservation:** `defonce` defines a var only if it's unbound, so world state survives reloads.
+
+Phase 0 details (D-039):
+- **Program entry:** `skein run` and `skein dev` load the main file, then call its namespace's `-main` with the remaining command-line arguments, if it defines one. Reloading a file re-runs its top-level forms but not `-main`, so a game starts its loop in `-main`.
+- **`skein dev [--port N | --no-server] file.skn args...`** runs the program, reloads loaded source files when they change (checking every 0.25 s), and serves the REPL on the terminal and on `localhost:5555`. The REPL protocol is plain text with a `namespace=> ` prompt per form. Editor setup is in [`docs/EDITORS.md`](EDITORS.md).
+- **REPL:** `*1`, `*2`, `*3` hold the last values and `*e` the last error; `(ns name)` or `(in-ns 'name)` switches namespace; `:quit` leaves.
+- **Debugger:** an unhandled error prints the active Skein restarts, numbered innermost first. Type a number to invoke one, `:bt` for the Skein functions on the stack, or any form to evaluate it. An error in the program's thread pauses that thread; the REPL attaches to it, and forms typed there run in the failing thread, so its restarts and state are available. Errors in spawned tasks still go to their nursery.
+- **Reload:** `(reload 'ns)` loads the namespace's file again. Vars keep their identity, so callers see new definitions; definitions deleted from the file remain until restart.
+- **Game loop:** `(skein.game/run-loop {:frame f :running? p})` calls `(f)` while `(p)` is true, each call inside `(skein.game/with-frame-restarts ...)`, which establishes `retry-frame` (run the frame again) and `skip-frame` (give up on it). M0.12 adds a fixed timestep.
 
 ## 16. Compiler architecture
 
@@ -796,7 +804,7 @@ skein build --target x86_64-windows-gnu --profile release
 | `skein new <name> [--template game\|app\|lib]` | scaffold a project |
 | `skein repl` | start a REPL |
 | `skein run <file-or-ns>` | run a program |
-| `skein dev` | run with file watching and hot reload |
+| `skein dev` | run with file watching, hot reload and a REPL server (§15) |
 | `skein test` | run tests |
 | `skein build [--target T] [--profile P]` | compile a native executable |
 | `skein package` | create distributables |

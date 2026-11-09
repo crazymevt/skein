@@ -531,3 +531,12 @@ channel operation, sleep, deref, check-cancelled) signals timeout."
   [bindings & body]
   (let [[i n] (binding-pair bindings "pdotimes")]
     `(%pdotimes ~n (fn [~i] ~@body))))
+
+;;; Live development (DESIGN §15)
+
+(defmacro defonce
+  "Define name like def, but only if its var has no value yet, so the value survives
+reloading the file: (defonce world (atom (new-world)))."
+  [var-name expr]
+  `(when-not (%var-bound? '~(symbol (%current-namespace-name) (name var-name)))
+     (def ~var-name ~expr)))

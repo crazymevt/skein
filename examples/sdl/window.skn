@@ -63,4 +63,5 @@ without a display."
     (finally (sdl/quit)))
   (println "done"))
 
-(run)
+(defn -main [& args]
+  (run))

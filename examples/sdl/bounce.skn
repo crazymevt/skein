@@ -1,0 +1,85 @@
+(ns examples.sdl.bounce
+  "A square bouncing around a window: the demo for live development.
+
+Run it with `./skein dev examples/sdl/bounce.skn`. While it runs, edit square-color or
+speed below and save: the change shows up on the next frame. `--frames N` stops it after
+N frames. docs/manual-tests/M0.11.md walks through fixing an error with retry-frame."
+  (:require [skein.ffi :as ffi]
+            [skein.game :as game]
+            [sdl3.raw :as sdl]))
+
+(def width 640)
+(def height 480)
+(def size 60.0)
+
+;; defonce keeps the square where it is when this file is reloaded.
+(defonce state (atom {:x 100.0 :y 80.0 :dx 1.0 :dy 1.0}))
+
+(defn background-color [] [20 24 32])
+(defn square-color [] [255 140 40])
+(defn speed [] 240.0) ; pixels per second
+
+(defn bounce [pos dir limit]
+  (cond (< pos 0.0) 1.0
+        (> pos limit) -1.0
+        :else dir))
+
+(defn step [{:keys [x y dx dy]} dt]
+  (let [x (+ x (* dx (speed) dt))
+        y (+ y (* dy (speed) dt))]
+    {:x x :y y
+     :dx (bounce x dx (- width size))
+     :dy (bounce y dy (- height size))}))
+
+(defn set-color! [renderer [r g b]]
+  (sdl/set-render-draw-color renderer r g b 255))
+
+(defn draw [renderer rect {:keys [x y]}]
+  (set-color! renderer (background-color))
+  (sdl/render-clear renderer)
+  (set-color! renderer (square-color))
+  (ffi/put-field! rect sdl/sdl-frect :x x)
+  (ffi/put-field! rect sdl/sdl-frect :y y)
+  (ffi/put-field! rect sdl/sdl-frect :w size)
+  (ffi/put-field! rect sdl/sdl-frect :h size)
+  (sdl/render-fill-rect renderer rect)
+  (sdl/render-present renderer))
+
+(defn quit-requested? [event]
+  (loop [quit false]
+    (if (sdl/poll-event event)
+      (recur (or quit (= (ffi/field event sdl/sdl-event :type) sdl/event-quit)))
+      quit)))
+
+(defn frame-limit [args]
+  (let [[flag n] args]
+    (when (= flag "--frames") (parse-long n))))
+
+(defn -main [& args]
+  (when-not (sdl/init sdl/init-video)
+    (error (str "SDL_Init failed: " (sdl/get-error))))
+  (try
+    (let [window (sdl/create-window "Skein: bounce" width height 0)
+          renderer (sdl/create-renderer window nil)
+          limit (frame-limit args)
+          frames (atom 0)
+          quit (atom false)
+          last-time (atom (sdl/get-ticks-ns))]
+      (sdl/set-render-vsync renderer 1)
+      (ffi/with-foreign [event (ffi/alloc sdl/sdl-event)]
+        (ffi/with-foreign [rect (ffi/alloc sdl/sdl-frect)]
+          (game/run-loop
+           {:running? (fn [] (not (or @quit (and limit (>= @frames limit)))))
+            :frame (fn []
+                     (when (quit-requested? event) (reset! quit true))
+                     (let [now (sdl/get-ticks-ns)
+                           ;; After a pause in the debugger, don't jump ahead.
+                           dt (min 0.05 (/ (- now @last-time) 1e9))]
+                       (reset! last-time now)
+                       (swap! state step dt)
+                       (draw renderer rect @state)
+                       (swap! frames inc)))})))
+      (println "bounced for" @frames "frames")
+      (sdl/destroy-renderer renderer)
+      (sdl/destroy-window window))
+    (finally (sdl/quit))))

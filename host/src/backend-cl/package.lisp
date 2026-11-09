@@ -9,7 +9,8 @@
                 #:namespace-file-name #:skein-error #:namespace-error)
   (:export
    #:node-to-cl #:compile-node #:eval-node #:*profile* #:efficiency-note
-   #:eval-toplevel #:load-stream #:load-string #:load-file #:load-namespace #:run-file)
+   #:eval-toplevel #:load-stream #:load-string #:load-file #:load-namespace #:run-file
+   #:program-source-paths #:main-function #:find-namespace-file #:library-directory)
   (:documentation "The Phase 0 backend: translates Core IR into Common Lisp code, compiles
 it with SBCL and runs it. Also the compiler driver: reading, expanding and evaluating
 top-level forms, loading files, and finding namespaces on *SOURCE-PATHS*."))

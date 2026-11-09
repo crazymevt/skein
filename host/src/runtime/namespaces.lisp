@@ -12,6 +12,8 @@
   (refers (make-hash-table :test 'equal :synchronized t) :read-only t)
   (aliases (make-hash-table :test 'equal :synchronized t) :read-only t)
   (loaded-p nil)
+  ;; The source file its ns form was loaded from (a native namestring), or NIL.
+  (file nil)
   ;; Namespaces this one requires at run time (phase 0) and for syntax (phase 1).
   (requires '())
   (syntax-requires '()))
@@ -33,6 +35,8 @@ is what makes redefinition visible to existing callers."
       (documentation 'namespace-p 'function) "Return true if the argument is a namespace."
       (documentation 'namespace-loaded-p 'function)
       "Return true once a namespace's source has started loading."
+      (documentation 'namespace-file 'function)
+      "Return the source file a namespace was loaded from, or NIL."
       (documentation 'namespace-requires 'function)
       "Return the namespaces this namespace requires at run time."
       (documentation 'namespace-syntax-requires 'function)
@@ -77,6 +81,10 @@ of a syntax object and an expander environment, returning a syntax object."
     (or (gethash name **namespaces**)
         (setf (gethash name **namespaces**) (%make-namespace name)))))
 
+(defun all-namespaces ()
+  "Return a list of every namespace."
+  (loop for ns being the hash-values of **namespaces** collect ns))
+
 (defun remove-namespace (name)
   "Forget the namespace called NAME. Existing code that refers to its vars keeps them."
   (remhash name **namespaces**))
@@ -92,6 +100,10 @@ of a syntax object and an expander environment, returning a syntax object."
 
 (defvar *source-paths* '()
   "Directories searched, in order, for a namespace's source file.")
+
+(defvar *loading-file* nil
+  "The file being loaded (a native namestring), or NIL. A namespace declared while it
+loads records it as its file.")
 
 (defvar *namespace-loader* nil
   "A function of a namespace name that loads its source, set by the compiler driver.")

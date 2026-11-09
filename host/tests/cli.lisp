@@ -37,9 +37,13 @@
     (is (string= "" out))
     (is (search "unknown command `frobnicate`" err))))
 
-(test run-needs-exactly-one-file
+(test run-needs-a-file
   (is (= skein.cli:+exit-usage+ (run-cli "run")))
-  (is (= skein.cli:+exit-usage+ (run-cli "run" "a.skn" "b.skn"))))
+  ;; Arguments after the file go to its -main (D-039); the file must still exist.
+  (multiple-value-bind (code out err) (run-cli "run" "a.skn" "b.skn")
+    (declare (ignore out))
+    (is (= skein.cli:+exit-failure+ code))
+    (is (search "file not found: a.skn" err))))
 
 (test run-missing-file
   (multiple-value-bind (code out err) (run-cli "run" "no/such/file.skn")

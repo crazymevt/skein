@@ -5,7 +5,7 @@
   :version "0.0.1"
   :author "Jessie Hughart"
   :license "MIT"
-  :depends-on ("closer-mop" "cffi")
+  :depends-on ("closer-mop" "cffi" (:require "sb-bsd-sockets"))
   :pathname "src/"
   :serial t
   ;; One package per module (src/<module>/package.lisp). Files are listed in load order:
@@ -60,6 +60,8 @@
                (:file "backend-cl/package")
                (:file "backend-cl/compile")
                (:file "backend-cl/driver")
+               (:file "repl/package")
+               (:file "repl/repl")
                (:file "cli/package")
                (:file "cli/cli"))
   :in-order-to ((test-op (test-op "skein/tests"))))
@@ -84,7 +86,8 @@
                (:file "concurrency")
                (:file "cli")
                (:file "ffi")
-               (:file "bindgen"))
+               (:file "bindgen")
+               (:file "repl"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!
                                        (uiop:find-symbol* :all :skein.tests))

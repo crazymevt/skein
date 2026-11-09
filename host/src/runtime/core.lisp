@@ -98,6 +98,15 @@
 
 ;;; Strings and printing
 
+(defcore "parse-long" (s)
+  (unless (stringp s)
+    (skein-error 'skein-error nil "parse-long needs a string, not ~A" (readable-string s)))
+  ;; Like Clojure's: an optional sign and decimal digits, else nil.
+  (let ((start (if (and (plusp (length s)) (find (char s 0) "+-")) 1 0)))
+    (and (> (length s) start)
+         (every #'digit-char-p (subseq s start))
+         (parse-integer s))))
+
 (defcore "str" (&rest xs)
   (with-output-to-string (s)
     (dolist (x xs)
@@ -106,10 +115,13 @@
             (t (print-value x s :readably t))))))
 
 (defun print-values (xs readably newline)
-  (loop for (x . more) on xs
-        do (print-value x *standard-output* :readably readably)
-           (when more (write-char #\Space *standard-output*)))
-  (when newline (terpri *standard-output*))
+  ;; One write per call, so lines printed by different threads do not interleave.
+  (write-string (with-output-to-string (s)
+                  (loop for (x . more) on xs
+                        do (print-value x s :readably readably)
+                           (when more (write-char #\Space s)))
+                  (when newline (terpri s)))
+                *standard-output*)
   nil)
 
 (defcore "print" (&rest xs) (print-values xs nil nil))
@@ -131,7 +143,20 @@
   (let ((ns (ensure-namespace (sym-string name "a namespace name"))))
     (setf (namespace-loaded-p ns) t
           *current-namespace* ns)
+    (when *loading-file*
+      (setf (namespace-file ns) *loading-file*))
     ns))
+
+(defcore "in-ns" (name)
+  (let ((ns (ensure-namespace (sym-string name "a namespace name"))))
+    (setf (namespace-loaded-p ns) t
+          *current-namespace* ns)
+    ns))
+
+(defcore "%var-bound?" (name)
+  (let* ((ns (and (sym-namespace name) (find-namespace (sym-namespace name))))
+         (var (and ns (find-own-var ns (sym-name name)))))
+    (bool (and var (not (eq (var-value var) +unbound+))))))
 
 (defcore "%require" (name alias)
   (let ((ns (require-namespace (sym-string name "a namespace name"))))

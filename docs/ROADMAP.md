@@ -16,7 +16,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.8 Declarations, value structs, typed arrays | ✅ |
 | M0.9 Concurrency | ✅ |
 | M0.10 FFI and bindgen | ✅ |
-| M0.11 REPL, reload and dev loop | ⬜ |
+| M0.11 REPL, reload and dev loop | ✅ |
 | M0.12 Demo game | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
@@ -112,7 +112,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M0.11 REPL, reload and dev loop
 - `skein repl`, `(reload 'ns)`, `skein dev` with a file watcher, `defonce`.
-- Document editor setup for Emacs (SLY) and VS Code (Alive).
+- Document editor setup for Emacs and VS Code (`docs/EDITORS.md`; plain text REPL over a socket instead of SLY/Alive, D-039).
 - Unhandled errors in the game loop offer `retry-frame` and `skip-frame` restarts.
 
 **Exit:** a recorded manual test: change a function while the demo runs, and the change appears without a restart; cause an error, fix it, choose `retry-frame`, and the game continues.
@@ -154,7 +154,10 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - The HAMT has no Clojure-style ArrayNode for wide nodes; add one if map benchmarks call for it.
 - Sorted maps and sets, and persistent queues, are deferred (DESIGN §6.2).
 - Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031). Tasks must inherit the bindings in effect when they are spawned (DESIGN §4.3).
-- M0.11: an unhandled error in a task should suspend it and open the debugger in development, with restarts (DESIGN §10); Phase 0 fails the task and reports to its nursery.
+- Phase 2: an unhandled error in a spawned task should suspend it and open the debugger in development, with restarts (DESIGN §10). Phase 0 fails the task and reports to its nursery; only errors in the program's own threads open the debugger (D-039).
+- REPL: an inspector (DESIGN §15), and a list of a macro's dependents to recompile. `*1`/`*2`/`*3`/`*e` are shared by all REPL connections; make them per connection once dynamic vars exist.
+- REPL: completion and documentation lookup for editors (inf-clojure's commands send Clojure code); consider nREPL if Calva/CIDER support is wanted before Phase 2.
+- Error messages for host conditions are still CL's (`arithmetic error DIVISION-BY-ZERO signalled`); give them Skein wording.
 - Concurrency in Phase 0 (D-037) is simple rather than fast: all channels share one lock, blocked operations poll every 20 ms for cancellation, the worker pool has no upper bound, and an `alts!` put on an unbuffered channel is only ready when a `<!` taker is already waiting. Real fibers and a work-stealing scheduler come in Phase 2.
 - Type errors from declarations show CL type names and generated variable names; translate them to Skein terms and add locations.
 - Hot-path gaps: keyword access to value-struct fields (`(:x v)`) and `defsoa` field functions are not inlined; use the `vec2-x` accessors and arrays of primitives in hot code. `(aget structs i)` allocates the struct it returns.
@@ -165,8 +168,8 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Methods can specialize on condition types (M0.7), but `defcondition` still makes plain CL condition classes rather than Skein classes; unify them if conditions need slots with cells, `with`, or inheritance from Skein classes.
 - Custom metaclasses written in Skein (DESIGN §8.5) and `:cell :ref` (STM) are not supported yet.
 - Generic function arity errors come from CLOS without a Skein location.
-- Arity errors name where the function was defined, not the call site; consider reporting the call site too (M0.6 or M0.11).
-- Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form, e.g. by recording the current form in the debugger hook (M0.11).
+- Arity errors name where the function was defined, not the call site; consider reporting the call site too.
+- Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form, e.g. by recording the current form in the debugger hook.
 - `skein run` looks for required namespaces next to the main file and in the current directory; use `project.skn` `:paths` once it exists.
 - Consider `#!` shebang lines so `.skn` files can be executable scripts.
 - First shader-using demo: pick shader cross-compilation tooling for the SDL3 GPU API, e.g. SDL_shadercross (D-020).

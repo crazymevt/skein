@@ -70,7 +70,9 @@ These are defined in M0.1; update this section if they change.
 |---|---|
 | `make test` | run all tests |
 | `make repl` | SBCL with Skein loaded |
-| `./skein run <file.skn>` | run a Skein program |
+| `./skein run <file.skn> [args]` | run a Skein program (calls its `-main` with the args) |
+| `./skein repl` | start a Skein REPL |
+| `./skein dev <file.skn> [args]` | run with file reloading and a REPL (terminal and localhost:5555) |
 | `make bench` | run the benchmarks in `bench/` |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |
 | `make sdl3-bindings` | regenerate `lib/sdl3/raw.skn` |

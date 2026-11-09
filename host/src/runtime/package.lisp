@@ -16,7 +16,8 @@
    #:unbound-var-error #:not-callable-error #:arity-error #:namespace-error
    #:arity-error-function-name #:arity-error-argument-count
    ;; Namespaces and vars
-   #:namespace #:namespace-p #:namespace-name #:namespace-loaded-p
+   #:namespace #:namespace-p #:namespace-name #:namespace-loaded-p #:namespace-file
+   #:*loading-file* #:all-namespaces
    #:find-namespace #:ensure-namespace #:remove-namespace #:find-alias
    #:+core+ #:*current-namespace* #:*source-paths* #:*namespace-loader*
    #:namespace-file-name #:require-namespace #:namespace-requires #:namespace-syntax-requires

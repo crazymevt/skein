@@ -36,12 +36,17 @@ MAIN prints its message to the error stream and returns its exit code."))
 Usage: skein <command> [arguments]
 
 Commands:
-  run [--release] <file.skn>
-                   run a Skein program (--release: optimize with the release profile)
+  run [--release] <file.skn> [args...]
+                   run a Skein program: load the file, then call its -main with the
+                   args, if it defines one (--release: use the release profile)
   bindgen <header.h>... --prefix P --ns NS [--out FILE] [--library NAME]
           [--lib OS=FILE]... [-I DIR]... [--blocking C_NAME,...]
                    generate Skein FFI bindings from C headers (needs clang;
                    --lib takes macos, linux or windows, e.g. --lib linux=libfoo.so.1)
+  repl             start a REPL
+  dev [--port N | --no-server] <file.skn> [args...]
+                   run a program like `run`, reload source files when they change, and
+                   serve a REPL on the terminal and on localhost:N (default 5555)
   help             show this message
   version          show the Skein version
 "))
@@ -54,17 +59,33 @@ Commands:
     (command-run-file args)))
 
 (defun command-run-file (args)
-  (unless (= (length args) 1)
-    (cli-error +exit-usage+ "skein run: expected one file, e.g. `skein run hello.skn`"))
+  (unless args
+    (cli-error +exit-usage+ "skein run: expected a file, e.g. `skein run hello.skn`"))
   (let ((file (first args)))
     (unless (probe-file file)
       (cli-error +exit-failure+ "skein run: file not found: ~A" file))
-    (multiple-value-bind (condition restarts) (run-reporting-unhandled file)
+    (multiple-value-bind (condition restarts) (run-reporting-unhandled file (rest args))
       (when condition
         (finish-output *standard-output*)
         (let ((*print-pretty* nil))
           (cli-error +exit-failure+ "error: ~A~:[~;~%available restarts:~{~%  ~A~}~]"
                      condition restarts restarts))))))
+
+(defun command-dev (args out)
+  (let ((port 5555))
+    (loop while (and args (char= (char (first args) 0) #\-))
+          do (let ((arg (pop args)))
+               (cond ((string= arg "--no-server") (setf port nil))
+                     ((string= arg "--port")
+                      (setf port (or (ignore-errors (parse-integer (pop args)))
+                                     (cli-error +exit-usage+ "skein dev: --port needs a ~
+                                                              number"))))
+                     (t (cli-error +exit-usage+ "skein dev: unknown option ~A" arg)))))
+    (unless args
+      (cli-error +exit-usage+ "skein dev: expected a file, e.g. `skein dev game.skn`"))
+    (unless (probe-file (first args))
+      (cli-error +exit-failure+ "skein dev: file not found: ~A" (first args)))
+    (skein.repl:run-dev (first args) (rest args) :port port :in *standard-input* :out out)))
 
 (defun command-bindgen (args out)
   (let ((headers '()) (prefix nil) (namespace nil) (output nil) (library nil)
@@ -123,7 +144,7 @@ Commands:
                           (skein.runtime:readable-string (skein.runtime:skein-restart-name r))
                           (skein.runtime:skein-restart-report r))))
 
-(defun run-reporting-unhandled (file)
+(defun run-reporting-unhandled (file args)
   "Run FILE. If an error goes unhandled, return it and descriptions of the restarts that
 were active when it was signaled; otherwise return NIL. Only unhandled errors stop the
 program: a signal that no one handles still returns nil, as it should."
@@ -133,7 +154,7 @@ program: a signal that no one handles still returns nil, as it should."
                     (lambda (condition hook)
                       (declare (ignore hook))
                       (throw 'unhandled (list condition (skein-restart-descriptions))))))
-              (skein.backend.cl:run-file file)
+              (skein.backend.cl:run-file file :args args)
               nil))))
     (values (first result) (second result))))
 
@@ -156,6 +177,12 @@ see TOPLEVEL."
               ((string= command "run")
                (command-run rest)
                +exit-ok+)
+              ((string= command "repl")
+               (unless (null rest)
+                 (cli-error +exit-usage+ "skein repl: takes no arguments"))
+               (skein.repl:run-repl :in *standard-input* :out out))
+              ((string= command "dev")
+               (command-dev rest out))
               ((string= command "bindgen")
                (command-bindgen rest out)
                +exit-ok+)

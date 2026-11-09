@@ -1,0 +1,29 @@
+(ns skein.game
+  "Game-loop helpers (DESIGN §10, §15). Each frame runs with two restarts, so an error in
+a frame can be fixed while the game is paused in the debugger:
+  retry-frame  run the frame again from the start (after reloading the fix)
+  skip-frame   give up on this frame and go on with the next")
+
+(defmacro with-frame-restarts
+  "Run body as one frame, with the retry-frame and skip-frame restarts established.
+Returns the body's value, or nil if the frame was skipped."
+  [& body]
+  `(loop []
+     (let [result# (restart-case [:done (do ~@body)]
+                     (~'retry-frame [] :report "Run this frame again" [:retry nil])
+                     (~'skip-frame [] :report "Skip the rest of this frame" [:skip nil]))]
+       (if (= (first result#) :retry)
+         (recur)
+         (second result#)))))
+
+(defn run-loop
+  "Call (frame) over and over, each call with the retry-frame and skip-frame restarts,
+until (running?) returns false. Returns nil.
+Options: :frame (required) and :running? (default: always true)."
+  [{:keys [frame running?] :or {running? (constantly true)}}]
+  (when-not (fn? frame)
+    (error "run-loop needs a :frame function"))
+  (loop []
+    (when (running?)
+      (with-frame-restarts (frame))
+      (recur))))
