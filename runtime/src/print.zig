@@ -79,7 +79,14 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
             put(out, string.bytes(coll.get(v, 0)));
             put(out, ">");
         },
-        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq, .eduction => writeSequential(v, out, readably, "(", ")"),
+        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq, .eduction, .arrseq => writeSequential(v, out, readably, "(", ")"),
+        .@"struct" => @import("structs.zig").writeStruct(v, out, readably),
+        .prim_array, .any_array, .struct_array, .array_view, .byte_view => @import("structs.zig").writeArray(v, out, readably),
+        .struct_def => {
+            put(out, "#<struct ");
+            put(out, @import("structs.zig").defName(v));
+            put(out, ">");
+        },
         .reduced => {
             put(out, "#<reduced ");
             write(coll.get(v, 0), out, true);

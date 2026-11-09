@@ -263,6 +263,7 @@ pub fn classOf(v: Value) Value {
         .atom => builtin(.atom),
         .condition => conditionClass(cond.conditionType(v)),
         .instance => slot(v, 0),
+        .@"struct" => structClass(@import("structs.zig").structDef(v)),
         else => builtin(.any),
     };
 }
@@ -280,9 +281,40 @@ pub fn isInstance(c: Value, v: Value) bool {
 /// The class that `x` names: a class, a condition type, or a symbol (a built-in class
 /// name, or a class or condition type by its qualified name, or by a unique unqualified
 /// one).
+/// The class of a struct type (DESIGN §9.1: methods can specialize on value structs).
+fn structClass(def: Value) Value {
+    const structs = @import("structs.zig");
+    const name = structs.defName(def);
+    if (lookup(&classes, name)) |c| {
+        if (slot(c, c_type) == def) return c;
+    }
+    const c = newClass(name, 3);
+    setSlot(c, c_type, def);
+    setSlot(c, c_supers, coll.vectorOf(&.{builtin(.any)}));
+    setSlot(c, c_cpl, coll.vectorOf(&.{ c, builtin(.any) }));
+    register(&classes, name, c);
+    return c;
+}
+
+/// True if the symbol names a class, struct or condition type (for make-array).
+pub fn knownClassName(x: Value) bool {
+    if (!names.isSymbol(x)) return false;
+    if (names.nsOf(x) == null and builtinNamed(names.nameOf(x)) != null) return true;
+    var buf: [512]u8 = undefined;
+    if (names.nsOf(x)) |ns| {
+        const full = std.fmt.bufPrint(&buf, "{s}/{s}", .{ ns, names.nameOf(x) }) catch return false;
+        return lookup(&classes, full) != null or cond.typeByName(full) != null;
+    }
+    return false;
+}
+
 pub fn findClass(x: Value) Value {
     if (isClass(x)) return x;
     if (cond.isType(x)) return conditionClass(x);
+    const structs = @import("structs.zig");
+    if (structs.findDef(x)) |def| {
+        if (!names.isSymbol(x) or lookupDefclass(x) == null) return structClass(def);
+    }
     if (!names.isSymbol(x)) rt.raise(.@"error", "{s} is not a class", .{readable(x)});
     if (names.nsOf(x) == null) {
         if (builtinNamed(names.nameOf(x))) |b| return b;
@@ -315,6 +347,17 @@ pub fn findClass(x: Value) Value {
         if (cond.typeByName(full)) |t| return conditionClass(t);
     }
     rt.raise(.@"error", "{s} is not a class", .{readable(x)});
+}
+
+/// The defclass class a symbol names by its qualified name, or null.
+fn lookupDefclass(x: Value) ?Value {
+    var buf: [512]u8 = undefined;
+    const full = if (names.nsOf(x)) |ns|
+        std.fmt.bufPrint(&buf, "{s}/{s}", .{ ns, names.nameOf(x) }) catch return null
+    else
+        return null;
+    const c = lookup(&classes, full) orelse return null;
+    return if (slot(c, c_kind).toFixnum() == kind_defclass) c else null;
 }
 
 fn cellKind(x: Value) Value {
@@ -472,6 +515,7 @@ pub fn make(designator: Value, kvs: []const Value) Value {
 /// with: a copy of `obj` with the slots in `kvs` changed. Cells are shared unless kvs
 /// has :fresh-cells true; a changed cell slot gets a fresh cell.
 pub fn with(obj: Value, kvs_in: []const Value) Value {
+    if (obj.isObjectOf(.@"struct")) return @import("structs.zig").with(obj, kvs_in);
     if (!isObjectInstance(obj)) rt.raise(.@"error", "with needs an instance or struct, not {s}", .{readable(obj)});
     var buf: [128]Value = undefined;
     var n: usize = 0;

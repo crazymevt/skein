@@ -17,6 +17,7 @@ const platform = @import("platform");
 const cond = @import("cond.zig");
 const seqs = @import("seq.zig");
 const objs = @import("objects.zig");
+const structs = @import("structs.zig");
 const Value = @import("value.zig").Value;
 
 const Args = []const Value;
@@ -56,6 +57,8 @@ pub fn count(v: Value) usize {
         .transient_vector, .transient_map => coll.ux(coll.get(v, 0)),
         .transient_set => coll.ux(coll.get(coll.get(v, 0), 0)),
         .vseq => coll.vectorCount(coll.get(v, 0)) - coll.ux(coll.get(v, 1)),
+        .prim_array, .any_array, .struct_array, .array_view, .byte_view => structs.count(v),
+        .arrseq => structs.count(coll.get(v, 0)) - coll.ux(coll.get(v, 1)),
         .sseq => string.count(coll.get(v, 0)) - coll.ux(coll.get(v, 1)),
         .cons, .lazy_seq, .eduction => seqs.countSeq(v),
         else => badArg("count", v),
@@ -113,6 +116,8 @@ fn get(c: Value, k: Value, not_found: Value) Value {
         return Value.fromChar(string.charAt(c, @intCast(k.toFixnum())));
     }
     if (c.isObjectOf(.transient_map)) return coll.tmapGet(c, k) orelse not_found;
+    // A struct's fields, by keyword.
+    if (c.isObjectOf(.@"struct")) return structs.get(c, k) orelse not_found;
     // An instance's slots, by keyword (DESIGN §8.2).
     if (c.isObjectOf(.instance)) return objs.get(c, k) orelse not_found;
     // A condition's slots, by keyword: (:path c) (DESIGN §10).
@@ -406,6 +411,7 @@ fn keysOrVals(comptime keys: bool) fn (Args) Value {
             const m = a[0];
             if (m == Value.nil) return Value.nil;
             if (keys and m.isObjectOf(.instance)) return objs.keys(m);
+            if (keys and m.isObjectOf(.@"struct")) return structs.keys(m);
             if (!coll.isMap(m)) badArg(if (keys) "keys" else "vals", m);
             const n = coll.mapCount(m);
             if (n == 0) return Value.nil;
@@ -982,6 +988,39 @@ const table = [_]Entry{
     e("%define-generic", 3, 3, struct {
         fn f(a: Args) Value {
             return objs.defineGeneric(a[0], nameString("%define-generic", a[1]), a[2]);
+        }
+    }.f),
+    // Structs and typed arrays (M1.8 step 5, D-055)
+    e("%make-array", 2, 2, struct {
+        fn f(a: Args) Value {
+            return structs.makeArray(a[0], a[1]);
+        }
+    }.f),
+    e("aget", 2, 2, struct {
+        fn f(a: Args) Value {
+            return structs.aget(a[0], a[1]);
+        }
+    }.f),
+    e("aset!", 3, 3, struct {
+        fn f(a: Args) Value {
+            return structs.aset(a[0], a[1], a[2]);
+        }
+    }.f),
+    e("array?", 1, 1, pred(structs.isArray)),
+    e("struct?", 1, 1, pred(structs.isStruct)),
+    e("view", 2, 3, struct {
+        fn f(a: Args) Value {
+            return structs.view(a[0], a[1], if (a.len == 3) a[2] else null);
+        }
+    }.f),
+    e("as-bytes", 1, 1, struct {
+        fn f(a: Args) Value {
+            return structs.asBytes(a[0]);
+        }
+    }.f),
+    e("update!", 3, null, struct {
+        fn f(a: Args) Value {
+            return structs.update(a[0], a[1], a[2..]);
         }
     }.f),
     e("odd?", 1, 1, parity(true)),

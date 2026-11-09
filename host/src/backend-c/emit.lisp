@@ -317,6 +317,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "set-slot!" "%set-slot!" "update-slot!" "cell" "instance?" "class-of" "class-name"
     "class-slots" "class-precedence-list" "generic-methods" "%define-class" "%class"
     "%eql-specializer" "%define-generic"
+    ;; Structs and typed arrays (step 5)
+    "%make-array" "aget" "aset!" "array?" "struct?" "view" "as-bytes" "update!"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -795,9 +797,91 @@ runs in (D-054): a var that holds a generic function, else the namespace's own v
        (= (length args) 6) (const-node-p (first args)) (const-node-p (second args))
        (sym-p (const-node-value (first args))) (stringp (const-node-value (second args)))))
 
+(defun core-call-p (fn name args count)
+  "True if FN is skein.core/NAME called with COUNT arguments, the first a quoted symbol."
+  (and (var-ref-node-p fn) (core-var-p (var-ref-node-var fn))
+       (string= (var-name (var-ref-node-var fn)) name)
+       (= (length args) count) (const-node-p (first args))
+       (sym-p (const-node-value (first args)))))
+
+(defun qualified-type-symbol (sym)
+  "SYM, a type in a make-array or a struct field, qualified if it names a struct (by its
+definition on the host) so the runtime finds it by its full name (D-055)."
+  (let ((def (and (null (sym-namespace sym)) (skein.runtime::find-struct-def sym))))
+    (if def
+        (let* ((name (skein.runtime::struct-def-name def))
+               (slash (position #\/ name)))
+          (skein.runtime:intern-sym (subseq name (1+ slash)) (subseq name 0 slash)))
+        sym)))
+
+(defun qualified-fields (fields)
+  "A struct's fields constant ([[name type]...]) with struct types qualified."
+  (skein.runtime:vector-from-list
+   (mapcar (lambda (f)
+             (let ((items (skein.runtime:vector-to-list f)))
+               (skein.runtime:vector-from-list
+                (if (and (second items) (sym-p (second items)))
+                    (list (first items) (qualified-type-symbol (second items)))
+                    items))))
+           (skein.runtime:seq-to-cl fields))))
+
+(defun emit-define-struct (node args)
+  "(%define-struct 'name value? '[[field type]...]): define the struct natively, then set
+the vars Phase 0 defines for it, which the host made when the form ran at compile time:
+the constructor, name? and name-field (D-055)."
+  (let* ((name (const-node-value (first args)))
+         (short (sym-name name))
+         (fields (skein.runtime:seq-to-cl (const-node-value (third args))))
+         (def (temp (format nil "sk_define_struct(~A, ~A, ~A)"
+                            (constant-expr name node)
+                            (emit (second args))
+                            (constant-expr (qualified-fields (const-node-value (third args)))
+                                           node))))
+         (ns *current-namespace*))
+    (flet ((set-var (var-name expr)
+             (let ((var (skein.runtime:find-own-var ns var-name)))
+               (when var (stmt "sk_var_set(~A, ~A);" (var-c-name var) expr)))))
+      (set-var short (format nil "sk_struct_constructor(~A)" def))
+      (set-var (format nil "~A?" short) (format nil "sk_struct_predicate(~A)" def))
+      (loop for f in fields
+            for i from 0
+            do (set-var (format nil "~A-~A" short (sym-name (skein.runtime:vector-nth f 0)))
+                        (format nil "sk_struct_accessor(~A, ~D)" def i))))
+    (single-value "SK_NIL")))
+
+(defun emit-define-soa (node args)
+  "(%define-soa 'name '[[field type]...]): as emit-define-struct, for defsoa's vars: the
+type, make-name and a function per field."
+  (let* ((name (const-node-value (first args)))
+         (short (sym-name name))
+         (fields (skein.runtime:seq-to-cl (const-node-value (second args))))
+         (def (temp (format nil "sk_define_soa(~A, ~A)" (constant-expr name node)
+                            (constant-expr (qualified-fields (const-node-value (second args)))
+                                           node))))
+         (ns *current-namespace*))
+    (flet ((set-var (var-name expr)
+             (let ((var (skein.runtime:find-own-var ns var-name)))
+               (when var (stmt "sk_var_set(~A, ~A);" (var-c-name var) expr)))))
+      (set-var short def)
+      (set-var (format nil "make-~A" short) (format nil "sk_soa_maker(~A)" def))
+      (loop for f in fields
+            for i from 0
+            do (set-var (sym-name (skein.runtime:vector-nth f 0))
+                        (format nil "sk_soa_field(~A, ~D)" def i))))
+    (single-value "SK_NIL")))
+
 (defun emit-call (node)
   (let ((fn (call-node-fn node))
         (args (qualify-condition-type-call (call-node-fn node) (call-node-args node))))
+    (when (core-call-p fn "%define-struct" args 3)
+      (return-from emit-call (emit-define-struct node args)))
+    (when (core-call-p fn "%define-soa" args 2)
+      (return-from emit-call (emit-define-soa node args)))
+    (when (core-call-p fn "%make-array" args 2)
+      (setf args (cons (make-const-node :location (node-location (first args))
+                                        :value (qualified-type-symbol
+                                                (const-node-value (first args))))
+                       (rest args))))
     (when (define-method-call-p fn args)
       (return-from emit-call
         (let ((target (define-method-target node args))

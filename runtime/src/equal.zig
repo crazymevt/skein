@@ -33,6 +33,7 @@ pub fn equiv(a: Value, b: Value) bool {
     if (a == b) return true;
     // An instance is equal by identity unless equiv is specialized for it (DESIGN §7).
     if (a.isObjectOf(.instance)) return @import("objects.zig").instanceEquiv(a, b);
+    if (a.isObjectOf(.@"struct")) return @import("structs.zig").equiv(a, b);
     if (string.isString(a))
         return string.isString(b) and std.mem.eql(u8, string.bytes(a), string.bytes(b));
     if (names.isSymbol(a)) {
@@ -179,6 +180,9 @@ pub fn hashOf(v: Value) u32 {
         .vector => cached(v, 4, orderedHash),
         .cons, .lazy_seq, .vseq, .sseq => orderedHash(v),
         .instance => @import("objects.zig").instanceHash(v),
+        .@"struct" => @import("structs.zig").hashOf(v),
+        .prim_array, .any_array, .struct_array, .array_view => @import("structs.zig").identityHash(v),
+        .arrseq => orderedHash(v),
         .list => cached(v, 3, orderedHash),
         .empty_list => hash.mixCollection(1, 0),
         .array_map => cached(v, 1, mapHash),

@@ -74,7 +74,8 @@
 (test native-examples
   (if (not (zig-available-p))
       (skip "zig is not installed")
-      (dolist (name '("hello" "fib" "conditions" "collections" "macros" "objects"))
+      (dolist (name '("hello" "fib" "conditions" "collections" "macros" "objects"
+                      "particles"))
         (let ((file (asdf:system-relative-pathname "skein" (format nil "../examples/~A.skn" name))))
           (with-source-tree (dir ("unused.skn" ""))
             (let ((exe (skein.backend.c:build-program
@@ -371,6 +372,12 @@ referred in place of skein.core's."
   (native-matches (uiop:read-file-string
                    (asdf:system-relative-pathname "skein"
                                                   "tests/fixtures/native-objects.skn"))))
+
+(test native-structs-and-arrays
+  ;; Step 5 of M1.8: value structs, records, typed arrays, views and defsoa.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein"
+                                                  "tests/fixtures/native-structs.skn"))))
 
 (test native-library-routing
   (native-matches "(ns libroute)

@@ -372,6 +372,11 @@ These are the tools for hot loops: no per-element allocation, no pointer chasing
 - `update!` is `(update! coll i :field f args...)` for arrays of value structs and `defsoa` collections, and `(update! array i f args...)` for arrays of primitives. `defsoa name` defines an element value struct `name.element`, `make-name`, and a function `(field coll i)` per field.
 - `as-bytes` works on arrays and views of primitive types; `count` of a byte view is its size in bytes.
 
+### 9.5 Native details (D-055)
+- A struct value is a runtime object holding its definition and fields; constructors check field types as Phase 0's typed slots do.
+- Arrays of primitive types pack their elements at their natural width. Arrays of value structs keep one primitive array per leaf field, nested value structs flattened.
+- `defstruct` and `defsoa` run on the host at compile time, and the C backend sets the vars they define (constructor, predicate, accessors, `make-name`, field functions) explicitly.
+
 ## 10. Conditions and restarts
 
 Skein adopts the **Common Lisp condition system**, which separates *signaling* a problem, *deciding* what to do about it, and *recovering*.

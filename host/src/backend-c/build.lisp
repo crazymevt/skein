@@ -22,18 +22,25 @@ program includes.")
 compile time and produce no code; everything else becomes C. After an ns form, the
 namespaces it requires are translated first."
   (let ((head (form-head form)))
-    (cond ((member head '("ns" "defmacro") :test #'equal)
+    (cond ((member head '("defstruct" "defsoa") :test #'equal)
+           ;; Run on the host too, so the vars the struct defines exist for the forms
+           ;; after it; the C backend then sets those vars natively (D-055).
+           (skein.backend.cl:eval-toplevel form)
+           (translate-compiled form))
+          ((member head '("ns" "defmacro") :test #'equal)
            (skein.backend.cl:eval-toplevel form)
            (when (string= head "ns")
              (translate-requires *current-namespace*)))
-          (t
-           (let* ((env (skein.expander:make-env :namespace *current-namespace*))
-                  (expanded (skein.expander:macroexpand form env)))
-             (if (skein.expander:toplevel-do-p expanded)
-                 (dolist (sub (rest (skein.syntax:syntax-datum expanded)))
-                   (translate-form sub))
-                 (emit-toplevel (skein.expander:analyze-toplevel expanded
-                                                                 *current-namespace*))))))))
+          (t (translate-compiled form)))))
+
+(defun translate-compiled (form)
+  "Translate FORM to C, expanding it; a (do ...) expansion's forms are top-level forms."
+  (let* ((env (skein.expander:make-env :namespace *current-namespace*))
+         (expanded (skein.expander:macroexpand form env)))
+    (if (skein.expander:toplevel-do-p expanded)
+        (dolist (sub (rest (skein.syntax:syntax-datum expanded)))
+          (translate-form sub))
+        (emit-toplevel (skein.expander:analyze-toplevel expanded *current-namespace*)))))
 
 (defun translate-requires (namespace)
   "Translate the namespaces that NAMESPACE requires at run time and the program doesn't

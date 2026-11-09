@@ -638,3 +638,30 @@ Date: 2026-11-09 · Status: Accepted
 - **Consequences:**
   - `examples/objects.skn` runs natively. A fixture of classes, cells, multiple dispatch, eql specializers, method combination, `call-next-method` with arguments, rest parameters, `equiv`/`hash-of` and condition types prints the same as Phase 0.
   - Differences are listed in the ROADMAP notes: CL's class names and CL's error messages in Phase 0, class redefinition, and `:type` checks.
+
+## D-055: Structs, typed arrays and defsoa natively
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 5 of M1.8 starts with DESIGN §9's data: value structs, records, typed arrays, views, byte views and `defsoa`. Phase 0 makes them from CL structs and specialized CL arrays. Its `defstruct` and `defsoa` define vars by name at run time, which native code can't.
+- **Decision:**
+  - **Runtime representation** (`runtime/src/structs.zig`):
+    - A struct definition is a permanent object: its name, value-or-record flag and fields, with each field's primitive kind or nested value-struct type.
+    - A struct value holds its definition and its fields, boxed. Constructors take the fields in order or as `:field value` pairs, and check them as Phase 0's typed CL slots do.
+    - Equality is by definition and fields. `hash-of` computes Phase 0's value exactly (name hash, then 31h + each field's hash, mixed).
+    - Methods can specialize on struct types: each struct gets a class.
+  - **Arrays:**
+    - Primitive arrays pack their elements at their natural width (`i8` to `u64`, `f32`, `f64`, `fixnum`, `char`). The GC doesn't scan their payload.
+    - `any` arrays hold values.
+    - An array of value structs keeps one primitive array per leaf field, as Phase 0 does, so its elements are inline. `defsoa` builds on it.
+    - Views share their base array; byte views wrap a primitive array.
+    - All of them have identity hashes, and seq'ing walks them by index.
+  - **Compiling `defstruct` and `defsoa`:**
+    - Like `ns` and `defmacro`, they run on the host at compile time, so their vars exist for later forms.
+    - The C backend then compiles the `%define-struct`/`%define-soa` call into `sk_define_struct`/`sk_define_soa` plus a `sk_var_set` for each var the host made: the constructor, `name?`, each `name-field`, `make-name` and the field functions.
+    - Struct types in fields and in `make-array` are qualified at compile time, so the runtime finds them by full name.
+- **Alternatives:**
+  - Unboxed struct values in locals and in other structs (DESIGN §9.1's "stored inline"). That needs the type-directed code generation that step 5 is starting; arrays already store structs inline.
+  - Making the runtime create vars by name, which would need namespaces at run time.
+- **Consequences:**
+  - `examples/particles.skn` runs natively: seven of the eight examples now pass.
+  - n-body runs natively with Phase 0's exact energies, still boxed; the rest of step 5 compiles declared code unboxed.
+  - A fixture of structs, records, nested value structs, every array kind, views, `update!` and `defsoa` prints the same as Phase 0. The differences are noted in the ROADMAP: char arrays, and the error type for an out-of-bounds index.

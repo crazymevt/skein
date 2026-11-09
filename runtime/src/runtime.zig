@@ -31,6 +31,7 @@ pub const core = @import("core.zig");
 pub const cond = @import("cond.zig");
 pub const seq = @import("seq.zig");
 pub const objects = @import("objects.zig");
+pub const structs = @import("structs.zig");
 
 pub const Value = value.Value;
 
@@ -40,6 +41,7 @@ comptime {
     for (std.meta.declarations(api)) |name| _ = &@field(api, name);
     for (std.meta.declarations(cond)) |name| _ = &@field(cond, name);
     for (std.meta.declarations(objects)) |name| _ = &@field(objects, name);
+    for (std.meta.declarations(structs)) |name| _ = &@field(structs, name);
 }
 
 test {
@@ -62,6 +64,7 @@ test {
     _ = cond;
     _ = seq;
     _ = objects;
+    _ = structs;
     _ = @import("cond_test.zig");
     _ = @import("platform_test.zig");
 }

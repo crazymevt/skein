@@ -14,6 +14,7 @@ const coll = @import("coll.zig");
 const string = @import("string.zig");
 const func = @import("func.zig");
 const print = @import("print.zig");
+const structs = @import("structs.zig");
 const Value = @import("value.zig").Value;
 
 fn make(t: @import("object.zig").TypeId, slots: []const Value) Value {
@@ -51,7 +52,7 @@ pub fn eduction(xform: Value, c: Value, seq_fn: Value, reduce_fn: Value) Value {
 pub fn isSeq(v: Value) bool {
     if (!v.isObject()) return false;
     return switch (v.toObject().type_id) {
-        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq => true,
+        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq, .arrseq => true,
         else => false,
     };
 }
@@ -91,13 +92,14 @@ pub fn seq(x: Value) Value {
     if (string.isString(x)) return if (string.count(x) == 0) Value.nil else make(.sseq, &.{ x, Value.fromFixnum(0) });
     if (!x.isObject()) unseqable(x);
     return switch (x.toObject().type_id) {
-        .list, .cons, .vseq, .sseq => x,
+        .list, .cons, .vseq, .sseq, .arrseq => x,
         .empty_list => Value.nil,
         .lazy_seq => realize(x),
         .vector => if (coll.vectorCount(x) == 0) Value.nil else make(.vseq, &.{ x, Value.fromFixnum(0) }),
         .array_map, .hash_map => mapSeq(x, false),
         .hash_set => mapSeq(coll.get(x, 0), true),
         .eduction => seq(func.call(coll.get(x, 2), 0, &.{})),
+        .prim_array, .any_array, .struct_array, .array_view => if (structs.count(x) == 0) Value.nil else make(.arrseq, &.{ x, Value.fromFixnum(0) }),
         else => unseqable(x),
     };
 }
@@ -135,6 +137,7 @@ pub fn seqFirst(s: Value) Value {
         .list, .cons => coll.get(s, 0),
         .vseq => coll.vectorNth(coll.get(s, 0), coll.ux(coll.get(s, 1))).?,
         .sseq => Value.fromChar(string.charAt(coll.get(s, 0), coll.ux(coll.get(s, 1)))),
+        .arrseq => structs.aget(coll.get(s, 0), coll.get(s, 1)),
         else => unreachable,
     };
 }
@@ -151,6 +154,11 @@ pub fn seqNext(s: Value) Value {
             const v = coll.get(s, 0);
             const i = coll.ux(coll.get(s, 1)) + 1;
             return if (i < coll.vectorCount(v)) make(.vseq, &.{ v, Value.fromFixnum(@intCast(i)) }) else Value.nil;
+        },
+        .arrseq => {
+            const a = coll.get(s, 0);
+            const i = coll.ux(coll.get(s, 1)) + 1;
+            return if (i < structs.count(a)) make(.arrseq, &.{ a, Value.fromFixnum(@intCast(i)) }) else Value.nil;
         },
         .sseq => {
             const str = coll.get(s, 0);

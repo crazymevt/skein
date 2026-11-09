@@ -111,6 +111,15 @@ sk_value sk_builtin_condition_type(const char *name);
 sk_value sk_define_method(sk_value target, sk_value qualifier, sk_value specializers,
                           sk_value rest, sk_value fn);
 
+/* Structs and defsoa (M1.8, D-055): the C backend sets the vars they define itself. */
+sk_value sk_define_struct(sk_value name, sk_value value_p, sk_value fields);
+sk_value sk_struct_constructor(sk_value def);
+sk_value sk_struct_predicate(sk_value def);
+sk_value sk_struct_accessor(sk_value def, uint32_t i);
+sk_value sk_define_soa(sk_value name, sk_value fields);
+sk_value sk_soa_maker(sk_value def);
+sk_value sk_soa_field(sk_value def, uint32_t i);
+
 /* setjmp without saving the signal mask, which on macOS costs a system call. glibc's
  * setjmp already doesn't save it; mingw's longjmp unwinds through SEH. */
 #if defined(__APPLE__)

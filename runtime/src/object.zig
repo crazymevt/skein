@@ -104,6 +104,27 @@ pub const TypeId = enum(u16) {
     method = 35,
     /// (= value) in a method's parameters: [value].
     eql_specializer = 36,
+    // M1.8's structs and typed arrays (D-055).
+    /// A defstruct type: [name (string), value? (bool), fields (vector of [name (string)
+    /// type kind]), constructor, predicate]; permanent. A field's kind is an element-kind
+    /// fixnum for a primitive type, a struct def for a nested value struct, or nil.
+    struct_def = 37,
+    /// A struct value: [def, field values...].
+    @"struct" = 38,
+    /// An array of a primitive type: raw words [count, element kind, identity hash], then
+    /// the elements packed at their natural width.
+    prim_array = 39,
+    /// An array of any values: [count, identity hash, values...].
+    any_array = 40,
+    /// An array of value structs, one primitive array per leaf field: [def, count, columns
+    /// (vector), identity hash].
+    struct_array = 41,
+    /// A slice of a primitive array (view): [array, start, count, identity hash].
+    array_view = 42,
+    /// The bytes of a primitive array (as-bytes): [array].
+    byte_view = 43,
+    /// A seq over an array from an index: [array, index].
+    arrseq = 44,
     _,
 };
 
@@ -145,7 +166,7 @@ pub const Header = packed struct(u64) {
         const values: [*]Value = @ptrCast(p.ptr);
         return switch (h.type_id) {
             // Raw data only.
-            .f64, .string, .bignum, .invalid => values[0..0],
+            .f64, .string, .bignum, .invalid, .prim_array => values[0..0],
             // Code pointer and name, then captured values.
             .function => values[@min(2, p.len)..p.len],
             else => values[0..p.len],

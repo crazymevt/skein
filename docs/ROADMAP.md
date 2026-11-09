@@ -275,6 +275,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
   - Macros run at compile time: skein.core's are compiled into the compiler, and a program's own run in an interpreter (D-050).
   - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native in M1.8, before self-hosting (D-050).
+- Native structs and arrays (D-055): struct values are boxed natively; DESIGN §9.1's inline storage holds in arrays (one column per field), not yet in locals or other structs. Phase 0's char arrays are CL strings, so they print and behave as strings; natively they are arrays. An out-of-bounds index on a primitive array is an `index-error` natively, CL's own error in Phase 0.
 - Native object system (D-054):
   - Redefining a class affects new instances only; existing ones keep their layout, and `update-instance-for-redefined-class` isn't called.
   - Slot `:type`s aren't checked natively yet.
