@@ -9,7 +9,7 @@
    ;; Booleans and truthiness
    #:+false+ #:false-p #:truthy-p #:bool
    ;; Numbers
-   #:decimal-to-float #:float-out-of-range
+   #:decimal-to-float #:float-out-of-range #:ensure-float-modes
    #:+f64-infinity+ #:+f64-negative-infinity+ #:+f64-nan+
    ;; Errors
    #:skein-error #:skein-error-message #:skein-error-location

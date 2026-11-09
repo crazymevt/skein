@@ -91,6 +91,7 @@ are looked up next to it, in the current directory and in lib/. Returns the last
                                 (library-directory))
                           :test #'equal :key #'uiop:native-namestring :from-end t))
          (*current-namespace* (ensure-namespace "user")))
+    (skein.runtime:ensure-float-modes)
     (prog1 (load-file path)
       (finish-output *standard-output*))))
 

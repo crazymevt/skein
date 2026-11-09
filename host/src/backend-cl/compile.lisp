@@ -413,4 +413,6 @@ be traced to Skein code."
 
 (defun eval-node (node)
   "Compile and run the Core IR NODE, returning its value."
-  (funcall (compile-node node)))
+  (let ((fn (compile-node node)))
+    (skein.runtime:ensure-float-modes)
+    (funcall fn)))

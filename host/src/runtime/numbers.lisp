@@ -25,8 +25,16 @@ NaN gives false instead of signaling (x86-64 traps on NaN comparisons; arm64 doe
 
 ;;; Skein follows IEEE for floats: an invalid operation (such as comparing a NaN, or
 ;;; 0.0/0.0) gives NaN or false instead of trapping. Inlined comparisons rely on this.
-(sb-int:set-floating-point-modes
- :traps (remove :invalid (getf (sb-int:get-floating-point-modes) :traps)))
+;;; The modes belong to each thread, and SBCL on Windows does not keep them across
+;;; loading, so the compiler driver calls this before running each top-level form.
+
+(defun ensure-float-modes ()
+  "Mask the floating-point invalid-operation trap in the current thread."
+  (let ((traps (getf (sb-int:get-floating-point-modes) :traps)))
+    (when (member :invalid traps)
+      (sb-int:set-floating-point-modes :traps (remove :invalid traps)))))
+
+(ensure-float-modes)
 
 (defun decimal-to-float (negative mantissa exponent type)
   "Return the float nearest to MANTISSA * 10^EXPONENT, negated if NEGATIVE.
