@@ -335,3 +335,15 @@ Date: 2026-11-09 · Status: Accepted
   - **Slash (14):** no reader change. `/` stays the namespace separator, and names such as `vdiv` avoid it.
 - **Alternatives:** keeping cells visible (explicit, but noisy: about 30 `@`/`swap!` in Driftrock's 500 lines); restarts named by keywords (unambiguous, but every `restart-case` changes); `instance?` as the only type test; allowing `ns/name/` symbols.
 - **Consequences:** Code that read `@(:hp s)` now reads `(:hp s)`. The tests, `examples/objects.skn` and Driftrock were updated. Two libraries that both establish a restart called `retry` can no longer be told apart by namespace; the innermost one is used.
+
+## D-042: Phase 1 milestones, native slice first
+Date: 2026-11-09 · Status: Accepted
+- **Context:** The roadmap left Phase 1 as an outline to break into milestones after the Phase 0 retrospective. Its outline listed porting the front end to Skein first.
+- **Decision:** Phase 1 has twelve milestones (ROADMAP). The order is:
+  1. a thin end-to-end native slice: the Zig runtime skeleton, then the Phase 0 front end emitting C for a small subset (M1.1–M1.2);
+  2. the runtime's hard parts: GC, core data, conditions and unwinding (M1.3–M1.5);
+  3. porting the reader and expander to Skein and self-hosting (M1.6–M1.8);
+  4. the native library, FFI, build and packaging, and Driftrock (M1.9–M1.12).
+  Jessie approved the plan.
+- **Alternatives:** porting the front end first, as the outline listed. That defers every native risk (C generation, GC, unwinding on Windows) until after a large port.
+- **Consequences:** For most of Phase 1 the C backend is driven by the Phase 0 front end, which stays the reference that native results are tested against. The Zig version, where the persistent collections live (Zig or compiled Skein) and other choices are made as each milestone starts.

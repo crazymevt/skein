@@ -11,7 +11,7 @@ Skein is a new Lisp for games and desktop apps. It is being built incrementally 
 
 ## 2. Scope discipline
 
-- **Work only on the current milestone.** Don't start later milestones, and don't build Phase 1+ infrastructure (GC, fibers, C backend, Zig runtime) during Phase 0.
+- **Work only on the current milestone.** Don't start later milestones, and don't build a later phase's infrastructure early (for example fibers or the Swank server, which are Phase 2, during Phase 1).
 - Small, obviously needed helpers for the current milestone are fine. Speculative abstractions "for later" are not.
 - If you notice something worth doing later, add it to the "Notes for later" section at the bottom of `docs/ROADMAP.md` instead of doing it.
 - When a milestone's exit criteria all pass, update its row in the ROADMAP status table to ✅ and say so in your summary.
@@ -25,6 +25,8 @@ The design will be wrong in places. When implementation shows that:
 4. For anything user-visible in the language (syntax, semantics, naming), **ask Jessie first**. Internal implementation choices you can make yourself; record them in DECISIONS.md.
 
 ## 4. Phase 0 technical rules (Skein-on-SBCL)
+
+These still apply to everything in `host/`. Phase 1 adds its own rules (the Zig runtime, the C backend, the Skein front end): see "Rules for Phase 1" in `docs/ROADMAP.md`.
 
 - **Host:** SBCL 2.4+, ASDF. The code lives in `host/`.
 - **Allowed dependencies:** `alexandria`, `cffi`, `bordeaux-threads`, `closer-mop`, `fiveam`, `trivial-garbage`, `lparallel`. **Ask before adding any other.**
