@@ -25,7 +25,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.5 Conditions and unwinding | ✅ |
 | M1.6 Reader in Skein | ✅ |
 | M1.7 Expander and Core IR in Skein | ✅ |
-| M1.8 Native `skein.core` | ⬜ |
+| M1.8 Native `skein.core` | ✅ |
 | M1.9 Self-hosting | ⬜ |
 | M1.10 Native FFI | ⬜ |
 | M1.11 `skein build` and `skein package` | ⬜ |
