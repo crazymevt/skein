@@ -312,6 +312,11 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     ;; Step 3 of M1.8
     "f64" "f32" "sqrt" "rand" "rand-int" "gensym" "parse-long" "boolean" "associative?"
     "counted?" "ifn?"
+    ;; The object system (step 4)
+    "equiv" "initialize" "update-instance-for-redefined-class" "make" "with" "slot"
+    "set-slot!" "%set-slot!" "update-slot!" "cell" "instance?" "class-of" "class-name"
+    "class-slots" "class-precedence-list" "generic-methods" "%define-class" "%class"
+    "%eql-specializer" "%define-generic"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -712,12 +717,20 @@ through, the frame is popped and the cleanup runs; an unwind then continues."
           (stmt "sk_frame_push_restarts(&~A, ~D, ~A, ~A, ~A);" frame (length bindings) rn rf rr)
           (emit-cluster-body frame (restart-bind-node-body node))))))
 
+(defparameter *builtin-class-names*
+  '("any" "object" "nil-class" "integer" "float" "f32" "f64" "number" "char" "string"
+    "keyword" "symbol" "vector" "hash-map" "hash-set" "list" "seq" "fn" "atom")
+  "The built-in class names of DESIGN §8.3 (besides condition, error and warning), which
+%class finds unqualified.")
+
 (defun qualify-condition-type-call (fn args)
-  "ARGS, with the symbol in a call (skein.core/%condition-type 'name \"ns\") qualified by
-the namespace its var is in, which the compiler knows from the program's ns form and
-requires, so the runtime can find the type by its full name (D-047)."
+  "ARGS, with the symbol in a call (skein.core/%condition-type 'name \"ns\") or
+(skein.core/%class 'name \"ns\") qualified by the namespace its var is in, which the
+compiler knows from the program's ns form and requires, so the runtime can find the type
+or class by its full name (D-047, D-054)."
   (if (and (var-ref-node-p fn) (core-var-p (var-ref-node-var fn))
-           (string= (var-name (var-ref-node-var fn)) "%condition-type")
+           (member (var-name (var-ref-node-var fn)) '("%condition-type" "%class")
+                   :test #'string=)
            (= (length args) 2) (const-node-p (first args)) (const-node-p (second args))
            (sym-p (const-node-value (first args))) (stringp (const-node-value (second args))))
       (let* ((sym (const-node-value (first args)))
@@ -730,6 +743,9 @@ requires, so the runtime can find the type by its full name (D-047)."
                             (skein.runtime:intern-sym (sym-name sym) (namespace-name target))
                             sym)))
                      ((member (sym-name sym) '("condition" "error" "warning") :test #'string=)
+                      sym)
+                     ((and (string= (var-name (var-ref-node-var fn)) "%class")
+                           (member (sym-name sym) *builtin-class-names* :test #'string=))
                       sym)
                      (t (let ((var (skein.runtime:resolve-var ns (sym-name sym))))
                           (if var
@@ -753,9 +769,40 @@ requires, so the runtime can find the type by its full name (D-047)."
                   (temp v))))
           args))
 
+(defun define-method-target (node args)
+  "For (skein.core/%define-method 'name \"ns\" ...), a C expression for the generic
+function's var, or for a skein.core generic function itself. Phase 0 looks the name up
+when the method is defined; natively it is resolved here, from the image the compiler
+runs in (D-054): a var that holds a generic function, else the namespace's own var."
+  (let* ((sym (const-node-value (first args)))
+         (ns (skein.runtime:ensure-namespace (const-node-value (second args))))
+         (found (if (sym-namespace sym)
+                    (let ((target (or (skein.runtime:find-alias ns (sym-namespace sym))
+                                      (skein.runtime:find-namespace (sym-namespace sym)))))
+                      (and target (skein.runtime:find-own-var target (sym-name sym))))
+                    (skein.runtime:resolve-var ns (sym-name sym))))
+         (var (if (and found (typep (skein.runtime::var-value found)
+                                    'skein.runtime::skein-generic))
+                  found
+                  (skein.runtime:intern-var ns (sym-name sym)))))
+    (if (core-var-p var)
+        (native-core-function node var)
+        (var-c-name var))))
+
+(defun define-method-call-p (fn args)
+  (and (var-ref-node-p fn) (core-var-p (var-ref-node-var fn))
+       (string= (var-name (var-ref-node-var fn)) "%define-method")
+       (= (length args) 6) (const-node-p (first args)) (const-node-p (second args))
+       (sym-p (const-node-value (first args))) (stringp (const-node-value (second args)))))
+
 (defun emit-call (node)
   (let ((fn (call-node-fn node))
         (args (qualify-condition-type-call (call-node-fn node) (call-node-args node))))
+    (when (define-method-call-p fn args)
+      (return-from emit-call
+        (let ((target (define-method-target node args))
+              (rest (emit-args (cddr args))))
+          (single-value (temp (format nil "sk_define_method(~A~{, ~A~})" target rest))))))
     (if (and (var-ref-node-p fn) (core-var-p (var-ref-node-var fn))
              (member (var-name (var-ref-node-var fn)) *inline-primitives* :test #'string=))
         (single-value (emit-primitive node (var-name (var-ref-node-var fn)) args))

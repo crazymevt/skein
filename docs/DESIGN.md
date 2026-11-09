@@ -298,6 +298,7 @@ Details (D-035):
 - The generic function `initialize` is called by `make` after the slots are filled. `equiv` and `hash-of` are generic functions whose default methods use identity for instances; a warning is given at the end of a file that specializes one but not the other for a class.
 - `(with s :hp 7)` on a cell slot gives the copy a fresh cell holding 7.
 - `:type` is recorded but not checked until declarations arrive (M0.8). Custom metaclasses written in Skein, and `:cell :ref`, are not supported yet.
+- Natively (Phase 1, D-054), every value has a class: defclass classes, the built-in classes above (with `list` under `seq`, `f32` and `f64` under `float`, and `float` and `integer` under `number`), and a class per condition type. A generic function is a closure over its methods and a dispatch cache keyed by the classes of the required arguments; a generic function with eql specializers skips the cache. Precedence lists end in `object` and `any`.
 
 ### 8.4 Redefinition
 Redefining a class at the REPL **updates existing instances**:

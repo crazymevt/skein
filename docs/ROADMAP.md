@@ -196,7 +196,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   1. ✅ Programs of several namespaces: a native program includes every namespace it requires, and `skein.core.native`.
   2. ✅ Seqs: `seq`/`first`/`rest` over every collection, lazy seqs, the seq library, `reduced` and transducers.
   3. ✅ The rest of skein.core's functions, and multiple values.
-  4. The object system: classes, instances, generic functions with dispatch caches.
+  4. ✅ The object system: classes, instances, generic functions with dispatch caches.
   5. Value structs, typed arrays and `defsoa`; declarations compiled to unboxed code (n-body).
   6. Concurrency on OS threads: nurseries, tasks, futures, channels, `pmap`, `skein.jobs`.
 
@@ -275,6 +275,11 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
   - Macros run at compile time: skein.core's are compiled into the compiler, and a program's own run in an interpreter (D-050).
   - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native in M1.8, before self-hosting (D-050).
+- Native object system (D-054):
+  - Redefining a class affects new instances only; existing ones keep their layout, and `update-instance-for-redefined-class` isn't called.
+  - Slot `:type`s aren't checked natively yet.
+  - Every generic function call allocates its cache key. An inline cache per call site would avoid that if dispatch shows up in profiles.
+  - Built-in classes print with Skein's names (`integer`, `string`), not Phase 0's CL ones (`fixnum`, `simple-character-string`).
 - Native multiple values (D-053):
   - Each thread needs its own registered buffer; only the main thread's is a GC root until threads arrive (step 6).
   - A runtime function that calls compiled code (`reduce`, `apply`, lazy seqs) passes on whatever values that code's last call left. `apply` does so on purpose, as in CL. For `reduce`, in the rare case of a reducing function that returns several values, the caller sees them instead of one value.

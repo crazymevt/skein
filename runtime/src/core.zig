@@ -16,6 +16,7 @@ const gc = @import("gc.zig");
 const platform = @import("platform");
 const cond = @import("cond.zig");
 const seqs = @import("seq.zig");
+const objs = @import("objects.zig");
 const Value = @import("value.zig").Value;
 
 const Args = []const Value;
@@ -112,6 +113,8 @@ fn get(c: Value, k: Value, not_found: Value) Value {
         return Value.fromChar(string.charAt(c, @intCast(k.toFixnum())));
     }
     if (c.isObjectOf(.transient_map)) return coll.tmapGet(c, k) orelse not_found;
+    // An instance's slots, by keyword (DESIGN §8.2).
+    if (c.isObjectOf(.instance)) return objs.get(c, k) orelse not_found;
     // A condition's slots, by keyword: (:path c) (DESIGN §10).
     if (cond.isCondition(c) and (names.isKeyword(k) or names.isSymbol(k)))
         return cond.slotValue(c, names.nameOf(k)) orelse not_found;
@@ -402,6 +405,7 @@ fn keysOrVals(comptime keys: bool) fn (Args) Value {
         fn f(a: Args) Value {
             const m = a[0];
             if (m == Value.nil) return Value.nil;
+            if (keys and m.isObjectOf(.instance)) return objs.keys(m);
             if (!coll.isMap(m)) badArg(if (keys) "keys" else "vals", m);
             const n = coll.mapCount(m);
             if (n == 0) return Value.nil;
@@ -618,7 +622,18 @@ const table = [_]Entry{
     }.f),
     e("%map-literal", 0, null, struct {
         fn f(a: Args) Value {
-            return coll.mapOf(a);
+            const m = coll.mapOf(a);
+            // As Phase 0: equal keys computed at run time are an error.
+            if (coll.mapCount(m) * 2 != a.len) {
+                var i: usize = 2;
+                while (i < a.len) : (i += 2) {
+                    var j: usize = 0;
+                    while (j < i) : (j += 2) {
+                        if (equal.equiv(a[i], a[j])) rt.raise(.unsupported_operation_error, "duplicate key {s} in a map literal", .{typeName(a[i])});
+                    }
+                }
+            }
+            return m;
         }
     }.f),
     e("hash-set", 0, null, struct {
@@ -628,7 +643,15 @@ const table = [_]Entry{
     }.f),
     e("%set-literal", 0, null, struct {
         fn f(a: Args) Value {
-            return coll.setOf(a);
+            const set = coll.setOf(a);
+            if (coll.setCount(set) != a.len) {
+                for (a, 0..) |x, i| {
+                    for (a[i + 1 ..]) |y| {
+                        if (equal.equiv(x, y)) rt.raise(.unsupported_operation_error, "duplicate element {s} in a set literal", .{typeName(x)});
+                    }
+                }
+            }
+            return set;
         }
     }.f),
     e("vec", 1, 1, vecFn),
@@ -872,9 +895,93 @@ const table = [_]Entry{
                 coll.isSet(v) or coll.isVector(v);
         }
     }.t)),
-    e("hash-of", 1, 1, struct {
+    // The object system (M1.8 step 4, D-054)
+    e("make", 1, null, struct {
         fn f(a: Args) Value {
-            return Value.fromFixnum(equal.hashOf(a[0]));
+            return objs.make(a[0], a[1..]);
+        }
+    }.f),
+    e("with", 1, null, struct {
+        fn f(a: Args) Value {
+            return objs.with(a[0], a[1..]);
+        }
+    }.f),
+    e("slot", 2, 3, struct {
+        fn f(a: Args) Value {
+            if (!a[0].isObjectOf(.instance)) rt.raise(.@"error", "slot needs an instance, not {s}", .{typeName(a[0])});
+            if (objs.get(a[0], a[1])) |v| return v;
+            if (a.len == 3) return a[2];
+            rt.raise(.@"error", "{s} has no slot {s}", .{ objs.className(objs.classOf(a[0])), typeName(a[1]) });
+        }
+    }.f),
+    e("set-slot!", 3, 3, struct {
+        fn f(a: Args) Value {
+            return objs.setSlotValue(a[0], a[1], a[2]);
+        }
+    }.f),
+    e("%set-slot!", 3, 3, struct {
+        fn f(a: Args) Value {
+            return objs.setBang(a[0], a[1], a[2]);
+        }
+    }.f),
+    e("update-slot!", 3, null, struct {
+        fn f(a: Args) Value {
+            return objs.updateSlot(a[0], a[1], a[2], a[3..]);
+        }
+    }.f),
+    e("cell", 2, 2, struct {
+        fn f(a: Args) Value {
+            return objs.cellOf(a[0], a[1]);
+        }
+    }.f),
+    e("instance?", 2, 2, struct {
+        fn f(a: Args) Value {
+            return Value.fromBool(objs.isInstance(objs.findClass(a[0]), a[1]));
+        }
+    }.f),
+    e("class-of", 1, 1, struct {
+        fn f(a: Args) Value {
+            return objs.classOf(a[0]);
+        }
+    }.f),
+    e("class-name", 1, 1, struct {
+        fn f(a: Args) Value {
+            return objs.classNameSymbol(objs.findClass(a[0]));
+        }
+    }.f),
+    e("class-slots", 1, 1, struct {
+        fn f(a: Args) Value {
+            return objs.classSlots(objs.findClass(a[0]));
+        }
+    }.f),
+    e("class-precedence-list", 1, 1, struct {
+        fn f(a: Args) Value {
+            return objs.precedenceList(objs.findClass(a[0]));
+        }
+    }.f),
+    e("generic-methods", 1, 1, struct {
+        fn f(a: Args) Value {
+            return objs.genericMethods(a[0]);
+        }
+    }.f),
+    e("%define-class", 3, 3, struct {
+        fn f(a: Args) Value {
+            return objs.defineClass(a[0], a[1], a[2]);
+        }
+    }.f),
+    e("%class", 2, 2, struct {
+        fn f(a: Args) Value {
+            return objs.findClass(a[0]);
+        }
+    }.f),
+    e("%eql-specializer", 1, 1, struct {
+        fn f(a: Args) Value {
+            return objs.eqlSpecializer(a[0]);
+        }
+    }.f),
+    e("%define-generic", 3, 3, struct {
+        fn f(a: Args) Value {
+            return objs.defineGeneric(a[0], nameString("%define-generic", a[1]), a[2]);
         }
     }.f),
     e("odd?", 1, 1, parity(true)),
@@ -1193,6 +1300,8 @@ var objects_lock: platform.Mutex = .{};
 
 /// The function object for skein.core/`name`, or null if the runtime doesn't have it.
 pub fn function(name: []const u8) ?Value {
+    // equiv, hash-of, initialize and update-instance-for-redefined-class are generic.
+    if (objs.coreGeneric(name)) |g| return g;
     inline for (table, 0..) |entry, i| {
         if (std.mem.eql(u8, entry.name, name)) {
             objects_lock.lock();

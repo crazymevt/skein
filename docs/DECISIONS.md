@@ -611,3 +611,30 @@ Date: 2026-11-09 · Status: Accepted
   - Every compiled function return that isn't a tail call or a `values` stores to a thread-local. fib(32) is no slower measurably.
   - Five of the eight examples with `.expected` files now run natively: hello, fib, conditions, collections and macros.
   - A fixture covering every function above and the multiple-value cases prints the same as Phase 0. The library's new functions are compared with Phase 0's on the host.
+
+## D-054: The object system natively
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 4 of M1.8 brings DESIGN §8 to native programs. Phase 0 builds it on CLOS through closer-mop; native code needs its own classes, instances and dispatch, with the same results.
+- **Decision:**
+  - **Classes are runtime objects** (`runtime/src/objects.zig`), registered by qualified name.
+    - Precedence lists are C3, as in Phase 0.
+    - A class's slots are ordered as SBCL orders them: walk the precedence list from the most general class, and add each class's new slots in order. A slot's options come from the most specific class that defines it.
+    - Every value has a class. Instances have their defclass class. Other values map to the built-in classes (`integer`, `string`, `seq`, `list`, `fn`, ...), and conditions to one class per condition type, under `condition`, `error` or `warning`.
+  - **Instances** hold their class, the slot layout they were made with, their owner thread (for `:unsynchronized` cells), an identity hash and the slot values.
+    - `make`, `with`, `slot`, `set-slot!`, `update-slot!`, `cell` and `set!` on a slot behave as in Phase 0, messages included.
+    - `get`, `keys` and destructuring work on instances.
+  - **Generic functions** are runtime closures over their state.
+    - A call computes the classes of the required arguments, then looks up the effective method in a cache keyed by them. A generic function with an eql specializer skips the cache.
+    - It runs standard method combination: around methods, then befores, then primaries with `call-next-method` and `next-method?`, then afters in reverse. Those two functions are runtime closures.
+    - A method with the same qualifier and specializers replaces the old one.
+  - **`equiv`, `hash-of`, `initialize` and `update-instance-for-redefined-class`** are generic functions natively too. `=` and hashing use `equiv` and `hash-of` for an instance whose class specializes them, else identity.
+  - **Names resolved at compile time**, as for condition types (D-047):
+    - `%class` symbols are qualified by the compiler.
+    - `defmethod`'s generic function is found by the compiler using Phase 0's rule: a var holding a generic function, else the namespace's own var. The call becomes `sk_define_method` with that var, or with the skein.core generic function itself.
+  - **Fix found along the way:** native map and set literals with keys or elements computed at run time now reject duplicates, as Phase 0 does.
+- **Alternatives:**
+  - Dispatch in Skein in `skein.core.native`. That would be slower on every call, and D-051 puts dispatch in the runtime.
+  - Discriminating functions generated per generic function. That is faster, but much more code, and premature before profiling.
+- **Consequences:**
+  - `examples/objects.skn` runs natively. A fixture of classes, cells, multiple dispatch, eql specializers, method combination, `call-next-method` with arguments, rest parameters, `equiv`/`hash-of` and condition types prints the same as Phase 0.
+  - Differences are listed in the ROADMAP notes: CL's class names and CL's error messages in Phase 0, class redefinition, and `:type` checks.

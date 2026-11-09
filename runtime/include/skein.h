@@ -106,6 +106,11 @@ _Noreturn void sk_continue_unwind(sk_frame *f);
 _Noreturn void sk_throw_condition(sk_value condition);
 sk_value sk_builtin_condition_type(const char *name);
 
+/* The object system (M1.8, D-054): defmethod with its generic function's var (or a
+ * skein.core generic function) resolved by the compiler. */
+sk_value sk_define_method(sk_value target, sk_value qualifier, sk_value specializers,
+                          sk_value rest, sk_value fn);
+
 /* setjmp without saving the signal mask, which on macOS costs a system call. glibc's
  * setjmp already doesn't save it; mingw's longjmp unwinds through SEH. */
 #if defined(__APPLE__)

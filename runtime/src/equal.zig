@@ -31,6 +31,8 @@ fn counted(v: Value) ?usize {
 pub fn equiv(a: Value, b: Value) bool {
     if (num.isNumber(a)) return num.isNumber(b) and num.numbersEqual(a, b);
     if (a == b) return true;
+    // An instance is equal by identity unless equiv is specialized for it (DESIGN §7).
+    if (a.isObjectOf(.instance)) return @import("objects.zig").instanceEquiv(a, b);
     if (string.isString(a))
         return string.isString(b) and std.mem.eql(u8, string.bytes(a), string.bytes(b));
     if (names.isSymbol(a)) {
@@ -176,6 +178,7 @@ pub fn hashOf(v: Value) u32 {
         .symbol, .keyword => names.nameHash(v),
         .vector => cached(v, 4, orderedHash),
         .cons, .lazy_seq, .vseq, .sseq => orderedHash(v),
+        .instance => @import("objects.zig").instanceHash(v),
         .list => cached(v, 3, orderedHash),
         .empty_list => hash.mixCollection(1, 0),
         .array_map => cached(v, 1, mapHash),

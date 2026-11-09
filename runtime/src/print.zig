@@ -37,10 +37,29 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
     if (!v.isObject()) return put(out, "#<object>");
     switch (v.toObject().type_id) {
         .function => {
-            put(out, "#<fn ");
-            put(out, func.name(v));
+            const objects = @import("objects.zig");
+            if (objects.genericOf(v) != null) {
+                put(out, "#<generic ");
+                put(out, objects.genericName(v));
+            } else {
+                put(out, "#<fn ");
+                put(out, func.name(v));
+            }
             put(out, ">");
         },
+        .instance => @import("objects.zig").writeInstance(v, out),
+        .class => {
+            put(out, "#<class ");
+            put(out, @import("objects.zig").className(v));
+            put(out, ">");
+        },
+        .eql_specializer => {
+            put(out, "#<= ");
+            write(coll.get(v, 0), out, true);
+            put(out, ">");
+        },
+        .method => put(out, "#<method>"),
+        .generic => put(out, "#<generic state>"),
         .symbol, .keyword => {
             if (names.isKeyword(v)) put(out, ":");
             if (names.nsOf(v)) |ns| {

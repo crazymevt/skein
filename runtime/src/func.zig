@@ -20,6 +20,25 @@ pub fn make(code: Code, fn_name: [*:0]const u8) Value {
     return Value.fromObject(h);
 }
 
+/// A closure made by the runtime: `code` reads `captured` with `capturedOf`.
+pub fn closure(code: Code, fn_name: [*:0]const u8, captured: []const Value) Value {
+    const h = rt.alloc(.function, 2 + captured.len);
+    h.payload()[0] = @intFromPtr(code);
+    h.payload()[1] = @intFromPtr(fn_name);
+    @memcpy(h.valueSlots()[0..captured.len], captured);
+    return Value.fromObject(h);
+}
+
+/// Captured value `i` of a closure.
+pub fn capturedOf(self: Value, i: usize) Value {
+    return self.toObject().valueSlots()[i];
+}
+
+/// The code pointer of a function object.
+pub fn codeOf(v: Value) Code {
+    return @ptrFromInt(v.toObject().payload()[0]);
+}
+
 pub fn name(v: Value) []const u8 {
     std.debug.assert(v.isObjectOf(.function));
     const p: [*:0]const u8 = @ptrFromInt(v.toObject().payload()[1]);

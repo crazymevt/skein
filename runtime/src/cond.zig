@@ -228,6 +228,12 @@ fn register(qualified: []const u8, t: Value) void {
     registry.put(table_alloc, key, t) catch @panic("out of memory");
 }
 
+/// The condition type with this qualified name, or null.
+pub fn typeByName(qualified: []const u8) ?Value {
+    ensureBuiltins();
+    return lookup(qualified);
+}
+
 fn lookup(qualified: []const u8) ?Value {
     types_lock.lock();
     defer types_lock.unlock();

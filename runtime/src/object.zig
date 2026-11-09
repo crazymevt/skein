@@ -86,6 +86,24 @@ pub const TypeId = enum(u16) {
     /// A transducer applied to a collection each time it is reduced or seq'd: [xform, coll,
     /// seq function of no arguments, reduce function of f and init].
     eduction = 31,
+    // M1.8's object system (D-054).
+    /// A class: [name (string), supers (vector), direct slots (vector of [symbol cell
+    /// init type]), slots (vector of [keyword cell init type], the effective slots in
+    /// order), precedence list (vector, the class first), kind (0 defclass, 1 built in,
+    /// 2 condition type), condition type or nil]; permanent.
+    class = 32,
+    /// An instance of a defclass class: [class, slots (its class's slots when made), owner
+    /// thread, identity hash, slot values...].
+    instance = 33,
+    /// A generic function's state: [name (string), required, rest?, methods (vector),
+    /// dispatch cache (map from argument classes to effective method) or nil, has eql
+    /// specializers?]; permanent. The generic function itself is a closure over it.
+    generic = 34,
+    /// A method: [qualifier (keyword or nil), specializers (vector of class, eql
+    /// specializer or nil), function of next-method, next-method? and the arguments].
+    method = 35,
+    /// (= value) in a method's parameters: [value].
+    eql_specializer = 36,
     _,
 };
 

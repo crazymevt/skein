@@ -74,7 +74,7 @@
 (test native-examples
   (if (not (zig-available-p))
       (skip "zig is not installed")
-      (dolist (name '("hello" "fib" "conditions" "collections" "macros"))
+      (dolist (name '("hello" "fib" "conditions" "collections" "macros" "objects"))
         (let ((file (asdf:system-relative-pathname "skein" (format nil "../examples/~A.skn" name))))
           (with-source-tree (dir ("unused.skn" ""))
             (let ((exe (skein.backend.c:build-program
@@ -364,6 +364,13 @@ referred in place of skein.core's."
    "(key (first {:a 1}))" "(val (first {:a 1}))" "(empty [1 2])" "(empty {:a 1})"
    "(empty #{1})" "(empty '(1 2))" "(empty (range 3))" "(empty 5)" "(not-empty [])"
    "(not-empty [1])" "(not-empty \"\")"))
+
+(test native-objects
+  ;; Step 4 of M1.8: classes, instances and cells, generic functions with multiple
+  ;; dispatch and method combination, equiv and hash-of, condition types as classes.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein"
+                                                  "tests/fixtures/native-objects.skn"))))
 
 (test native-library-routing
   (native-matches "(ns libroute)
