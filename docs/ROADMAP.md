@@ -15,7 +15,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.7 Object system | ✅ |
 | M0.8 Declarations, value structs, typed arrays | ✅ |
 | M0.9 Concurrency | ✅ |
-| M0.10 FFI and bindgen | ⬜ |
+| M0.10 FFI and bindgen | ✅ |
 | M0.11 REPL, reload and dev loop | ⬜ |
 | M0.12 Demo game | ⬜ |
 
@@ -159,7 +159,6 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Type errors from declarations show CL type names and generated variable names; translate them to Skein terms and add locations.
 - Hot-path gaps: keyword access to value-struct fields (`(:x v)`) and `defsoa` field functions are not inlined; use the `vec2-x` accessors and arrays of primitives in hot code. `(aget structs i)` allocates the struct it returns.
 - Flatten nested value structs inline (DESIGN §9.1), and make `(safety 0)` integer overflow wrap (DESIGN §12.3).
-- `as-bytes` (DESIGN §9.3) with the FFI in M0.10.
 - Startup: `lib/skein/core.skn` is compiled on every start, adding about 0.15 s (0.3 s total for `skein run`). Cache it, e.g. in a saved SBCL core, if this becomes annoying.
 - `defn` and `defn-` stay built in because they attach metadata (docstrings, `^:private`) to the name; move them to Skein if runtime metadata or a metadata helper for macros is added.
 - Core macros from DESIGN §5.2 that wait on later milestones: `defclass`, `defgeneric`, `defmethod` (M0.7), `defstruct` (M0.8), `with-nursery` (M0.9), `with-open` (needs a `close` protocol, M0.7 or with `skein.io`), `binding` (dynamic vars).
@@ -171,3 +170,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - `skein run` looks for required namespaces next to the main file and in the current directory; use `project.skn` `:paths` once it exists.
 - Consider `#!` shebang lines so `.skn` files can be executable scripts.
 - First shader-using demo: pick shader cross-compilation tooling for the SDL3 GPU API, e.g. SDL_shadercross (D-020).
+- FFI: passing and returning structs by value is not supported (D-038). The SDL3 headers bound so far don't need it; CFFI's libffi support (`cffi-libffi`, which needs libffi installed) could add it if a library does.
+- bindgen: `long` is assumed to be 64 bits; handle LLP64 (Windows) if a bound library uses `long`. Typedefs of anonymous structs (`typedef struct { ... } X;`) and anonymous members are skipped; add them when a library needs them.
+- bindgen: generate `sdl3.raw` for the rest of SDL3 (GPU, audio, gamepad, properties, ...) when the milestones that use them start, and hand-write the idiomatic `sdl3` layer on top.
+- FFI callbacks from foreign threads work as SBCL allows; DESIGN §14.3's attach-as-fiber behavior waits for Phase 2.

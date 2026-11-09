@@ -367,7 +367,7 @@ These are the tools for hot loops: no per-element allocation, no pointer chasing
 - Redefining a struct with different fields creates a new layout and warns; existing values and code compiled against the old layout keep using it until reloaded (§15).
 - `(array T)` declares a simple (non-view) array. `view` works on arrays of primitive types and returns a slice that `aget`, `aset!` and `count` accept but `(array T)` declarations do not.
 - `update!` is `(update! coll i :field f args...)` for arrays of value structs and `defsoa` collections, and `(update! array i f args...)` for arrays of primitives. `defsoa name` defines an element value struct `name.element`, `make-name`, and a function `(field coll i)` per field.
-- `as-bytes` arrives with the FFI (M0.10).
+- `as-bytes` works on arrays and views of primitive types; `count` of a byte view is its size in bytes.
 
 ## 10. Conditions and restarts
 
@@ -597,10 +597,31 @@ Clojure-style refs with `dosync`/`alter`/`commute` are planned once the native r
 
 **Foreign types:** the primitive types from §12.1 plus `void`, `bool` (C `_Bool`), `c-string` (converted to and from Skein strings), `ptr`, `(ptr T)`, foreign structs (by pointer or by value), enums, function pointers and fixed arrays.
 
+**Memory and values** (all in `skein.ffi`):
+
+```clojure
+(ffi/alloc f32 1024)             ; zeroed C memory for 1024 floats; (ffi/alloc sdl-frect) for one struct
+(ffi/get p f32 3)                ; read element 3; (ffi/put! p f32 1.5 3) writes it
+(ffi/field r sdl-frect :x)       ; read a field; (ffi/put-field! r sdl-frect :x 1.0f) writes it
+(ffi/sizeof sdl-event)           ; size in bytes
+(ffi/ptr+ p 16) (ffi/address p)  ; pointer arithmetic, the address as an integer
+(ffi/null) (ffi/null? p) (ffi/ptr? x)
+(ffi/c-string p)                 ; read a NUL-terminated UTF-8 string
+(ffi/enum-value sdl-flags [:a :b]) ; a key, a collection of keys ORed together, or an integer
+```
+
+Phase 0 details (D-038):
+- C `NULL` is `nil`, both as a result and as an argument (including `c-string`).
+- `(ptr T)` documents the pointee; all pointers are passed alike. Function pointers are `ptr`; `defcallback` makes one.
+- Structs and unions are passed to and from functions by pointer only; by-value struct arguments and results are not supported yet. Inside structs they are stored inline. Reading a field that holds a struct, union or array returns its address.
+- C code runs with float traps masked. A callback that signals an error warns and returns zero, since errors cannot unwind through C.
+- Libraries are searched in `SKEIN_LIBRARY_PATH` (`:`-separated, `;` on Windows), then `/opt/homebrew/lib` and `/usr/local/lib` on macOS, `/usr/local/lib` on Linux, then the OS search path.
+
 ### 14.2 Ownership and memory
 Return-value annotations:
 - `^:owned (ptr T)` means the caller must free it. Skein attaches a finalizer, and `with-foreign` releases it deterministically.
 - `^:borrowed (ptr T)`, the default, means no ownership is transferred.
+- `(ffi/own p)` attaches the same finalizer to a pointer; `(ffi/free p)` frees one now.
 
 Further rules:
 - `(ffi/with-foreign [buf (ffi/alloc f32 1024)] ...)` gives scoped allocation.
@@ -609,6 +630,7 @@ Further rules:
 
 ### 14.3 Blocking calls and threads
 - A call marked `^:blocking` releases its worker thread to the scheduler, which starts a replacement if needed. Unmarked calls are assumed to be short. In dev mode, unmarked calls that take longer than 10 ms produce a warning.
+- Phase 0 (D-038) has no scheduler to hand the thread to, so `^:blocking` only silences the warning; unmarked calls warn once per function.
 - **Callbacks from foreign threads:** a C thread entering Skein through a callback is attached to the runtime on first entry and runs the callback as a temporary fiber.
 
 ### 14.4 Binding generator
@@ -620,6 +642,20 @@ skein bindgen /path/to/SDL3/SDL.h --prefix SDL_ --ns sdl3.raw --out lib/sdl3/raw
 - The generator reads C headers via libclang and emits `deflibrary`/`defcstruct`/`defcenum`/`defcfun` forms. Its output is plain Skein source, meant to be committed and hand-wrapped in an idiomatic layer (`sdl3` on top of `sdl3.raw`).
 - Phase 0 may use an existing C header parser (e.g. `c2ffi` JSON output) as the front end.
 - C++ is out of scope. Use C wrappers such as cimgui.
+
+Phase 0 details (D-038):
+
+```sh
+skein bindgen SDL_video.h SDL_render.h ... -I /opt/homebrew/include --prefix SDL_ --ns sdl3.raw \
+  --library sdl3 --lib macos=libSDL3.dylib --lib linux=libSDL3.so.0 --lib windows=SDL3.dll \
+  --blocking SDL_WaitEvent --out lib/sdl3/raw.skn
+```
+
+- The front end is `clang` itself (its JSON AST dump and `-E -dD` output), so generating needs clang on the `PATH` (or `SKEIN_CLANG`); using the output does not.
+- Only declarations from the headers named on the command line, whose names start with the prefix, are emitted; structs they hold by value come along. `make sdl3-bindings` regenerates `lib/sdl3/raw.skn`.
+- Naming: types keep the prefix (`SDL_FRect` → `sdl-frect`); functions and constants drop it (`SDL_CreateWindow` → `create-window`, `SDL_INIT_VIDEO` → `init-video`). If that name is taken, the prefixed name is used.
+- Each enum becomes a `defcenum` (keys without the common prefix, e.g. `:quit`) and also one integer constant per enumerator (`event-quit`), for struct fields that hold enum values as integers. Constant `#define`s become `def`s.
+- Variadic and inline functions, by-value structs, bit fields and anonymous members are skipped with a `;; skipped` comment.
 
 ## 15. Live development
 

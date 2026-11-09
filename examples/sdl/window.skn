@@ -1,0 +1,66 @@
+(ns examples.sdl.window
+  "Open an SDL3 window, clear it to a color, read a pixel back to check, and keep the
+window up for about two seconds (or until it is closed).
+
+Run it with `./skein run examples/sdl/window.skn`. Set SDL_VIDEO_DRIVER=dummy to run
+without a display."
+  (:require [skein.ffi :as ffi]
+            [sdl3.raw :as sdl]))
+
+(def width 320)
+(def height 240)
+(def color [30 144 255])
+
+(defn check! [ok what]
+  (when-not ok
+    (error (str what " failed: " (sdl/get-error))))
+  ok)
+
+(defn pixel-at
+  "Read the color of the pixel at x, y from what the renderer has drawn."
+  [renderer x y]
+  (let [surface (sdl/render-read-pixels renderer nil)]
+    (check! surface "SDL_RenderReadPixels")
+    (ffi/with-foreign [rgba (ffi/alloc u8 4)]
+      (try
+        (check! (sdl/read-surface-pixel surface x y rgba (ffi/ptr+ rgba 1) (ffi/ptr+ rgba 2)
+                                        (ffi/ptr+ rgba 3))
+                "SDL_ReadSurfacePixel")
+        [(ffi/get rgba u8 0) (ffi/get rgba u8 1) (ffi/get rgba u8 2)]
+        (finally (sdl/destroy-surface surface))))))
+
+(defn quit-requested?
+  "Handle pending events; return true if the window was closed."
+  [event]
+  (loop [quit false]
+    (if (sdl/poll-event event)
+      (recur (or quit (= (ffi/field event sdl/sdl-event :type) sdl/event-quit)))
+      quit)))
+
+(defn run []
+  (check! (sdl/init sdl/init-video) "SDL_Init")
+  (try
+    (let [window (check! (sdl/create-window "Skein + SDL3" width height 0) "SDL_CreateWindow")
+          renderer (check! (sdl/create-renderer window nil) "SDL_CreateRenderer")
+          [r g b] color]
+      (println "video driver:" (sdl/get-current-video-driver))
+      (check! (sdl/set-render-draw-color renderer r g b 255) "SDL_SetRenderDrawColor")
+      (check! (sdl/render-clear renderer) "SDL_RenderClear")
+      (let [pixel (pixel-at renderer (quot width 2) (quot height 2))]
+        (if (= pixel color)
+          (println "cleared the window to" pixel)
+          (error (str "expected " color " but read " pixel))))
+      (sdl/render-present renderer)
+      (ffi/with-foreign [event (ffi/alloc sdl/sdl-event)]
+        (loop [frame 0]
+          (when (and (< frame 120) (not (quit-requested? event)))
+            (check! (sdl/render-clear renderer) "SDL_RenderClear")
+            (sdl/render-present renderer)
+            (sdl/delay 16)
+            (recur (inc frame)))))
+      (sdl/destroy-renderer renderer)
+      (sdl/destroy-window window))
+    (finally (sdl/quit)))
+  (println "done"))
+
+(run)

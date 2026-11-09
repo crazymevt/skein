@@ -17,6 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       SBCL_VERSION: 2.5.10
+      SDL_VERSION: 3.4.20
     defaults:
       run:
         shell: bash
@@ -57,7 +58,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/quicklisp
-          key: quicklisp-${{ runner.os }}-v1
+          key: quicklisp-${{ runner.os }}-v2
 
       - name: Install Quicklisp
         run: |
@@ -77,3 +78,60 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         run: skein.cmd --version
+
+      # SDL3 for the window example (M0.10).
+      - name: Install SDL3 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl3
+
+      - name: Install SDL3 build and X11 packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build xvfb \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
+            libxfixes-dev libxtst-dev
+
+      - name: Cache SDL3 (Linux)
+        if: runner.os == 'Linux'
+        id: sdl-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/sdl3
+          key: sdl3-${{ runner.os }}-${{ env.SDL_VERSION }}-v1
+
+      - name: Build SDL3 (Linux)
+        if: runner.os == 'Linux' && steps.sdl-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o sdl.tar.gz \
+            "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL3-${SDL_VERSION}.tar.gz"
+          tar xzf sdl.tar.gz
+          cmake -S "SDL3-${SDL_VERSION}" -B sdl-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/sdl3" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_STATIC=OFF
+          cmake --build sdl-build
+          cmake --install sdl-build
+
+      - name: Use SDL3 (Linux)
+        if: runner.os == 'Linux'
+        run: echo "SKEIN_LIBRARY_PATH=$HOME/sdl3/lib" >> "$GITHUB_ENV"
+
+      - name: Install SDL3 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "sdl3.zip"
+          $dir = Join-Path $env:RUNNER_TEMP "sdl3"
+          curl.exe -fsSL -o $zip "https://github.com/libsdl-org/SDL/releases/download/release-$env:SDL_VERSION/SDL3-$env:SDL_VERSION-win32-x64.zip"
+          Expand-Archive $zip -DestinationPath $dir
+          $dll = Get-ChildItem $dir -Recurse -Filter SDL3.dll | Select-Object -First 1
+          $dll.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: SDL3 window example
+        if: runner.os != 'Linux'
+        run: ./skein run examples/sdl/window.skn
+
+      - name: SDL3 window example (Linux, under Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a ./skein run examples/sdl/window.skn
