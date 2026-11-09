@@ -221,3 +221,13 @@ exit code."
       (is (search (format nil "available restarts:~%  use-default: Use the default~%  ~
                                try-again: try-again")
                   err)))))
+
+(test restarts-match-by-plain-name
+  ;; A restart established under a qualified name (as a syntax-quoted macro does) is
+  ;; found by its plain name, and the reverse (D-041).
+  (evp-is "(restart-case (invoke-restart 'retry-it) (some.ns/retry-it [] :found))" ":found")
+  (evp-is "(restart-case (invoke-restart 'other.ns/retry-it) (retry-it [] :found))" ":found")
+  (evp-is "(defmacro with-again [& body] `(restart-case (do ~@body) (again [] :again)))
+           (with-again (invoke-restart 'again))"
+          ":again")
+  (evp-is "(restart-case (restart-name (find-restart 'x.y/plain)) (plain [] nil))" "plain"))

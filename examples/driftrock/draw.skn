@@ -40,8 +40,8 @@ xf (a mat3)."
 (defn placement
   "The transform that puts a model at entity e's position and angle."
   [e]
-  (let [p @(:pos e)]
-    (m/m* (m/mat3-translation (vec2-x p) (vec2-y p)) (m/mat3-rotation @(:angle e)))))
+  (let [p (:pos e)]
+    (m/m* (m/mat3-translation (vec2-x p) (vec2-y p)) (m/mat3-rotation (:angle e)))))
 
 (def ship-shape [(vec2 18.0f 0.0f) (vec2 -12.0f -11.0f) (vec2 -6.0f 0.0f) (vec2 -12.0f 11.0f)])
 (def flame-shape [(vec2 -8.0f -5.0f) (vec2 -20.0f 0.0f) (vec2 -8.0f 5.0f)])
@@ -58,10 +58,10 @@ xf (a mat3)."
   (let [xf (placement s)]
     (color! renderer :ship)
     (outline! renderer xf ship-shape)
-    (when (and @(:thrust s) (< (rand) 0.8))
+    (when (and (:thrust s) (< (rand) 0.8))
       (color! renderer :flame)
       (outline! renderer xf flame-shape))
-    (when (pos? @(:shield s))
+    (when (pos? (:shield s))
       (color! renderer :shield)
       (outline! renderer xf shield-shape))))
 

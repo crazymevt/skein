@@ -17,7 +17,7 @@ It compiles to **native executables** for **Windows, macOS and Linux**, cross-co
 ## A taste
 
 ```clojure
-(ns asteroids.ship
+(ns driftrock.ship
   (:require [skein.math :as m]
             [sdl3 :as sdl]))
 
@@ -32,8 +32,8 @@ It compiles to **native executables** for **Windows, macOS and Linux**, cross-co
 (defgeneric collide [a b])
 
 (defmethod collide [(s ship) (r asteroid)]
-  (swap! (:hp s) - (damage r))
-  (when (<= @(:hp s) 0)
+  (update-slot! s :hp - (damage r))
+  (when (<= (:hp s) 0)
     (signal 'ship-destroyed :ship s)))
 
 (defn integrate! [^particles ps ^f32 dt]

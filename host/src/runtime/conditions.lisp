@@ -230,11 +230,10 @@ or :warning, which decides the class of a condition made from a message string."
 ;;; Restarts
 
 (defun restart-cl-name (name)
-  "Return the CL symbol used as the name of the Skein restart NAME (a symbol)."
-  (intern (if (sym-namespace name)
-              (format nil "~A/~A" (sym-namespace name) (sym-name name))
-              (sym-name name))
-          '#:skein-restarts))
+  "Return the CL symbol used as the name of the Skein restart NAME (a symbol). Restarts
+match by their plain name (D-041): skein.game/retry-frame and retry-frame are the same
+restart, so a restart established in a syntax-quoted macro is found by its short name."
+  (intern (sym-name name) '#:skein-restarts))
 
 (defun restart-skein-name (restart)
   "Return the name of RESTART as a Skein symbol."

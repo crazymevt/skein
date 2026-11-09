@@ -212,5 +212,5 @@
                             [(pos? (:score wd))
                              (contains? #{:playing :respawning :game-over} (:mode wd))
                              (every? e/alive? (:rocks wd))
-                             (every? #(<= 0 (m/vec2-x @(:pos %)) 960) (:rocks wd))])"
+                             (every? #(<= 0 (m/vec2-x (:pos %)) 960) (:rocks wd))])"
                          :namespace "user"))))))

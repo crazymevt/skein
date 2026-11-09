@@ -266,9 +266,73 @@ KVS contains :fresh-cells true; a changed cell slot gets a fresh cell."
     copy))
 
 (defun object-get (obj key not-found)
-  "Read the slot named by the keyword KEY, or return NOT-FOUND. A cell slot gives its cell."
+  "Read the slot named by the keyword KEY, or return NOT-FOUND. An :atom cell slot gives
+its current value (D-041); (cell obj key) gives the atom itself."
   (let ((slot (and (kw-p key) (find-skein-slot (class-of obj) (kw-name key)))))
-    (if slot (slot-value obj (c2mop:slot-definition-name slot)) not-found)))
+    (if slot
+        (let ((stored (slot-value obj (c2mop:slot-definition-name slot))))
+          (if (eq (slot-cell slot) :atom) (skein-atom-value stored) stored))
+        not-found)))
+
+(defun instance-slot (obj key what)
+  "The slot definition named by the keyword KEY in the instance OBJ, for WHAT."
+  (unless (instance-p obj)
+    (skein-error 'skein-error nil "~A needs an instance, not ~A" what (readable-string obj)))
+  (or (and (kw-p key) (find-skein-slot (class-of obj) (kw-name key)))
+      (slot-not-found (class-of obj) key)))
+
+(defun immutable-slot-error (obj key)
+  (error 'slot-error :location nil
+                     :message (format nil "slot ~A of ~A is immutable; use with to make a ~
+                                           changed copy"
+                                      (readable-string key) (skein-class-name (class-of obj)))))
+
+(defun check-slot-owner (obj key)
+  (unless (eq (object-owner obj) sb-thread:*current-thread*)
+    (error 'slot-error :location nil
+                       :message (format nil "slot ~A of ~A is :unsynchronized and owned by ~
+                                             another thread"
+                                        (readable-string key)
+                                        (skein-class-name (class-of obj))))))
+
+(defun set-slot (obj key value)
+  "Set a cell slot of OBJ to VALUE: an :atom cell atomically, an :unsynchronized one from
+the thread that owns OBJ. Returns VALUE."
+  (let* ((slot (instance-slot obj key "set-slot!"))
+         (name (c2mop:slot-definition-name slot))
+         (value (checked-slot-value slot value)))
+    (case (slot-cell slot)
+      ((nil) (immutable-slot-error obj key))
+      (:atom (setf (skein-atom-value (slot-value obj name)) value))
+      (:unsynchronized (check-slot-owner obj key)
+       (setf (slot-value obj name) value)))))
+
+(defun update-slot (obj key f args)
+  "Set a cell slot of OBJ to (apply F current ARGS); an :atom cell retries like swap!.
+Returns the new value."
+  (let* ((slot (instance-slot obj key "update-slot!"))
+         (name (c2mop:slot-definition-name slot)))
+    (case (slot-cell slot)
+      ((nil) (immutable-slot-error obj key))
+      (:atom (atom-swap (slot-value obj name) f args))
+      (:unsynchronized (check-slot-owner obj key)
+       (setf (slot-value obj name)
+             (checked-slot-value slot (skein-apply f (cons (slot-value obj name) args))))))))
+
+(defun slot-cell-object (obj key)
+  "The atom behind an :atom cell slot of OBJ."
+  (let ((slot (instance-slot obj key "cell")))
+    (case (slot-cell slot)
+      (:atom (slot-value obj (c2mop:slot-definition-name slot)))
+      ((nil) (error 'slot-error :location nil
+                                :message (format nil "slot ~A of ~A has no cell; it is immutable"
+                                                 (readable-string key)
+                                                 (skein-class-name (class-of obj)))))
+      (t (error 'slot-error :location nil
+                            :message (format nil "slot ~A of ~A is :unsynchronized; it holds its ~
+                                                  value directly, with no cell object"
+                                             (readable-string key)
+                                             (skein-class-name (class-of obj))))))))
 
 (defun set-object-slot (obj key value)
   "Set an :unsynchronized cell slot of OBJ (set! on (:slot obj))."
@@ -283,10 +347,7 @@ KVS contains :fresh-cells true; a changed cell slot gets a fresh cell."
                                 :message (format nil "slot ~A of ~A is immutable; use with to ~
                                                       make a changed copy"
                                                  (readable-string key) (skein-class-name class))))
-      (:atom (error 'slot-error :location nil
-                                :message (format nil "slot ~A of ~A is an atom; use reset! or ~
-                                                      swap! on it"
-                                                 (readable-string key) (skein-class-name class))))
+      (:atom (set-slot obj key value))
       (:unsynchronized
        (unless (eq (object-owner obj) sb-thread:*current-thread*)
          (error 'slot-error :location nil
@@ -540,6 +601,9 @@ default one applies to ARGS (whose first element is an instance)."
           (not-found-p not-found)
           (t (slot-not-found (class-of obj) key)))))
 (defcore "%set-slot!" (obj key value) (set-object-slot obj key value))
+(defcore "set-slot!" (obj key value) (set-slot obj key value))
+(defcore "update-slot!" (obj key f &rest args) (update-slot obj key f args))
+(defcore "cell" (obj key) (slot-cell-object obj key))
 (defcore "instance?" (class x) (bool (typep x (find-skein-class class))))
 (defcore "class-of" (x) (class-of x))
 (defcore "class-name" (class)

@@ -160,6 +160,12 @@ NAME-FIELD for each accessor in the current namespace, unless DEFINE-VARS is fal
     (def-var var fn)
     (setf (gethash fn **struct-defs-by-value**) def)
     (register-inline var (lambda (&rest args) `(,constructor ,@args)) n n)
+    ;; The type predicate name? (D-041).
+    (let* ((cl-type (struct-def-cl-type def))
+           (pvar (intern-var ns (format nil "~A?" short-name))))
+      (def-var pvar (sb-int:named-lambda (format nil "~A?" short-name) (x)
+                      (bool (typep x cl-type))))
+      (register-inline pvar (lambda (x) `(typep ,x ',cl-type)) 1 1 :test-p t))
     (dolist (f fields)
       (let* ((accessor (field-def-accessor f))
              (cl-type (struct-def-cl-type def))

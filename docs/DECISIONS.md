@@ -324,3 +324,14 @@ Date: 2026-11-09 · Status: Accepted
   - Driftrock is `examples/driftrock/`: `defclass` entities with `:atom` cells (moved by a per-update job graph), sparks in a `defsoa`, and drawing through `sdl3.raw`. `--autopilot --frames N --check-60fps` lets CI play it on all three platforms and fail if the 99th-percentile frame misses the 60 fps budget.
 - **Alternatives:** Clojure-named conversions (`float`, `double`, `long`); only vectors and scalars in `skein.math` now; restarts around the whole frame (which would repeat updates that already ran).
 - **Consequences:** Phase 0's retrospective (`docs/PHASE0-RETRO.md`) measured the game and lists language changes to decide, as DESIGN §22 open questions 11–14.
+
+## D-041: Phase 0 retrospective decisions: slot values, restart names, struct predicates
+Date: 2026-11-09 · Status: Accepted
+- **Context:** The Phase 0 retrospective (`docs/PHASE0-RETRO.md`) proposed four language changes, DESIGN §22 questions 11–14. Jessie decided them.
+- **Decision:**
+  - **Slots (11):** reading a cell slot with `(:pos e)`, `slot`, `get` or destructuring gives its current value. `(set-slot! e :k v)` and `(update-slot! e :k f args...)` change a cell slot: atomically for `:atom`, with `update-slot!` retrying like `swap!`, and only from the owning thread for `:unsynchronized`. Both return the new value. `(cell e :k)` returns the atom of an `:atom` slot. `set!` on `(:k e)` now works for `:atom` slots too. Printing shows cell slots' values. This replaces D-035's "a cell slot gives its cell".
+  - **Restart names (12):** restarts match by their plain name. `restart-case` and `invoke-restart` ignore a symbol's namespace, so restarts established in syntax-quoted macros need no `~'`, and `restart-name` gives the plain name. As in CL, the innermost restart with a name wins.
+  - **Struct predicates (13):** `defstruct` defines `name?`, inlined like the accessors.
+  - **Slash (14):** no reader change. `/` stays the namespace separator, and names such as `vdiv` avoid it.
+- **Alternatives:** keeping cells visible (explicit, but noisy: about 30 `@`/`swap!` in Driftrock's 500 lines); restarts named by keywords (unambiguous, but every `restart-case` changes); `instance?` as the only type test; allowing `ns/name/` symbols.
+- **Consequences:** Code that read `@(:hp s)` now reads `(:hp s)`. The tests, `examples/objects.skn` and Driftrock were updated. Two libraries that both establish a restart called `retry` can no longer be told apart by namespace; the innermost one is used.

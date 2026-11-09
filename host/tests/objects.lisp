@@ -46,31 +46,52 @@
 
 (test initialize-is-called
   (evp-is "(defclass sized [] (w :init 1) (area :cell :atom))
-           (defmethod initialize [(s sized)] (reset! (:area s) (* (:w s) (:w s))))
-           @(:area (make sized :w 3))"
+           (defmethod initialize [(s sized)] (set-slot! s :area (* (:w s) (:w s))))
+           (:area (make sized :w 3))"
           "9"))
 
 (test printing-instances
   (evp-is "(defclass pt [] (x :init 1) (h :cell :atom :init 2)) (pr-str (make pt))"
-          (format nil "\"#<test.ns~D/pt {:x 1, :h #<atom 2>}>\"" (1+ *test-ns-counter*))))
+          (format nil "\"#<test.ns~D/pt {:x 1, :h 2}>\"" (1+ *test-ns-counter*))))
 
 ;;; Immutability and cells
 
 (test immutable-slots
   (fails (with-ships "(set! (:pos (make ship)) [9 9])")
          "is immutable; use with to make a changed copy")
-  (fails (with-ships "(set! (:hp (make ship)) 5)") "is an atom; use reset! or swap! on it")
+  (fails (with-ships "(set-slot! (make ship) :pos [9 9])")
+         "is immutable; use with to make a changed copy")
+  (fails (with-ships "(update-slot! (make ship) :pos inc)")
+         "is immutable; use with to make a changed copy")
+  (fails (with-ships "(cell (make ship) :pos)") "has no cell; it is immutable")
+  (fails "(set-slot! {:a 1} :a 2)" "set-slot! needs an instance")
   (fails (with-ships "(set! (:nope (make ship)) 5)") "has no slot :nope")
   (fails "(set! (:x 5) 1)" "needs an instance"))
 
 (test atom-cells
-  (evp-is (with-ships "(let [s (make ship)] (swap! (:hp s) - 30) (reset! (:hp s) (* 2 @(:hp s)))
-                                            @(:hp s))")
-          "140")
-  (evp-is (with-ships "(let [s (make ship :hp 5)] @(:hp s))") "5"))
+  ;; (:hp s) reads the value; set-slot! and update-slot! change it (D-041).
+  (evp-is (with-ships "(let [s (make ship)]
+                         [(update-slot! s :hp - 30) (set-slot! s :hp (* 2 (:hp s))) (:hp s)])")
+          "[70 140 140]")
+  (evp-is (with-ships "(let [s (make ship :hp 5)] [(:hp s) (slot s :hp) (get s :hp)])") "[5 5 5]")
+  ;; set! works on an :atom slot too, and cell gives the atom itself.
+  (evp-is (with-ships "(let [s (make ship)] (set! (:hp s) 7) [(:hp s) (atom? (cell s :hp))
+                                                               @(cell s :hp)])")
+          "[7 true 7]")
+  (evp-is (with-ships "(let [s (make ship) {:keys [hp]} s] hp)") "100")
+  ;; update-slot! on an :atom cell is atomic across threads.
+  (evp-is (with-ships "(let [s (make ship :hp 0)]
+                         (with-nursery [n] (dotimes [_ 8] (spawn n (dotimes [_ 500]
+                                                                     (update-slot! s :hp inc)))))
+                         (:hp s))")
+          "4000"))
 
 (test unsynchronized-cells
   (evp-is (with-ships "(let [s (make ship)] (set! (:scratch s) [1]) (:scratch s))") "[1]")
+  (evp-is (with-ships "(let [s (make ship)] (set-slot! s :scratch [2])
+                         [(update-slot! s :scratch conj 3) (:scratch s)])")
+          "[[2 3] [2 3]]")
+  (fails (with-ships "(cell (make ship) :scratch)") "holds its value directly")
   (let ((obj (ev (with-ships "(make ship)")))
         (result nil))
     (sb-thread:join-thread
@@ -90,14 +111,14 @@
           "[[1 1] [2 2] 1.0f false]")
   ;; Cells are shared by reference unless :fresh-cells true.
   (evp-is (with-ships "(let [s (make ship) t (with s :angle 1.0f)]
-                         (swap! (:hp t) dec)
-                         [@(:hp s) @(:hp t) (identical? (:hp s) (:hp t))])")
+                         (update-slot! t :hp dec)
+                         [(:hp s) (:hp t) (identical? (cell s :hp) (cell t :hp))])")
           "[99 99 true]")
   (evp-is (with-ships "(let [s (make ship) t (with s :fresh-cells true)]
-                         (swap! (:hp t) dec)
-                         [@(:hp s) @(:hp t)])")
+                         (update-slot! t :hp dec)
+                         [(:hp s) (:hp t)])")
           "[100 99]")
-  (evp-is (with-ships "(let [s (make ship) t (with s :hp 7)] [@(:hp s) @(:hp t)])") "[100 7]")
+  (evp-is (with-ships "(let [s (make ship) t (with s :hp 7)] [(:hp s) (:hp t)])") "[100 7]")
   (fails (with-ships "(with (make ship) :speed 1)") "has no slot :speed")
   (fails "(with {:a 1} :a 2)" "with needs an instance"))
 
@@ -261,8 +282,8 @@
   (evp-is "(defclass wrap [] (a :init 1))
            (def old (make wrap :a 5))
            (defclass wrap [] (a :cell :atom))
-           @(:a old)"
-          "5")
+           [(:a old) @(cell old :a)]"
+          "[5 5]")
   (evp-is "(defclass unwrap [] (a :cell :atom :init 5))
            (def old (make unwrap))
            (defclass unwrap [] (a))
@@ -271,9 +292,9 @@
   (evp-is "(defclass migrating [] (first-name :init \"Ada\"))
            (def old (make migrating))
            (defmethod update-instance-for-redefined-class [(o migrating) added discarded old-values]
-             (reset! (:name o) (str (:first-name old-values) \"!\")))
+             (set-slot! o :name (str (:first-name old-values) \"!\")))
            (defclass migrating [] (name :cell :atom))
-           [@(:name old) (keys old)]"
+           [(:name old) (keys old)]"
           "[\"Ada!\" (:name)]")
   (evp-is "(defgeneric speak [x])
            (defclass dog [])

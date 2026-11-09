@@ -3,8 +3,8 @@
 Phase 0 built Skein on SBCL in twelve milestones (M0.1–M0.12). It ends with **Driftrock**
 (`examples/driftrock/`), a rock-field shooter that plays at 60 fps on macOS, Windows and
 Linux and can be edited while it runs. This document records what worked, what felt bad,
-what was slow, and the design changes that Phase 0 suggests. Proposed changes that affect
-the language are listed as open questions in DESIGN §22 until they are decided.
+what was slow, and the design changes that Phase 0 suggests. The language changes were
+decided right after (D-041).
 
 **By the numbers** (November 2026):
 - About 10,600 lines of host Common Lisp and 1,200 lines of Skein library.
@@ -94,7 +94,8 @@ Takeaways:
 
 ## Proposed design changes
 
-Language-visible proposals are open questions 11–14 in DESIGN §22, for Jessie to decide:
+Language-visible proposals became DESIGN §22 questions 11–14. Jessie accepted 1–3 and
+chose to keep `/`-free names for 4 (D-041); all four are now in DESIGN.md.
 
 1. **Slot access without `@`.** `(:pos e)` on a cell slot returns the cell's value, and
    new functions change cells: `(set-slot! e :pos v)` and `(update-slot! e :pos f args...)`.

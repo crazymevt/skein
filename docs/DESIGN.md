@@ -268,10 +268,10 @@ Slot options:
 
 ### 8.2 Instances
 - `(make ship :pos (vec2 1.0f 2.0f))` creates an instance and calls the generic function `initialize`.
-- `(:pos s)` or `(slot s :pos)` reads a slot. For a cell slot this returns the **cell**, so you write `@(:hp s)` and `(swap! (:hp s) dec)`.
+- `(:pos s)` or `(slot s :pos)` reads a slot. For a cell slot this returns the cell's **current value** (D-041). `(set-slot! s :hp 50)` sets a cell slot and `(update-slot! s :hp - 5)` updates it; on an `:atom` cell both are atomic, `update-slot!` retrying like `swap!`. Both return the new value. `(cell s :hp)` returns the atom itself, for `add-watch` or passing the cell around. Immutable slots cannot be set or updated.
 - `(with s :angle 1.5f :pos p)` returns a **new instance** with the given immutable slots changed. Cell slots are copied *by reference*, so the new and old instance share the cell. To give the copy fresh cells, use `(with s ... :fresh-cells true)`.
 - Instances are not maps, but they support `keys`, `get` and destructuring with `{:keys [pos angle]}`.
-- Mutation of an `:unsynchronized` slot happens through `set!` on the slot: `(set! (:scratch s) arr)`. In safe mode, the runtime records the owning fiber and signals an error if another fiber mutates it.
+- An `:unsynchronized` slot is changed with `set-slot!`/`update-slot!` or with `set!` on the slot, `(set! (:scratch s) arr)`, and has no cell object. In safe mode, the runtime records the owning fiber and signals an error if another fiber mutates it.
 
 ### 8.3 Generic functions and methods
 
@@ -329,7 +329,7 @@ These are the tools for hot loops: no per-element allocation, no pointer chasing
 
 - **Immutable, unboxed and stored inline** when the type is known: in arrays, in other structs, and in typed slots and locals.
 - There is no inheritance and no identity, and `=` compares fields.
-- The constructor is positional, `(vec2 1.0f 2.0f)`, or keyword-based, `(vec2 :x 1.0f :y 2.0f)`. Accessors are `(:x v)` and `(vec2-x v)`; `with` makes an updated copy.
+- The constructor is positional, `(vec2 1.0f 2.0f)`, or keyword-based, `(vec2 :x 1.0f :y 2.0f)`. Accessors are `(:x v)` and `(vec2-x v)`; `with` makes an updated copy. `(vec2? x)` tests the type (D-041).
 - They can be specialized on by methods (`(defmethod draw [(v vec2)] ...)`). Passing a value struct where its type is unknown **boxes** it, and the compiler emits an efficiency note.
 - Field types must be primitive types or other value structs.
 - `(defstruct name ...)` without `:value` defines a plain record class: a heap object with immutable fields and no MOP overhead.
@@ -407,7 +407,7 @@ Details (D-034):
 - `(error x & args)`, `(signal x & args)` and `(warn x & args)` take a condition, a condition type (or a symbol naming one, looked up in the current namespace, then globally if the name is unique) followed by keyword initargs, or a message string whose arguments are joined like `println`'s. `signal` returns `nil` when no handler takes action.
 - Built-in types include `condition`, `error`, `warning`, `arithmetic-error`, `type-error`, `index-error`, `arity-error` and `unbound-var-error`. Host errors such as division by zero are conditions of these types.
 - `(handler-case expr (type [c] body...)...)`, and `(try body... (catch type e body...)... (finally body...))` as in Clojure.
-- `(restart-case expr (name [params] :report "text"? body...)...)`; `invoke-restart`, `find-restart`, `compute-restarts`, `restart-name` and `restart-report`. CL's standard restarts (`abort`, `continue`, `muffle-warning`, `use-value`, `store-value`) can be invoked by name. A restart value can safely outlive its `restart-case`; invoking it afterwards is an error.
+- `(restart-case expr (name [params] :report "text"? body...)...)`; `invoke-restart`, `find-restart`, `compute-restarts`, `restart-name` and `restart-report`. CL's standard restarts (`abort`, `continue`, `muffle-warning`, `use-value`, `store-value`) can be invoked by name. A restart value can safely outlive its `restart-case`; invoking it afterwards is an error. Restarts match by their **plain name**, ignoring any namespace: a restart a syntax-quoted macro establishes as `skein.game/retry-frame` is found by `(invoke-restart 'retry-frame)` (D-041). As in CL, the innermost restart with a name wins.
 - When `skein run` meets an unhandled error, it prints the message and the restarts that were active.
 
 **Conditions and concurrency.** This is the feature that sets Skein apart.
@@ -868,16 +868,7 @@ Bindings shipped as separate libraries: `sdl3` (windowing, input, the 2D rendere
 
 ## 22. Open questions
 
-New questions go here; once resolved, they move to `DECISIONS.md` and the table below. Questions 11–14 come from the Phase 0 retrospective ([`PHASE0-RETRO.md`](PHASE0-RETRO.md)).
-
-**Open**
-
-| # | Question | Proposal |
-|---|---|---|
-| 11 | Reading and changing mutable slots without `@` and `swap!` everywhere | `(:pos e)` returns a cell slot's value; `(set-slot! e :pos v)` and `(update-slot! e :pos f args...)` change it; `(cell e :pos)` gives the cell |
-| 12 | Restart names: syntax-quote qualifies them, so macros need `~'retry-frame` | Name restarts with keywords (`:retry-frame`), or compare restart symbols by their unqualified name |
-| 13 | Struct type tests | `defstruct` also defines a predicate `name?` (`vec2?`) |
-| 14 | `/` can't appear in a symbol's name, so vector division is `vdiv` | Keep `/`-free names, or let the reader accept `/` after the namespace separator |
+None are open right now. New questions go here; once resolved, they move to `DECISIONS.md` and the table below.
 
 **Resolved**
 
@@ -893,3 +884,7 @@ New questions go here; once resolved, they move to `DECISIONS.md` and the table 
 | 8 | Fiber stack size and growth | Fixed size, lazily committed, guard page, 256 KB default | D-024 |
 | 9 | `#lang` support | No | D-025 |
 | 10 | Ratios | Not in v1 | D-026 |
+| 11 | Mutable slot access (from the Phase 0 retrospective) | `(:pos e)` gives a cell slot's value; `set-slot!`, `update-slot!`; `(cell e :pos)` for the cell | D-041 |
+| 12 | Restart names in macros | Restarts match by plain name, ignoring the namespace | D-041 |
+| 13 | Struct type tests | `defstruct` defines `name?` | D-041 |
+| 14 | `/` in symbol names | Not allowed after the namespace separator; use `/`-free names such as `vdiv` | D-041 |

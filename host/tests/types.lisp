@@ -245,3 +245,13 @@
                            1000)))
       (is (< (abs (- -0.169075164d0 (skein.runtime:vector-nth result 0))) 1d-9))
       (is (< (abs (- -0.169087605d0 (skein.runtime:vector-nth result 1))) 1d-9)))))
+
+(test struct-predicates
+  ;; defstruct defines name? (D-041), inlined in declared code.
+  (evp-is (with-vec2 "(defstruct rgb (r u8) (g u8) (b u8))
+                      [(vec2? (vec2 1.0f 2.0f)) (vec2? (rgb 1 2 3)) (rgb? (rgb 1 2 3)) (vec2? nil)
+                       (vec2? {:x 1.0f :y 2.0f})]")
+          "[true false true false false]")
+  (evp-is (with-vec2 "(defn f [v] (declare (optimize (speed 2))) (if (vec2? v) :v :other))
+                      [(f (vec2 0.0f 0.0f)) (f 1)]")
+          "[:v :other]"))

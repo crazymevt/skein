@@ -1,7 +1,8 @@
 (ns driftrock.entities
   "Driftrock's game objects. The ship, rocks and bullets are defclass instances whose
-moving parts are atom cells, because each update step moves them on worker threads (a
-job graph). Sparks are many and short-lived, so they live in a struct of arrays."
+moving parts are :atom cells, because each update step moves them on worker threads (a
+job graph): (:pos e) reads one, (update-slot! e :pos f) changes it. Sparks are many and
+short-lived, so they live in a struct of arrays."
   (:require [skein.math :as m :refer [vec2 vec2-x vec2-y v+ v*]]
             [driftrock.world :as w]))
 
@@ -25,28 +26,28 @@ job graph). Sparks are many and short-lived, so they live in a struct of arrays.
 (defclass bullet [body]
   (life :cell :atom :init 1.0))
 
-(defn alive? [e] @(:alive e))
-(defn kill! [e] (reset! (:alive e) false))
+(defn alive? [e] (:alive e))
+(defn kill! [e] (set-slot! e :alive false))
 
 ;;; Movement
 
 (defgeneric step! [e dt] "Move e on by dt seconds.")
 
 (defmethod step! [(e body) dt]
-  (let [vel @(:vel e)]
-    (swap! (:pos e) (fn [p] (w/wrap-pos (v+ p (v* vel dt))))))
-  (swap! (:angle e) + (* (:spin e) dt)))
+  (let [vel (:vel e)]
+    (update-slot! e :pos (fn [p] (w/wrap-pos (v+ p (v* vel dt))))))
+  (update-slot! e :angle + (* (:spin e) dt)))
 
 (defmethod step! :after [(b bullet) dt]
-  (when (neg? (swap! (:life b) - dt))
+  (when (neg? (update-slot! b :life - dt))
     (kill! b)))
 
 (def ship-drag "Fraction of its speed the ship keeps per second." 0.55)
 
 (defmethod step! :after [(s ship) dt]
-  (swap! (:cooldown s) (fn [c] (max 0.0 (- c dt))))
-  (swap! (:shield s) (fn [c] (max 0.0 (- c dt))))
-  (swap! (:vel s) v* (m/pow ship-drag dt)))
+  (update-slot! s :cooldown (fn [c] (max 0.0 (- c dt))))
+  (update-slot! s :shield (fn [c] (max 0.0 (- c dt))))
+  (update-slot! s :vel v* (m/pow ship-drag dt)))
 
 ;;; Rocks: an outline made bumpy with noise, so every rock looks different.
 

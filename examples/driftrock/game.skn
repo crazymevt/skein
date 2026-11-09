@@ -42,32 +42,32 @@ and waves. Nothing here touches SDL, so the game can also run headless."
   (let [turn (cond (and (:left input) (not (:right input))) -1.0
                    (and (:right input) (not (:left input))) 1.0
                    :else 0.0)]
-    (swap! (:angle ship) + (* turn turn-speed dt))
-    (reset! (:thrust ship) (boolean (:thrust input)))
+    (update-slot! ship :angle + (* turn turn-speed dt))
+    (set-slot! ship :thrust (boolean (:thrust input)))
     (when (:thrust input)
-      (swap! (:vel ship) v+ (m/from-angle @(:angle ship) (* thrust dt))))))
+      (update-slot! ship :vel v+ (m/from-angle (:angle ship) (* thrust dt))))))
 
 (defn fire [ship input]
-  (when (and (:fire input) (zero? @(:cooldown ship)))
-    (reset! (:cooldown ship) fire-delay)
-    (let [dir (m/from-angle @(:angle ship))]
-      (e/make-bullet (v+ @(:pos ship) (v* dir 16.0))
-                     (v+ @(:vel ship) (v* dir bullet-speed))))))
+  (when (and (:fire input) (zero? (:cooldown ship)))
+    (set-slot! ship :cooldown fire-delay)
+    (let [dir (m/from-angle (:angle ship))]
+      (e/make-bullet (v+ (:pos ship) (v* dir 16.0))
+                     (v+ (:vel ship) (v* dir bullet-speed))))))
 
 ;;; Collisions and rules: one job, after everything has moved
 
 (defn hit? [a b]
-  (< (m/distance @(:pos a) @(:pos b)) (+ (:radius a) (:radius b))))
+  (< (m/distance (:pos a) (:pos b)) (+ (:radius a) (:radius b))))
 
 (defn break-rock
   "The pieces a destroyed rock breaks into."
   [rock]
   (let [size (dec (:size rock))]
     (when (pos? size)
-      (let [speed (* 1.5 (m/length @(:vel rock)))]
+      (let [speed (* 1.5 (m/length (:vel rock)))]
         (for [_ [1 2]]
-          (e/make-rock size @(:pos rock)
-                       (v+ @(:vel rock) (m/from-angle (rand m/tau) (+ 30.0 speed)))))))))
+          (e/make-rock size (:pos rock)
+                       (v+ (:vel rock) (m/from-angle (rand m/tau) (+ 30.0 speed)))))))))
 
 (defn shoot-rocks
   "Resolve bullets hitting rocks: returns the world with points and broken rocks."
@@ -77,7 +77,7 @@ and waves. Nothing here touches SDL, so the game can also run headless."
                                (first (filter #(and (e/alive? %) (hit? bullet %)) (:rocks wd))))]
               (do (e/kill! bullet)
                   (e/kill! rock)
-                  (e/emit-sparks! @(:pos rock) (* 8 (:size rock)) 160.0)
+                  (e/emit-sparks! (:pos rock) (* 8 (:size rock)) 160.0)
                   (-> wd
                       (update :score + (points (:size rock)))
                       (update :rocks into (break-rock rock))))
@@ -90,10 +90,10 @@ and waves. Nothing here touches SDL, so the game can also run headless."
   [wd]
   (let [ship (:ship wd)]
     (if (and (= :playing (:mode wd))
-             (zero? @(:shield ship))
+             (zero? (:shield ship))
              (some #(and (e/alive? %) (hit? ship %)) (:rocks wd)))
       (do (e/kill! ship)
-          (e/emit-sparks! @(:pos ship) 60 240.0)
+          (e/emit-sparks! (:pos ship) 60 240.0)
           (let [lives (dec (:lives wd))]
             (assoc wd :lives lives :mode (if (pos? lives) :respawning :game-over)
                       :timer respawn-delay)))
@@ -112,7 +112,7 @@ and waves. Nothing here touches SDL, so the game can also run headless."
   (if (empty? (:rocks wd))
     (let [wave (inc (:wave wd))]
       (assoc wd :wave wave
-                :rocks (spawn-wave (min 11 (+ 3 wave)) @(:pos (:ship wd)))))
+                :rocks (spawn-wave (min 11 (+ 3 wave)) (:pos (:ship wd)))))
     wd))
 
 (defn apply-rules [wd input dt]

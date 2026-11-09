@@ -16,18 +16,18 @@
 
 (defmethod collide [a b] :nothing)
 (defmethod collide [(a ship) (b asteroid)]
-  (swap! (:hp a) dec)
+  (update-slot! a :hp dec)
   :ship-damaged)
 (defmethod collide [(a ship) (b (= :wall))] :ship-bounced)
 (defmethod collide :around [(a ship) b]
-  (if (pos? @(:hp a)) (call-next-method) :ship-already-destroyed))
+  (if (pos? (:hp a)) (call-next-method) :ship-already-destroyed))
 
 (def player (make ship :name "Falcon" :pos [10 20]))
 (def rock (make asteroid))
 
 (println (entity-name player) "vs" (entity-name rock) "->" (collide player rock))
 (println "wall ->" (collide player :wall))
-(println "hp left:" @(:hp player))
+(println "hp left:" (:hp player))
 (dotimes [_ 3] (collide player rock))
 (println "after more hits ->" (collide player rock))
 

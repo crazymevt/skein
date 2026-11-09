@@ -11,8 +11,8 @@ Returns the body's value, or nil if the frame was skipped."
   [& body]
   `(loop []
      (let [result# (restart-case [:done (do ~@body)]
-                     (~'retry-frame [] :report "Run this frame again" [:retry nil])
-                     (~'skip-frame [] :report "Skip the rest of this frame" [:skip nil]))]
+                     (retry-frame [] :report "Run this frame again" [:retry nil])
+                     (skip-frame [] :report "Skip the rest of this frame" [:skip nil]))]
        (if (= (first result#) :retry)
          (recur)
          (second result#)))))

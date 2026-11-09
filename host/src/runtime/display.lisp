@@ -60,7 +60,11 @@ print does; otherwise as pr does. Values with no readable syntax print as #<...>
          (format stream "#<~A " (skein-class-name (class-of x)))
          (print-fields (loop for s in (skein-slots (class-of x))
                              collect (cons (slot-name-string s)
-                                           (slot-value x (c2mop:slot-definition-name s))))
+                                           (let ((v (slot-value x (c2mop:slot-definition-name s))))
+                                             ;; An :atom cell shows its value.
+                                             (if (eq (slot-cell s) :atom)
+                                                 (skein-atom-value v)
+                                                 v))))
                        stream readably)
          (write-char #\> stream))
         ((struct-instance-def x)
