@@ -18,7 +18,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.10 FFI and bindgen | ✅ |
 | M0.11 REPL, reload and dev loop | ✅ |
 | M0.12 Demo game | ✅ |
-| M1.1 Zig toolchain and runtime skeleton | ⬜ |
+| M1.1 Zig toolchain and runtime skeleton | ✅ |
 | M1.2 C backend, first slice | ⬜ |
 | M1.3 Garbage collector | ⬜ |
 | M1.4 Core data in the runtime | ⬜ |
@@ -144,7 +144,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 **Order (D-042):** a thin native slice comes first (M1.1–M1.2), then the runtime's hard parts (GC, data, unwinding), then the front end's port to Skein (M1.6–M1.8), then the library, FFI and tooling. Running native code early tests the riskiest parts while the Phase 0 front end is still a stable reference.
 
 **Rules for Phase 1**
-- The runtime is Zig, built with a pinned Zig version (chosen in M1.1). Generated code is C11 compiled with `zig cc`. Ask before adding other dependencies or tools.
+- The runtime is Zig, built with Zig **0.17.1** (pinned in M1.1, D-043; upgrade deliberately). Generated code is C11 compiled with `zig cc`. Ask before adding other dependencies or tools.
 - Platform code lives only in `runtime/platform/<os>/` (DESIGN §19.3).
 - The Phase 0 host keeps working and stays the reference: native results are tested against it. Native tests run alongside `make test`, and CI runs both on all three platforms.
 - Concurrency stays on OS threads (as in Phase 0); fibers and the work-stealing scheduler are Phase 2. Live redefinition at the REPL is Phase 2 too; Phase 1 binaries are built ahead of time.

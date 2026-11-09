@@ -714,7 +714,7 @@ Backend
 
 The runtime is written in **Zig**, chosen for cross-compilation with `zig cc`, C ABI compatibility and explicit memory control.
 
-### 17.1 Value representation (Tentative)
+### 17.1 Value representation
 Values are 64-bit tagged words, with the tag in the low 3 bits:
 
 | Tag | Meaning |
@@ -727,8 +727,26 @@ Values are 64-bit tagged words, with the tag in the low 3 bits:
 
 f64 values are boxed unless the compiler unboxes them. Declared code keeps f64 unboxed in registers, locals, typed slots and arrays.
 
+Details (D-043, `runtime/src/value.zig`):
+- A fixnum `n` is `n << 2`, so both `000` and `100` are fixnum tags. Its range is −2⁶¹ to 2⁶¹−1.
+- A heap pointer is the 8-byte-aligned address plus 1.
+- Immediates keep their kind in bits 3–7: nil 0, false 1, true 2, unbound 3, char 4. A char keeps its code point in bits 32–52.
+- Only nil and false are falsey.
+
 ### 17.2 Object layout
 Every heap object has one header word: type ID, GC bits, size class and a hash-cache flag. Class instances have a header, a class-wrapper pointer (used for redefinition and dispatch) and slots.
+
+The header (D-043, `runtime/src/object.zig`), from the low bits up:
+
+| Bits | Field |
+|---|---|
+| 0–15 | type ID |
+| 16–23 | GC bits: marked, forwarded, pinned, old |
+| 24–31 | size class |
+| 32–39 | flags, such as hash cached |
+| 40–63 | payload length in 64-bit words |
+
+Objects of 32 KiB and more live in the large-object space (§18.1), so 24 bits of length is enough.
 
 ### 17.3 Functions and calls
 - Closures are a code pointer plus captured values.
@@ -790,7 +808,7 @@ skein build --target x86_64-windows-gnu --profile release
 ```
 
 ### 19.3 Platform rules
-- OS-specific code lives **only** in `runtime/platform/<os>/` (native) or `host/src/platform/` (Phase 0) behind a common interface.
+- OS-specific code lives **only** in `runtime/platform/<os>/` (native) or `host/src/platform/` (Phase 0) behind a common interface. macOS and Linux share `runtime/platform/posix/`; Windows has `runtime/platform/windows/` (D-043).
 - **Windows:** use SEH-compatible unwinding in the runtime. There's no `fork`. Paths must handle backslashes and drive letters, and console versus GUI subsystem is a build flag.
 - **macOS:** apps ship as `.app` bundles. Code signing and notarization go in `skein package`. Dev-mode JIT and dynamic loading need the `com.apple.security.cs.allow-jit` and `disable-library-validation` entitlements. The main thread is required for Cocoa/SDL windowing.
 - **Linux:** link against an old glibc baseline via zig's glibc versioning for wide compatibility.

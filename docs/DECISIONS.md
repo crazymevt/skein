@@ -347,3 +347,23 @@ Date: 2026-11-09 · Status: Accepted
   Jessie approved the plan.
 - **Alternatives:** porting the front end first, as the outline listed. That defers every native risk (C generation, GC, unwinding on Windows) until after a large port.
 - **Consequences:** For most of Phase 1 the C backend is driven by the Phase 0 front end, which stays the reference that native results are tested against. The Zig version, where the persistent collections live (Zig or compiled Skein) and other choices are made as each milestone starts.
+
+## D-043: The Zig runtime skeleton
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.1 starts the native runtime (DESIGN §17–§19). Jessie chose to pin Zig 0.17.1 (the latest stable release), to have CI install Zig from the official archives with checksums, and to install it locally with Homebrew.
+- **Decision:**
+  - **Layout:**
+    - `runtime/` is a Zig package (`build.zig`, `build.zig.zon`, `minimum_zig_version` 0.17.1).
+    - `src/` holds the portable runtime: `value.zig`, `object.zig` and `heap.zig`, with `runtime.zig` as the root.
+    - `platform/posix/` serves macOS and Linux, and `platform/windows/` serves Windows; `build.zig` picks one as the `platform` module by target OS.
+    - The runtime links libc everywhere.
+  - **Platform layer:** page size, `reserve`/`commit`/`decommit`/`release` of virtual memory, an OS-backed `Mutex`, `monotonicNanos` and stdout/stderr writes. POSIX uses mmap, mprotect, pthreads and clock_gettime; Windows declares the few kernel32 functions it needs (VirtualAlloc, SRW locks, QueryPerformanceCounter, WriteFile). Platform code does not use `std.Io`, whose API is still changing.
+  - **Values:** DESIGN §17.1 is no longer tentative. Fixnums are `n << 2`. Objects are an 8-byte-aligned address plus tag 001. Immediates carry their kind in bits 3–7 and a char's code point in bits 32–52. An f32 sits in the upper 32 bits.
+  - **Object header:** one 64-bit word holding a 16-bit type ID, GC bits, a size class, flags and a 24-bit payload length in words. Boxed f64 is the first object type.
+  - **Allocation:** each thread bump-allocates in a TLAB carved from 1 MiB chunks, which the heap maps and hands out under its mutex. Objects of 32 KiB and more get their own mapping in the large-object space. Nothing is freed until the GC (M1.3); fresh pages are zero, so payloads start zeroed.
+  - **Builds and tests:** `make test` runs the host suites and then `zig build test` in `runtime/`. CI downloads the pinned Zig archive for each OS from ziglang.org, verifies its SHA-256 from Zig's download index, and caches it.
+- **Alternatives:** an older Zig (0.16.0); the mlugg/setup-zig action; `std.Io` for clocks and output (the platform layer would follow its churn); separate `macos/` and `linux/` directories (they would duplicate the POSIX code).
+- **Consequences:**
+  - Windows and Linux builds are cross-compiled locally to catch errors, but they only run in CI.
+  - Upgrading Zig means updating `build.zig.zon`, the CI checksums and the README, and re-running everything.
+  - Platform-specific behavior beyond these primitives (stack guards, signals, fibers) comes with the milestones that need it.

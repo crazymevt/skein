@@ -18,6 +18,7 @@ jobs:
     env:
       SBCL_VERSION: 2.5.10
       SDL_VERSION: 3.4.20
+      ZIG_VERSION: 0.17.1
     defaults:
       run:
         shell: bash
@@ -67,6 +68,57 @@ jobs:
             sbcl --noinform --no-userinit --non-interactive \
               --load "$RUNNER_TEMP/quicklisp.lisp" --eval "(quicklisp-quickstart:install)"
           fi
+
+      # Zig for the Phase 1 runtime: the official release archives, checked against the
+      # SHA-256 sums from https://ziglang.org/download/index.json, and cached.
+      - name: Cache Zig
+        id: zig-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/zig
+          key: zig-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}
+
+      - name: Install Zig (macOS)
+        if: runner.os == 'macOS' && steps.zig-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/zig.tar.xz" \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-macos-${ZIG_VERSION}.tar.xz"
+          echo "75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d  $RUNNER_TEMP/zig.tar.xz" \
+            | shasum -a 256 -c -
+          mkdir -p ~/zig && tar xJf "$RUNNER_TEMP/zig.tar.xz" -C ~/zig --strip-components 1
+
+      - name: Install Zig (Linux)
+        if: runner.os == 'Linux' && steps.zig-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/zig.tar.xz" \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          echo "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a  $RUNNER_TEMP/zig.tar.xz" \
+            | sha256sum -c -
+          mkdir -p ~/zig && tar xJf "$RUNNER_TEMP/zig.tar.xz" -C ~/zig --strip-components 1
+
+      - name: Install Zig (Windows)
+        if: runner.os == 'Windows' && steps.zig-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "zig.zip"
+          curl.exe -fsSL -o $zip "https://ziglang.org/download/$env:ZIG_VERSION/zig-x86_64-windows-$env:ZIG_VERSION.zip"
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e") {
+            throw "zig.zip checksum mismatch: $hash"
+          }
+          $out = Join-Path $env:RUNNER_TEMP "zig-unpacked"
+          Expand-Archive $zip -DestinationPath $out
+          $dest = Join-Path $HOME "zig"
+          Move-Item (Join-Path $out "zig-x86_64-windows-$env:ZIG_VERSION") $dest
+
+      - name: Use Zig
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            cygpath -w "$HOME/zig" >> "$GITHUB_PATH"
+          else
+            echo "$HOME/zig" >> "$GITHUB_PATH"
+          fi
+          "$HOME/zig/zig" version
 
       - name: Run tests
         run: make test

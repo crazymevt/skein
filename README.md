@@ -98,10 +98,10 @@ skein/
 
 ## Getting started (Phase 0)
 
-Requirements: [SBCL](https://www.sbcl.org/) 2.4+ and [Quicklisp](https://www.quicklisp.org/), installed in `~/quicklisp` or wherever `QUICKLISP_HOME` points. On Windows, use `skein.cmd` instead of `./skein`.
+Requirements: [SBCL](https://www.sbcl.org/) 2.4+ and [Quicklisp](https://www.quicklisp.org/), installed in `~/quicklisp` or wherever `QUICKLISP_HOME` points. The Phase 1 runtime also needs [Zig](https://ziglang.org/) **0.17.1** (`brew install zig` on macOS). On Windows, use `skein.cmd` instead of `./skein`.
 
 ```sh
-make test            # run the full test suite
+make test            # run the full test suite (make test-host / make test-runtime for one half)
 ./skein repl         # a Skein REPL
 ./skein run examples/hello.skn
 ```

@@ -70,7 +70,7 @@ These are defined in M0.1; update this section if they change.
 
 | Command | Purpose |
 |---|---|
-| `make test` | run all tests |
+| `make test` | run all tests: the host's (`make test-host`) and the Zig runtime's (`make test-runtime`) |
 | `make repl` | SBCL with Skein loaded |
 | `./skein run <file.skn> [args]` | run a Skein program (calls its `-main` with the args) |
 | `./skein repl` | start a Skein REPL |

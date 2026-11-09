@@ -2,11 +2,19 @@
 
 SBCL ?= sbcl
 SBCL_BATCH = $(SBCL) --noinform --no-userinit --non-interactive
+ZIG ?= zig
 
-.PHONY: test repl bench sdl3-bindings
+.PHONY: test test-host test-runtime repl bench sdl3-bindings
 
-test:
+# The host (Phase 0, SBCL) and the native runtime (Phase 1, Zig 0.17.1).
+test: test-host test-runtime
+
+test-host:
 	$(SBCL_BATCH) --load host/tools/run-tests.lisp
+
+test-runtime:
+	@command -v $(ZIG) >/dev/null || { echo "zig not found: install Zig 0.17.1 (see README)"; exit 1; }
+	cd runtime && $(ZIG) build test --summary all
 
 repl:
 	$(SBCL) --load host/tools/repl.lisp
