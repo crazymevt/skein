@@ -141,8 +141,7 @@ for a closing delimiter, or (values :EOF). Skips whitespace, comments and #_ for
                    (#\_ (read-required r "#_" line column))
                    (#\| (skip-block-comment r line column))
                    ((nil) (fail r line column "unexpected end of input after `#`"))
-                   (#\# (fail r line column "`##` literals (such as ##Inf) are not ~
-                                              supported yet"))
+                   (#\# (form (read-symbolic-value r line column)))
                    (t (if (token-end-p d)
                           (fail r line column "unknown dispatch `#~A`" d)
                           (fail r line column "tagged literals such as `#~A` are reserved ~
@@ -175,6 +174,19 @@ for a closing delimiter, or (values :EOF). Skips whitespace, comments and #_ for
               ((and (char= c #\#) (eql (peek r) #\|))
                (next r)
                (incf depth)))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; ##Inf, ##-Inf, ##NaN
+
+(defun read-symbolic-value (r line column)
+  (let ((token (if (token-end-p (peek r)) "" (read-token-text r (next r)))))
+    (atom-at (cond ((string= token "Inf") skein.runtime:+f64-infinity+)
+                   ((string= token "-Inf") skein.runtime:+f64-negative-infinity+)
+                   ((string= token "NaN") skein.runtime:+f64-nan+)
+                   (t (fail r line column "unknown symbolic value `##~A`; expected ##Inf, ~
+                                           ##-Inf or ##NaN"
+                            token)))
+             (span r line column))))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Collections

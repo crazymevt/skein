@@ -9,6 +9,15 @@
                      (float-out-of-range-type c))))
   (:documentation "Signaled by DECIMAL-TO-FLOAT when a value is too large for its float type."))
 
+(sb-ext:define-load-time-global +f64-infinity+ sb-ext:double-float-positive-infinity
+  "Positive f64 infinity, read as ##Inf.")
+(sb-ext:define-load-time-global +f64-negative-infinity+ sb-ext:double-float-negative-infinity
+  "Negative f64 infinity, read as ##-Inf.")
+(sb-ext:define-load-time-global +f64-nan+
+    ;; The quiet NaN 0x7FF8000000000000, built from its bits.
+    (sb-kernel:make-double-float #x7FF80000 0)
+  "An f64 NaN, read as ##NaN.")
+
 (defun decimal-to-float (negative mantissa exponent type)
   "Return the float nearest to MANTISSA * 10^EXPONENT, negated if NEGATIVE.
 MANTISSA is a non-negative integer and TYPE is :F64 or :F32. The result is correctly

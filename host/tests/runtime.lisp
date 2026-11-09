@@ -55,6 +55,7 @@
     (is (string= "a.b/foo" (p (skein.runtime:intern-sym "foo" "a.b"))))
     (is (string= ":k" (p (skein.runtime:intern-kw "k"))))
     (is (string= ":a.b/k" (p (skein.runtime:intern-kw "k" "a.b"))))
-    (signals skein.runtime:unprintable-value
-      (p sb-ext:double-float-positive-infinity))
+    (is (string= "##Inf" (p skein.runtime:+f64-infinity+)))
+    (is (string= "##-Inf" (p skein.runtime:+f64-negative-infinity+)))
+    (is (string= "##NaN" (p skein.runtime:+f64-nan+)))
     (signals skein.runtime:unprintable-value (p (list 1 2)))))

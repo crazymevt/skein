@@ -1,0 +1,8 @@
+before: 3 after: 2
+[1 2 3] = (1 2 3)? true
+first squares: (0 1 4 9 16)
+odd squares: [1 9 25 49]
+sum of 1..100: 5050
+names: [slime bat ogre]
+tough: (slime ogre)
+grouped: {:tough [{:hp 3} {:hp 9}], :weak [{:hp 1}]}

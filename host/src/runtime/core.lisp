@@ -9,24 +9,7 @@
             (sb-int:named-lambda ,(format nil "skein.core/~A" name) ,lambda-list
               ,@body)))
 
-;;; Equality. M0.4 replaces this with full value equality (DESIGN §7).
-
-(defun number-category (x)
-  (if (integerp x) :integer :float))
-
-(defun equal-atoms-p (a b)
-  "Phase 0 equality for atoms: numbers are equal only within the same category
-(integers or floats), strings by content, everything else by identity."
-  (cond ((and (numberp a) (numberp b))
-         (and (eq (number-category a) (number-category b)) (= a b)))
-        ((and (stringp a) (stringp b)) (string= a b))
-        (t (eql a b))))
-
-(defcore "=" (x &rest more)
-  (bool (every (lambda (y) (equal-atoms-p x y)) more)))
-
-(defcore "not=" (x &rest more)
-  (bool (notevery (lambda (y) (equal-atoms-p x y)) more)))
+;;; = and not= are in core-coll.lisp.
 
 (defcore "identical?" (x y) (bool (eq x y)))
 
@@ -79,7 +62,9 @@
 (defcore "str" (&rest xs)
   (with-output-to-string (s)
     (dolist (x xs)
-      (unless (null x) (print-value x s)))))
+      (cond ((null x))
+            ((or (stringp x) (characterp x)) (print-value x s))
+            (t (print-value x s :readably t))))))
 
 (defun print-values (xs readably newline)
   (loop for (x . more) on xs

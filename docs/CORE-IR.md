@@ -22,7 +22,7 @@ All nodes include `location`. "Body" fields hold one node; a multi-form body bec
 
 | Node | Fields | Source form | Meaning |
 |---|---|---|---|
-| `const-node` | `value` | literals, `(quote x)` | a constant value |
+| `const-node` | `value` | literals, `(quote x)`, `()` | a constant value. Quoting a collection builds it at compile time (metadata is dropped). A vector, map or set literal whose elements are all constants is built at compile time too; otherwise it becomes a `call-node` to `skein.core/vector`, `%map-literal` or `%set-literal` |
 | `local-ref-node` | `local` | `x` | read a local |
 | `var-ref-node` | `var` | `x`, `ns/x` | read a var's current value; an error if it is unbound |
 | `if-node` | `test`, `then`, `else` | `(if test then else?)` | `else` defaults to a `nil` constant. Only `nil` and `false` are falsy |

@@ -1,0 +1,25 @@
+(ns collections)
+
+;; Persistent data: updates return new values and leave the old ones alone.
+(def inventory {:sword 1 :potion 3})
+(def after-battle (update inventory :potion dec))
+
+(println "before:" (:potion inventory) "after:" (:potion after-battle))
+
+;; Sequential collections compare by their elements.
+(println "[1 2 3] = (1 2 3)?" (= [1 2 3] '(1 2 3)))
+
+;; Lazy seqs: an infinite sequence, realized only as far as needed.
+(defn squares [] (map #(* % %) (range)))
+(println "first squares:" (take 5 (squares)))
+
+;; Transducers: the same pipeline without intermediate sequences.
+(def xform (comp (filter odd?) (map #(* % %)) (take 4)))
+(println "odd squares:" (into [] xform (range)))
+(println "sum of 1..100:" (transduce (map inc) + (range 100)))
+
+;; Keywords, maps and sets are functions.
+(def enemies [{:name "slime" :hp 3} {:name "bat" :hp 1} {:name "ogre" :hp 9}])
+(println "names:" (mapv :name enemies))
+(println "tough:" (map :name (filter #(> (:hp %) 2) enemies)))
+(println "grouped:" (group-by #(if (> (:hp %) 2) :tough :weak) (map #(select-keys % [:hp]) enemies)))

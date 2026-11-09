@@ -10,6 +10,7 @@
    #:+false+ #:false-p #:truthy-p #:bool
    ;; Numbers
    #:decimal-to-float #:float-out-of-range
+   #:+f64-infinity+ #:+f64-negative-infinity+ #:+f64-nan+
    ;; Errors
    #:skein-error #:skein-error-message #:skein-error-location
    #:unbound-var-error #:not-callable-error #:arity-error #:namespace-error
@@ -21,6 +22,20 @@
    #:var #:var-p #:var-namespace #:var-name #:var-value #:var-macro-p #:var-dynamic-p
    #:var-private-p #:var-doc #:var-qualified-name
    #:+unbound+ #:intern-var #:find-own-var #:resolve-var #:var-bound-p #:var-get #:def-var
+   ;; Collections (DESIGN §6.2)
+   #:+empty-list+ #:+empty-vector+ #:+empty-map+ #:+empty-set+
+   #:pvector-p #:plist-p #:empty-list-p #:array-map-p #:hash-map-p #:hash-set-p #:lazy-seq-p
+   #:list-from-cl #:rest-args #:vector-from-list #:vector-to-list #:map-from-pairs #:set-from-cl
+   #:vector-nth #:vector-conj #:vector-assoc #:pvector-pop
+   #:vector-transient #:tvector-conj #:tvector-assoc #:tvector-pop #:tvector-nth
+   #:tvector-persistent
+   #:map-get #:map-assoc #:map-dissoc #:map-count #:map-contains-p
+   #:map-transient #:tmap-assoc #:tmap-dissoc #:tmap-get #:tmap-persistent
+   #:index-error #:unsupported-operation-error #:transient-error
+   ;; Seqs, equality and hashing (DESIGN §7)
+   #:seq #:seq-first #:seq-next #:seq-rest #:seq-to-cl #:count-of
+   #:coll-get #:coll-conj #:coll-assoc
+   #:equiv #:hash-of #:compare-values
    ;; Calling
    #:invoke-other #:kw-lookup
    ;; Printing

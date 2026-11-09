@@ -197,3 +197,20 @@ Date: 2026-11-09 · Status: Accepted
   - Built-in macros (`ns`, `defn`, `defn-`, `let`, `loop`, `when`, `when-not`, `cond`, `and`, `or`) are CL functions in skein.core vars until M0.5.
 - **Alternatives:** compile a whole file at once (breaks `ns` and macro definitions that later forms use); resolve unknown symbols at run time (hides typos until the code runs).
 - **Consequences:** Calls cost an `&rest` list and a count dispatch; M0.8 revisits this. Dynamic binding and `set!` of vars are not implemented yet.
+
+## D-032: Persistent collections and seqs in Phase 0
+Date: 2026-11-09 · Status: Accepted (lazy-seq realization and metadata approved by Jessie)
+- **Context:** M0.4 implements DESIGN §6.2 and §7. Some details are not fixed by DESIGN or differ from Clojure.
+- **Decision:**
+  - Lazy seqs are realized one element at a time; there is no chunking. `(first (map f xs))` calls `f` once.
+  - Collections carry no runtime metadata (`with-meta`, `meta`); metadata stays on syntax. Quoting a form drops its metadata.
+  - `f32` and `f64` values are `=` when numerically equal, and hash alike. Integers and floats are never `=`. NaN is not `=` to itself.
+  - Map entries are two-element vectors. Calling a keyword on a value that isn't a collection returns `nil`, as `get` does.
+  - Hashes are 32-bit. Integers hash by folding their 32-bit chunks, so values like `a * (2^32 + 1)` collide; collision nodes keep them correct. The tests use these keys to exercise collision handling.
+  - The vector, HAMT and transient algorithms follow Clojure's PersistentVector and PersistentHashMap, with one code path for persistent and transient updates (edit tokens). Maps of up to 8 entries are array maps, and transient maps keep that representation while small, so small maps built with `into` keep insertion order. There is no ArrayNode.
+  - A transient records its owning thread and signals `transient-error` when used from another thread or after `persistent!`.
+  - Vector, map and set literals whose elements are constants are built at compile time.
+  - The seq library and transducers are written in CL for Phase 0 speed, using a closed set of seq types; `seq` dispatches with `typecase`. Class-based extension arrives with the object system (M0.7).
+  - The reader and printer support `##Inf`, `##-Inf` and `##NaN` (completing D-029).
+- **Alternatives:** Clojure-style 32-element chunked seqs (faster lazy pipelines, but side effects run ahead); runtime metadata as in Clojure; writing the seq library in Skein now (portable, but slow until M0.8).
+- **Consequences:** Lazy pipelines are slower than Clojure's chunked ones; transducers are the fast path (`bench/README.md`). The seq library has to be ported or rewritten for the native runtime.

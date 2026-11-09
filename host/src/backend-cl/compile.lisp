@@ -50,7 +50,7 @@ runs the body produced by BODY-THUNK so that a recur to TARGET restarts it."
          (rest (arity-rest arity))
          (locals (append params (and rest (list rest))))
          (inits (append (loop for i from 0 below (length params) collect `(nth ,i ,args))
-                        (and rest `((copy-list (nthcdr ,(length params) ,args)))))))
+                        (and rest `((skein.runtime:rest-args (nthcdr ,(length params) ,args)))))))
     (if (arity-recur-p arity)
         (emit-recur-target arity locals inits (lambda () (emit (arity-body arity))))
         (let ((syms (mapcar #'cl-symbol locals)))

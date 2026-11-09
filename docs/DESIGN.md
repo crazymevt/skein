@@ -82,6 +82,7 @@ The reader follows **Clojure's conventions** unless noted.
 | `42`, `-7`, `0xFF`, `0b1010`, `1_000_000` | integer |
 | `3.14`, `1e-9` | f64 float |
 | `3.14f`, `1.0f` | f32 float |
+| `##Inf`, `##-Inf`, `##NaN` | f64 infinities and NaN |
 | `nil`, `true`, `false` | literals |
 | `'x` | `(quote x)` |
 | `` `x `` | syntax-quote (namespace-resolving; see §11) |
@@ -98,7 +99,7 @@ Notes:
 - Commas are whitespace. Unquote is `~`, as in Clojure, not `,` as in Common Lisp.
 - Symbols are case-sensitive.
 - The reader produces **syntax objects** that carry source location (file, line, column). The compiler uses them for error messages and for future hygiene (§11).
-- There is no user-programmable readtable in v1. Tagged literals `#tag form` and `##` literals (such as `##Inf`) are reserved for later.
+- There is no user-programmable readtable in v1. Tagged literals `#tag form` are reserved for later.
 
 ### 3.1 Literal details (D-029)
 - **Integers:** decimal, `0x`/`0X` hex and `0b`/`0B` binary, with an optional `+` or `-` sign. `_` may appear only between two digits. Leading zeros are an error (`007`): there are no octal literals.
@@ -201,7 +202,9 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 
 - Small maps of up to 8 entries use an **array map** representation for speed.
 - **Transients** (`transient`, `conj!`, `assoc!`, `persistent!`) provide fast batch construction. A transient is owned by the fiber that created it; using it from another fiber is an error in safe mode.
-- Maps and sets keep no insertion order.
+- Maps and sets keep no insertion order. (Array maps happen to iterate in insertion order; programs must not rely on it.)
+- Collections carry no runtime metadata in v1; metadata is a property of syntax (§3) (D-032).
+- Map entries are two-element vectors: `(first {:a 1})` is `[:a 1]`.
 
 ### 6.3 Mutable and reference types
 
@@ -225,12 +228,12 @@ Strings are immutable UTF-8. String operations (`nth`, `count`, `subs`, `seq`) w
 ## 7. Equality, hashing and sequences
 
 - `=` is **value equality** for scalars, strings, persistent collections and value structs. `(= [1 2] '(1 2))` is `true`, as in Clojure: sequential collections compare by elements.
-- Integers and floats are **not** `=` (`(= 1 1.0)` is `false`). `==` is numeric equality across types.
+- Integers and floats are **not** `=` (`(= 1 1.0)` is `false`). `f32` and `f64` compare by value (`(= 1.0 1.0f)` is `true`). `==` is numeric equality across types.
 - **Class instances** compare by **identity** unless the generic function `equiv` has a method for that class. If `equiv` is specialized, `hash-of` must be too, and the compiler warns when only one is.
 - `identical?` is pointer identity.
 - `hash-of` is consistent with `=`.
 
-**Sequences.** `seq` returns `nil` or a sequence view of any collection, string, array or `nil` ("nil punning": `(first nil)` is `nil`). Lazy sequences are supported (`lazy-seq`, `map`, `filter`, `range`, …). **Transducers** (`map`, `filter` and friends called with no collection, plus `comp`, `transduce`, `into`, `sequence`, `eduction`) are the preferred tool in performance-sensitive code, because they allocate no intermediate sequences.
+**Sequences.** `seq` returns `nil` or a sequence view of any collection, string, array or `nil` ("nil punning": `(first nil)` is `nil`). Lazy sequences are supported (`lazy-seq`, `map`, `filter`, `range`, …). They are realized **one element at a time**, never in chunks, so `(first (map f xs))` calls `f` once (D-032). **Transducers** (`map`, `filter` and friends called with no collection, plus `comp`, `transduce`, `into`, `sequence`, `eduction`) are the preferred tool in performance-sensitive code, because they allocate no intermediate sequences.
 
 ## 8. Object system
 

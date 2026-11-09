@@ -121,6 +121,13 @@
 (define-builtin-macro "loop" (form env)
   (apply #'s-list (loc form) (s-sym "loop*" (loc form)) (macro-args form)))
 
+;;; lazy-seq
+
+(define-builtin-macro "lazy-seq" (form env)
+  (let ((l (loc form)))
+    (s-list l (core-sym "%lazy-seq" l)
+            (apply #'s-list l (s-sym "fn" l) (s-vector l '()) (macro-args form)))))
+
 ;;; Conditionals
 
 (define-builtin-macro "when" (form env)

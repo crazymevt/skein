@@ -150,6 +150,13 @@ LINE:COLUMN of t.skn."
   (is (eql #xFFFF (datum "0xFF_FF")))
   (is (eql 123456789012345678901234567890 (datum "123456789012345678901234567890"))))
 
+(test symbolic-floats
+  (is (eql skein.runtime:+f64-infinity+ (datum "##Inf")))
+  (is (eql skein.runtime:+f64-negative-infinity+ (datum "##-Inf")))
+  (is (sb-ext:float-nan-p (datum "##NaN")))
+  (reads-as "[##Inf ##-Inf ##NaN]" "[##Inf ##-Inf ##NaN]")
+  (reads-as "(f ##Inf)" "(f ##Inf)"))
+
 (test f64-floats
   (is (eql 3.14d0 (datum "3.14")))
   (is (eql 1d-9 (datum "1e-9")))
@@ -369,7 +376,8 @@ x ; trailing
 
 (test bad-dispatch-and-reserved-syntax
   (read-fails "#inst \"2020\"" "tagged literals such as `#inst` are reserved" 1 1)
-  (read-fails "##Inf" "`##` literals" 1 1)
+  (read-fails "##Inf2" "unknown symbolic value `##Inf2`" 1 1)
+  (read-fails "##" "unknown symbolic value `##`" 1 1)
   (read-fails "# x" "unknown dispatch" 1 1)
   (read-fails "#\"re\"" "unknown dispatch" 1 1))
 

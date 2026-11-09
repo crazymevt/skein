@@ -9,7 +9,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.1 Repository scaffolding | ✅ |
 | M0.2 Reader | ✅ |
 | M0.3 Core IR, expander skeleton, CL backend | ✅ |
-| M0.4 Persistent collections and seqs | ⬜ |
+| M0.4 Persistent collections and seqs | ✅ |
 | M0.5 Macros and `skein.core` | ⬜ |
 | M0.6 Conditions and restarts | ⬜ |
 | M0.7 Object system | ⬜ |
@@ -149,10 +149,11 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 
 - Phase 2: decide VS Code support for the native runtime's Swank server (a Swank-speaking extension or an LSP server); check SLY/Slynk compatibility (D-018).
 - Phase 2: decide whether FFI calls run on the fiber stack or the worker thread's native stack (D-024).
-- M0.4: add `##Inf`, `##-Inf` and `##NaN` to the reader and printer when printing of all values lands (D-029). The runtime `pr-str` should reuse `skein.runtime:print-atom`.
 - M0.3/M0.5: support `::alias/kw` keywords once namespace aliases exist; the reader needs a way to resolve aliases.
-- M0.4: replace the temporary CL-list rest arguments with persistent lists or seqs, and `=` with full value equality (D-031).
-- M0.4/M0.5: support collection literals and quoting collections in the expander; they are compile errors until persistent collections exist.
+- Phase 1: the seq library is written in CL for Phase 0 speed (D-032); port it to Skein (`lib/skein/core.skn`) with the front end, or reimplement it in the Zig runtime.
+- `atom` and `volatile` (DESIGN §6.3) have no milestone yet; atoms are listed in M0.9.
+- The HAMT has no Clojure-style ArrayNode for wide nodes; add one if map benchmarks call for it.
+- Sorted maps and sets, and persistent queues, are deferred (DESIGN §6.2).
 - Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031).
 - Arity errors name where the function was defined, not the call site; consider reporting the call site too (M0.6 or M0.11).
 - Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form (M0.6).

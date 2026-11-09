@@ -62,7 +62,9 @@ when they are given."
   (evals-to "'5" 5)
   (is (string= "s" (ev "'\"s\"")))
   (is (null (ev "'nil")))
-  (compile-fails "(quote [1 2])" "quoting vectors is not supported" :line 1 :column 8)
+  (is (skein.runtime:equiv (skein.runtime:vector-from-list '(1 2)) (ev "(quote [1 2])")))
+  (is (string= "(1 [:a] {b #{c}})" (skein.runtime:readable-string (ev "'(1 [:a] {b #{c}})"))))
+  (is (skein.runtime:plist-p (ev "'(1 2)")))
   (compile-fails "(quote)" "quote expects 1 argument, got 0" :line 1 :column 1)
   (compile-fails "(quote a b)" "quote expects 1 argument, got 2"))
 
@@ -78,10 +80,14 @@ when they are given."
   (is (eq t (ev "true")))
   (is (skein-false-p (ev "false")))
   (is (null (ev "nil")))
-  (compile-fails "[1 2]" "vector literals are not supported" :line 1 :column 1)
-  (compile-fails "{:a 1}" "map literals are not supported")
-  (compile-fails "#{1}" "set literals are not supported")
-  (compile-fails "()" "the empty list () is not supported"))
+  (is (string= "[1 2 3]" (skein.runtime:readable-string (ev "[1 2 (+ 1 2)]"))))
+  (is (string= "{:a 2}" (skein.runtime:readable-string (ev "{:a (inc 1)}"))))
+  (is (string= "#{1}" (skein.runtime:readable-string (ev "#{1}"))))
+  (is (eq skein.runtime:+empty-list+ (ev "()")))
+  (let ((v (ev "(def k (fn [] [1 2])) (identical? (k) (k))")))
+    (is (eq t v) "a constant vector literal is built once, at compile time"))
+  (fails "(let* [a 1 b 1] {a 1 b 2})" "duplicate key 1 in a map literal")
+  (fails "(let* [a 1] #{a 1})" "duplicate element 1 in a set literal"))
 
 ;;; if
 
@@ -134,7 +140,9 @@ when they are given."
   (is (null (ev "((fn []))")))
   (evals-to "((fn ([x] x) ([x y] (* x y))) 3 4)" 12)
   (evals-to "((fn ([x] x) ([x y] (* x y))) 3)" 3)
-  (is (equal '(2 3) (ev "((fn [x & more] more) 1 2 3)")))
+  (is (skein.runtime:equiv (skein.runtime:list-from-cl '(2 3))
+                           (ev "((fn [x & more] more) 1 2 3)")))
+  (is (skein.runtime:plist-p (ev "((fn [& more] more) 1)")))
   (is (null (ev "((fn [x & more] more) 1)")))
   (evals-to "((fn ([] 0) ([x & more] x)) 5 6)" 5)
   (evals-to "((fn fact [n] (if (< n 2) 1 (* n (fact (dec n))))) 10)" 3628800)
@@ -184,7 +192,8 @@ when they are given."
   (evals-to "(loop* [i 1000000] (if (zero? i) :done (recur (dec i))))" (kw "done"))
   (evals-to "(loop* [x 1 y (+ x 1)] (+ x y))" 3)
   (evals-to "((fn [n acc] (if (zero? n) acc (recur (dec n) (* acc n)))) 5 1)" 120)
-  (is (equal '(1 2) (ev "((fn [n & xs] (if (zero? n) xs (recur (dec n) xs))) 3 1 2)")))
+  (is (skein.runtime:equiv (skein.runtime:list-from-cl '(1 2))
+                           (ev "((fn [n & xs] (if (zero? n) xs (recur (dec n) xs))) 3 1 2)")))
   ;; Each iteration gets fresh bindings: a closure keeps the value it saw.
   (evals-to "(loop* [i 0 f nil]
                (if (= i 3) (f) (recur (inc i) (if (= i 1) (fn [] i) f))))"
@@ -266,8 +275,8 @@ when they are given."
   (evals-to "((if true inc dec) 1)" 2)
   (is (null (ev "(:k nil)")))
   (evals-to "(:k nil 5)" 5)
-  (fails "(:k 1)" "cannot look up :k in 1")
-  (fails "(:k)" "keyword :k called with 0 arguments" :type 'skein.runtime:arity-error)
+  (is (null (ev "(:k 1)")) "looking a keyword up in a non-collection gives nil, as get does")
+  (fails "(:k)" ":k called with 0 arguments; expected 1 or 2" :type 'skein.runtime:arity-error)
   (fails "(5 1)" "cannot call 5" :type 'skein.runtime:not-callable-error :line 1 :column 1)
   (fails "(\"s\")" "cannot call \"s\"" :type 'skein.runtime:not-callable-error)
   (fails "(nil)" "cannot call nil" :type 'skein.runtime:not-callable-error)

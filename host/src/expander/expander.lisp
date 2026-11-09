@@ -11,10 +11,37 @@ in tail position of the innermost loop* or fn arity, where recur is allowed."
   (ecase (syntax-kind form)
     (:atom (analyze-atom form env))
     (:list (analyze-list form env tail))
-    ((:vector :map :set)
-     (compile-error form "~(~A~) literals are not supported until persistent collections ~
-                          arrive (M0.4)"
-                    (syntax-kind form)))))
+    ((:vector :map :set) (analyze-collection form env))))
+
+(defun core-var (name)
+  (find-own-var +core+ name))
+
+(defun analyze-collection (form env)
+  "Analyze a vector, map or set literal. If every element is a constant the collection is
+built now; otherwise it becomes a call to skein.core/vector, %map-literal or %set-literal."
+  (let ((items (mapcar (lambda (x) (analyze x env)) (items form)))
+        (var (core-var (ecase (syntax-kind form)
+                         (:vector "vector") (:map "%map-literal") (:set "%set-literal")))))
+    (if (every #'const-node-p items)
+        (make-const-node
+         :location (loc form)
+         :value (handler-case (apply (var-value var) (mapcar #'const-node-value items))
+                  (skein.runtime:skein-error (e)
+                    (compile-error form "~A" (skein.runtime:skein-error-message e)))))
+        (make-call-node :location (loc form)
+                        :fn (make-var-ref-node :location (loc form) :var var)
+                        :args items))))
+
+(defun syntax-value (syntax)
+  "Return the runtime value that SYNTAX denotes when quoted. Metadata is dropped."
+  (let ((items (and (not (eq (syntax-kind syntax) :atom))
+                    (mapcar #'syntax-value (items syntax)))))
+    (ecase (syntax-kind syntax)
+      (:atom (syntax-datum syntax))
+      (:list (skein.runtime:list-from-cl items))
+      (:vector (skein.runtime:vector-from-list items))
+      (:map (skein.runtime:map-from-pairs items))
+      (:set (skein.runtime:set-from-cl items)))))
 
 (defun analyze-toplevel (form &optional (namespace *current-namespace*))
   "Return the Core IR node for the top-level syntax object FORM in NAMESPACE."
@@ -106,8 +133,8 @@ expansion happened."
 (defun analyze-list (form env tail)
   (let ((forms (items form)))
     (when (null forms)
-      (compile-error form "the empty list () is not supported until persistent ~
-                           collections arrive (M0.4)"))
+      (return-from analyze-list
+        (make-const-node :location (loc form) :value skein.runtime:+empty-list+)))
     (let* ((head (first forms))
            (name (plain-name head))
            (special (and name (gethash name *special-forms*))))
@@ -164,12 +191,7 @@ accepted and ignored until M0.8."
 
 (define-special-form "quote" (form env tail)
   (check-arg-count form 1)
-  (let ((x (second (items form))))
-    (unless (eq (syntax-kind x) :atom)
-      (compile-error x "quoting ~(~A~)s is not supported until persistent collections ~
-                        arrive (M0.4)"
-                     (syntax-kind x)))
-    (make-const-node :location (loc form) :value (syntax-datum x))))
+  (make-const-node :location (loc form) :value (syntax-value (second (items form)))))
 
 (define-special-form "if" (form env tail)
   (check-arg-count form 2 3)

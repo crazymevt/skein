@@ -13,22 +13,25 @@
   (if x t +false+))
 
 (defun kw-lookup (kw target &optional default)
-  "Look KW up in TARGET, as calling a keyword does. Phase 0 has no maps until M0.4, so
-only nil is supported: the result is DEFAULT."
-  (if (null target)
-      default
-      (skein-error 'skein-error nil "cannot look up ~A in ~A" (atom-to-string kw)
-                   (readable-string target))))
+  "Look KW up in TARGET, as calling a keyword does: (get TARGET KW DEFAULT)."
+  (coll-get target kw default))
 
 (defun invoke-other (f location &rest args)
-  "Call F, which is not a CL function, with ARGS. Keywords look themselves up in their
-first argument; anything else signals NOT-CALLABLE-ERROR reporting LOCATION."
-  (cond ((kw-p f)
+  "Call F, which is not a CL function, with ARGS (DESIGN §6.4). Keywords look themselves
+up in their argument; maps and sets look up their argument; vectors return the element
+at an index. Anything else signals NOT-CALLABLE-ERROR reporting LOCATION."
+  (cond ((typep f '(or kw array-map hash-map hash-set))
          (unless (<= 1 (length args) 2)
-           (skein-error 'arity-error location "keyword ~A called with ~D arguments; ~
-                                               expected 1 or 2"
-                        (atom-to-string f) (length args)))
-         (apply #'kw-lookup f args))
+           (skein-error 'arity-error location "~A called with ~D arguments; expected 1 or 2"
+                        (readable-string f) (length args)))
+         (if (kw-p f)
+             (apply #'kw-lookup f args)
+             (coll-get f (first args) (second args))))
+        ((pvector-p f)
+         (unless (= (length args) 1)
+           (skein-error 'arity-error location "a vector called with ~D arguments; expected 1"
+                        (length args)))
+         (vector-nth f (first args)))
         (t (skein-error 'not-callable-error location "cannot call ~A" (readable-string f)))))
 
 (defun arity-error (name count location)

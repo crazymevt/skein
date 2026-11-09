@@ -15,8 +15,9 @@
   "Named character literals, shared with the reader.")
 
 (defun float-to-string (x)
-  (when (or (sb-ext:float-infinity-p x) (sb-ext:float-nan-p x))
-    (error 'unprintable-value :value x))
+  (cond ((sb-ext:float-nan-p x) (return-from float-to-string "##NaN"))
+        ((sb-ext:float-infinity-p x)
+         (return-from float-to-string (if (plusp x) "##Inf" "##-Inf"))))
   ;; With *READ-DEFAULT-FLOAT-FORMAT* matching the float's type, SBCL prints the
   ;; shortest digits that read back to the same float, with no exponent marker
   ;; other than "e".
