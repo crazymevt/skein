@@ -572,6 +572,10 @@ that stops it."
                                 :in stream :out stream)))
     (setf (console-on-close console)
           (lambda ()
+            ;; Shut down first: on Linux, closing a socket that another thread is
+            ;; reading doesn't end the connection until that read returns.
+            (ignore-errors (finish-output stream))
+            (ignore-errors (sb-bsd-sockets:socket-shutdown client :direction :io))
             (ignore-errors (close stream))
             (ignore-errors (sb-bsd-sockets:socket-close client))))
     (sb-thread:make-thread

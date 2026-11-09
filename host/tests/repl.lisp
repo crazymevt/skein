@@ -202,9 +202,20 @@ repl.test.a/x
                     (progn
                       (format stream "(+ 20 22)~%(/ 1 0)~%0~%(str \"a\" \"b\")~%:quit~%")
                       (finish-output stream)
-                      (let ((got (with-output-to-string (out)
-                                   (loop for line = (read-line stream nil nil)
-                                         while line do (write-line line out)))))
+                      ;; Read until the server closes the connection, but give up after
+                      ;; 30 s rather than hang.
+                      (let* ((buffer (make-string-output-stream))
+                             (reader (sb-thread:make-thread
+                                      (lambda ()
+                                        (loop for line = (ignore-errors
+                                                          (read-line stream nil nil))
+                                              while line do (write-line line buffer)))
+                                      :name "test socket reader"))
+                             (done (sb-thread:join-thread reader :timeout 30
+                                                                 :default :timeout))
+                             (got (get-output-stream-string buffer)))
+                        (is (not (eq done :timeout))
+                            "the server did not close the connection after :quit")
                         (is (repl-has got "Skein" "user=> 42" "error: " "0: abort"
                                       "; aborted" "user=> \"ab\"")
                             "server transcript:~%~A" got)))
@@ -289,6 +300,9 @@ repl.test.a/x
                (setf pos (wait "frame 4 400" pos))
                (wait "finished" pos)
                (say ":quit")
-               (is (eql 0 (uiop:wait-process process)))))
+               (loop repeat 600 while (uiop:process-alive-p process) do (sleep 0.05))
+               (is (not (uiop:process-alive-p process)) "skein dev did not exit after :quit")
+               (unless (uiop:process-alive-p process)
+                 (is (eql 0 (uiop:wait-process process))))))
         (when (uiop:process-alive-p process)
           (uiop:terminate-process process :urgent t))))))
