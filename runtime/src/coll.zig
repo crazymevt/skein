@@ -129,9 +129,9 @@ fn makeEdit() Value {
 }
 
 fn checkEdit(edit: Value, comptime what: []const u8) void {
-    if (edit == Value.nil) rt.raise(.@"error", what ++ " used after persistent!", .{});
+    if (edit == Value.nil) rt.raise(.transient_error, what ++ " used after persistent!", .{});
     if (ux(get(edit, 0)) != gc.currentThreadId())
-        rt.raise(.@"error", what ++ " used by a thread that does not own it", .{});
+        rt.raise(.transient_error, what ++ " used by a thread that does not own it", .{});
 }
 
 // ---------------------------------------------------------------------------------------
@@ -897,7 +897,7 @@ pub fn atomReset(a: Value, v: Value) Value {
     const h = a.toObject();
     const slot: *Value = &h.valueSlots()[0];
     @atomicStore(Value, slot, v, .release);
-    gc.store(h, slot, v); // records the barrier (the value is the same)
+    gc.barrier(h, v);
     return v;
 }
 
@@ -906,6 +906,7 @@ pub fn atomCompareAndSet(a: Value, old: Value, new: Value) bool {
     const h = a.toObject();
     const slot: *Value = &h.valueSlots()[0];
     if (@cmpxchgStrong(Value, slot, old, new, .acq_rel, .acquire) != null) return false;
-    gc.store(h, slot, new);
+    // Only the barrier: storing again could undo another thread's newer value.
+    gc.barrier(h, new);
     return true;
 }

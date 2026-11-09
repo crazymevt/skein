@@ -472,6 +472,11 @@ pub fn removeRoots(slots: []Value) void {
 /// pointers for the next minor collection.
 pub fn store(obj: *Header, slot: *Value, v: Value) void {
     slot.* = v;
+    barrier(obj, v);
+}
+
+/// The write barrier alone, for a slot that was already set (atomically) to `v`.
+pub fn barrier(obj: *Header, v: Value) void {
     if (obj.gc.old and !obj.gc.remembered and v.isObject() and isYoung(v.toObject())) {
         barrier_lock.lock();
         defer barrier_lock.unlock();

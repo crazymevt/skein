@@ -248,3 +248,29 @@ test "atoms compare and set" {
     gc.collect(.minor);
     try expectPrinted("#<atom [9]>", a);
 }
+
+test "atoms lose no updates when threads race" {
+    // Regression (M1.8 step 6): a successful compare-and-set stored the slot again,
+    // which could undo another thread's newer value.
+    coll.ensureConstants();
+    const a = coll.makeAtom(int(0));
+    const Worker = struct {
+        fn run(at: Value) void {
+            for (0..10_000) |_| {
+                while (true) {
+                    const old = coll.atomGet(at);
+                    if (coll.atomCompareAndSet(at, old, int(old.toFixnum() + 1))) break;
+                }
+            }
+        }
+        fn join(arg: ?*anyopaque) void {
+            const t: *std.Thread = @ptrCast(@alignCast(arg));
+            t.join();
+        }
+    };
+    // More threads than cores, so that some are preempted between the two stores.
+    var threads: [24]std.Thread = undefined;
+    for (&threads) |*t| t.* = try std.Thread.spawn(.{}, Worker.run, .{a});
+    for (&threads) |*t| gc.blocking(Worker.join, t);
+    try testing.expectEqual(@as(i64, 240_000), coll.atomGet(a).toFixnum());
+}
