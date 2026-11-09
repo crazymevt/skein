@@ -117,14 +117,18 @@ it. Returns :TIMEOUT instead if DEADLINE (internal time) passes first."
 (defun task-finished-p (task) (member (task-state task) '(:done :failed :cancelled)))
 
 (defun finish-task (task state value)
-  (sb-thread:with-mutex ((task-lock task))
-    (setf (task-state task) state)
-    (case state
-      (:done (setf (task-result task) value))
-      (:failed (setf (task-condition task) value)))
-    (sb-thread:condition-broadcast (task-done task)))
-  (when (and (eq state :failed) (task-nursery task))
-    (nursery-child-failed (task-nursery task) value)))
+  ;; A failure is recorded in the nursery before the task is marked finished: a nursery
+  ;; joining its tasks must not see them all finished before it sees the failure.
+  (let ((first-failure (and (eq state :failed) (task-nursery task)
+                            (record-nursery-failure (task-nursery task) value))))
+    (sb-thread:with-mutex ((task-lock task))
+      (setf (task-state task) state)
+      (case state
+        (:done (setf (task-result task) value))
+        (:failed (setf (task-condition task) value)))
+      (sb-thread:condition-broadcast (task-done task)))
+    ;; The first failure cancels the other tasks.
+    (when first-failure (cancel-nursery (task-nursery task)))))
 
 (defun run-task (task)
   "Run TASK in the current thread, recording its result, error or cancellation."
@@ -204,10 +208,10 @@ TASK-CANCELLED-ERROR. Returns :TIMEOUT if DEADLINE passes first."
   (dolist (child (sb-thread:with-mutex ((nursery-lock n)) (copy-list (nursery-children n))))
     (cancel-task child)))
 
-(defun nursery-child-failed (n condition)
-  (let ((first (sb-thread:with-mutex ((nursery-lock n))
-                 (unless (nursery-failure n) (setf (nursery-failure n) condition) t))))
-    (when first (cancel-nursery n))))
+(defun record-nursery-failure (n condition)
+  "Make CONDITION N's failure unless it has one; return true if it is the first."
+  (sb-thread:with-mutex ((nursery-lock n))
+    (unless (nursery-failure n) (setf (nursery-failure n) condition) t)))
 
 (defun spawn-in (n fn)
   "Start FN as a task owned by the nursery N."

@@ -166,6 +166,12 @@
                      (try (with-timeout 0.005
                             (with-nursery [n] (spawn n (sleep 5)) (spawn n (<! (chan)))))
                        (catch timeout e :timed-out))))))
+;; Regression: a failing task's nursery must see the failure as soon as the task is done.
+(prn (stress 50 (fn []
+                  (= "deep"
+                     (try (with-nursery [outer]
+                            (spawn outer (with-nursery [inner] (spawn inner (error "deep")))))
+                       (catch error e (condition-message e)))))))
 ;; Many tasks building garbage at once: maps of vectors, checked afterwards.
 (prn (count (with-nursery [n]
               (let [ts (mapv (fn [k]

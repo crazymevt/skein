@@ -709,6 +709,7 @@ Date: 2026-11-09 · Status: Accepted
   - `examples/jobs.skn` runs natively, so all eight examples with an `.expected` file pass natively.
   - A fixture of nurseries, futures, cancellation, timeouts, channels, `alts!`, data parallelism, the main thread's queue, job graphs and stress runs prints the same as Phase 0, also with a one-segment nursery that collects thousands of times across threads.
   - Two native bugs that only threads show were fixed: an atom's compare-and-set stored its slot a second time, which could undo another thread's update; and using a transient from the wrong thread, or after `persistent!`, signaled `error` instead of `transient-error`.
+  - A race found later by CI (macOS): a failing task was marked finished before its failure was recorded in its nursery, so a nursery joining at that moment could return normally. The failure is now recorded in the same step, natively and in Phase 0, which had the same order. A stress loop of nested failing nurseries catches the old code on every run.
 
 ## D-058: The native compiler's command, phase-1 rule and run-process
 Date: 2026-11-09 · Status: Accepted

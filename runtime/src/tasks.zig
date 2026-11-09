@@ -319,17 +319,28 @@ fn isFinished(t: Value) bool {
 }
 
 fn finishTask(t: Value, state: State, v: Value) void {
+    // A failure is recorded in the nursery in the same step that marks the task
+    // finished: a nursery joining its tasks must not see them all finished before it
+    // sees the failure (it would return normally).
+    const n = get(t, t_nursery);
     lock();
     set(t, t_state, Value.fromFixnum(@intFromEnum(state)));
+    var first_failure = false;
     switch (state) {
         .done => set(t, t_result, v),
-        .failed => set(t, t_condition, v),
+        .failed => {
+            set(t, t_condition, v);
+            if (n != Value.nil and get(n, n_failure) == Value.nil) {
+                set(n, n_failure, v);
+                first_failure = true;
+            }
+        },
         else => {},
     }
     wakeAll();
     unlock();
-    const n = get(t, t_nursery);
-    if (state == .failed and n != Value.nil) nurseryChildFailed(n, v);
+    // The first failure cancels the other tasks.
+    if (first_failure) cancelNursery(n);
 }
 
 /// The body of every task: a cancellation point, then the task's function.
@@ -525,14 +536,6 @@ fn cancelNursery(n: Value) void {
     const children = get(n, n_children);
     unlock();
     for (0..coll.vectorCount(children)) |i| _ = cancelTask(coll.vectorNth(children, i).?);
-}
-
-fn nurseryChildFailed(n: Value, c: Value) void {
-    lock();
-    const first = get(n, n_failure) == Value.nil;
-    if (first) set(n, n_failure, c);
-    unlock();
-    if (first) cancelNursery(n);
 }
 
 /// spawn: start `f` as a task owned by the nursery `n`.
