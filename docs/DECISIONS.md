@@ -547,3 +547,15 @@ Date: 2026-11-09 · Status: Accepted
 - **Consequences:**
   - M1.8's exit is the old M1.9's: every example with an `.expected` file runs natively on all three platforms, and n-body is within 1.5× of C.
   - M1.9 adds the interpreter, `skein.io` and the C backend in Skein.
+
+## D-051: Native skein.core in Zig and Skein
+Date: 2026-11-09 · Status: Accepted
+- **Context:** About 190 skein.core functions that Phase 0 implements in CL have no native version yet: seqs and laziness, transducers, the collection library, objects, structs and arrays, and concurrency. `core.skn` itself is almost all macros, which expand on the host.
+- **Decision** (Jessie's choice):
+  - **The Zig runtime keeps the foundations:** data representations, the seq protocol over every collection, lazy-seq cells, objects and generic-function dispatch, typed arrays and threads.
+  - **The library on top is written in Skein:** the namespace `skein.core.native` (`lib/skein/core/native.skn`).
+    - The C backend compiles it into every native program. A call to a skein.core function that the namespace defines goes to its definition there; any other call goes to the runtime's function.
+    - On the host it loads as an ordinary namespace, so its functions are tested against Phase 0's CL versions.
+  - **M1.8 has six steps** (ROADMAP), starting with programs made of several namespaces.
+- **Alternatives:** porting every remaining function to Zig, as M1.4 did for collections. That gives faster library code but more Zig to keep in step with Phase 0, and it doesn't exercise the compiler.
+- **Consequences:** Native programs carry the compiled library (until a later milestone links it once as a library). The library is written in the subset of Skein the C backend compiles at each step.

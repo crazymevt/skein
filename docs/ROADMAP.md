@@ -191,6 +191,14 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M1.8 Native `skein.core`
 - `core.skn`, seqs, transducers, the object system (classes, generic functions with dispatch caches), value structs and typed arrays, declarations, and concurrency on OS threads, compiled natively.
+- The runtime (Zig) keeps the foundations: the seq protocol over every collection, lazy-seq cells, objects and generic-function dispatch, typed arrays and threads. The library built on them (`map`, `filter`, `partition`, transducers, `group-by`, ...) is written in Skein as `skein.core.native`, compiled into every native program, and tested against Phase 0 (D-051).
+- Steps, in order:
+  1. Programs of several namespaces: a native program includes every namespace it requires, and `skein.core.native`.
+  2. Seqs: `seq`/`first`/`rest` over every collection, lazy seqs, the seq library, `reduced` and transducers.
+  3. The rest of skein.core's functions, and multiple values.
+  4. The object system: classes, instances, generic functions with dispatch caches.
+  5. Value structs, typed arrays and `defsoa`; declarations compiled to unboxed code (n-body).
+  6. Concurrency on OS threads: nurseries, tasks, futures, channels, `pmap`, `skein.jobs`.
 
 **Exit:** every example with an `.expected` file passes natively on all three platforms; the n-body benchmark is within 1.5× of C.
 
