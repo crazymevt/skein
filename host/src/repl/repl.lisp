@@ -381,7 +381,7 @@ attach, and evaluate what it sends in this thread, where the restarts are."
              (let ((abort (outermost-abort restarts)))
                (if abort
                    (invoke-restart abort)
-                   (sb-ext:exit :code 1 :abort t)))))
+                   (end-thread)))))
       (unless (live-consoles) (give-up))
       (offer-session session)
       (unwind-protect
@@ -439,7 +439,13 @@ session that a console can attach to."
   (let ((abort (outermost-abort (debugger-restarts condition))))
     (if abort
         (invoke-restart abort)
-        (sb-ext:exit :code 1 :abort t))))
+        (end-thread))))
+
+(defun end-thread ()
+  "With nothing to resume, end the failing thread; only the main thread ends the process."
+  (if (eq sb-thread:*current-thread* (sb-thread:main-thread))
+      (sb-ext:exit :code 1 :abort t)
+      (sb-thread:abort-thread)))
 
 (defun install-debugger ()
   "Make unhandled errors in every thread open the Skein debugger."
@@ -553,22 +559,28 @@ that stops it."
     (loop
       (let ((client (handler-case (sb-bsd-sockets:socket-accept (server-socket server))
                       (error () (return)))))
-        (incf count)
-        (let* ((stream (sb-bsd-sockets:socket-make-stream
-                        client :input t :output t :element-type 'character
-                               :external-format :utf-8 :buffering :full))
-               (console (make-console :name (format nil "client ~D" count)
-                                      :in stream :out stream)))
-          (setf (console-on-close console)
-                (lambda () (ignore-errors (close stream)) (ignore-errors
-                                                           (sb-bsd-sockets:socket-close client))))
-          (sb-thread:make-thread
-           (lambda ()
-             (skein.runtime:ensure-float-modes)
-             (let ((*source-paths* source-paths))
-               (format stream "; Skein ~A REPL~%" (skein-version))
-               (console-loop console)))
-           :name (format nil "REPL ~A" (console-name console))))))))
+        ;; socket-accept can return NIL without a connection (seen on Windows).
+        (if (null client)
+            (sleep 0.01)
+            (serve-client client (incf count) source-paths))))))
+
+(defun serve-client (client number source-paths)
+  (let* ((stream (sb-bsd-sockets:socket-make-stream
+                  client :input t :output t :element-type 'character
+                         :external-format :utf-8 :buffering :full))
+         (console (make-console :name (format nil "client ~D" number)
+                                :in stream :out stream)))
+    (setf (console-on-close console)
+          (lambda ()
+            (ignore-errors (close stream))
+            (ignore-errors (sb-bsd-sockets:socket-close client))))
+    (sb-thread:make-thread
+     (lambda ()
+       (skein.runtime:ensure-float-modes)
+       (let ((*source-paths* source-paths))
+         (format stream "; Skein ~A REPL~%" (skein-version))
+         (console-loop console)))
+     :name (format nil "REPL ~A" (console-name console)))))
 
 (defun stop-server (server)
   "Stop accepting REPL connections."
