@@ -710,3 +710,20 @@ Date: 2026-11-09 · Status: Accepted
   - A fixture of nurseries, futures, cancellation, timeouts, channels, `alts!`, data parallelism, the main thread's queue, job graphs and stress runs prints the same as Phase 0, also with a one-segment nursery that collects thousands of times across threads.
   - Two native bugs that only threads show were fixed: an atom's compare-and-set stored its slot a second time, which could undo another thread's update; and using a transient from the wrong thread, or after `persistent!`, signaled `error` instead of `transient-error`.
 
+## D-058: The native compiler's command, phase-1 rule and run-process
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.9 builds a native compiler before M1.11 reworks `skein build`. It needs a command, a rule for which top-level forms run at compile time, and a `run-process` to call zig. Today `skein build` runs `ns`, `defmacro`, defs of functions and `%define-` forms of the program, but loads each required namespace by running all its top-level code.
+- **Decision** (Jessie chose each):
+  - **`skeinc`:** a separate executable, `build/skeinc`, built by `make compiler` and run as `skeinc build file.skn [-o out]`. `./skein` keeps running on SBCL; M1.11 can fold the two together.
+  - **One phase-1 rule for every namespace:** the native compiler runs at compile time only `ns`, `defmacro`, `def`s whose value is a function, and struct, class and condition-type definitions. That holds for the program's namespace and the ones it requires; top-level side effects never happen at build time.
+  - **`(run-process [program args...] opts?)`** runs a program without a shell and returns `{:exit :out :err}`. The only option for now is `:dir`.
+  - **M1.9 has six steps** (ROADMAP): `skein.io`; the C backend in Skein; the compile-time environment natively; the phase-1 interpreter; the driver; bootstrapping.
+- **Alternatives:**
+  - `./skein build --native`, with one command that falls back to SBCL.
+  - Racket's rule: `:require-for-syntax` namespaces run all their forms at phase 1, and the current file only its macros and function definitions.
+  - Running every top-level form at build time too, as Phase 0 effectively does.
+  - A variadic `(run-process program arg...)` without options.
+- **Consequences:**
+  - A macro that reads a `def` of computed data, rather than calling a function, works in Phase 0 but not natively. The phase-1 interpreter reports it as an unbound var.
+  - The C backend moves to Skein and is tested against the Lisp one, as the reader and expander were.
+

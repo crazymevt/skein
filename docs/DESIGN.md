@@ -134,6 +134,7 @@ Following Racket, code runs either at **compile time (phase 1)**, which is macro
 - The same namespace may be instantiated separately in each phase. State created at compile time is **not** visible at run time.
 - **Why:** when cross-compiling, phase 1 runs on the build machine and phase 0 code is compiled for the target. Mixing them, as Common Lisp's `eval-when` does, causes subtle cross-compilation bugs.
 - **Phase 0 implementation note:** the SBCL host runs both phases in one image. It must still *record* phase information and *warn* when phase-0 code is called during expansion without `:require-for-syntax`. Phase 1 of the roadmap (the native compiler) enforces the rule.
+- **Native compiler (D-058):** at phase 1, the native compiler runs only a namespace's `ns` form, its `defmacro`s, its `def`s whose value is a function, and its struct, class and condition-type definitions, in every namespace it compiles, the program's and the ones it requires. Other top-level forms, such as a `println` or a `def` of computed data, run only at phase 0, in the built program. Phase-1 code runs in an interpreter (D-050).
 
 ## 5. Special forms and core macros
 
@@ -924,7 +925,10 @@ Dependencies are git-based at first. A package registry is deferred.
 
 Phase 0 status (D-040):
 - **Done:** `skein.core`, `skein.ffi`, `skein.jobs` (job graphs; the rest of `skein.conc` is in `skein.core`) and `skein.math`. `skein.time` has `now` and `now-ns`, with `sleep` in `skein.core`. `skein.game` has `run-loop` and the frame restarts, but no input mapping yet.
-- **Not started:** `skein.string`, `skein.gc`, `skein.io`, `skein.log` and `skein.test`. The REPL is in the host rather than `skein.repl`.
+- **Not started:** `skein.string`, `skein.gc`, `skein.log` and `skein.test`. The REPL is in the host rather than `skein.repl`.
+- **`skein.io`** starts in M1.9 (D-050, D-058) with what the native compiler needs:
+  - `(read-file path)` returns the file's contents as a string (UTF-8); `(write-file path string)` writes one, replacing the file; `(file-exists? path)`.
+  - `(run-process [program arg ...])` and `(run-process [program arg ...] {:dir path})` run a program directly, without a shell, wait for it, and return `{:exit code :out stdout :err stderr}`.
 - **`skein.math`:**
   - The operations on its types are generic functions: `v+ v- v* vdiv negate dot length length-sq distance normalize lerp` for vectors, and `m* transform transpose determinant inverse` for matrices and quaternions. Functions such as `cross`, `rotate`, `quat-rotate`, `slerp` and `mat3-translation` cover the rest.
   - Matrices are column-major: field `mCR` is column C, row R.

@@ -206,6 +206,15 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - The Skein front end plus the C backend compile the compiler itself to a native executable (bootstrapped by Phase 0). It comes after native `skein.core` because the compiler uses most of it (D-050).
 - skein.core's macros are compiled into the compiler; a program's own macros run in a Core IR interpreter written in Skein, on the build machine (DESIGN §4.4, D-050).
 - The compiler reads and writes files and runs zig through a new `skein.io` namespace (D-050).
+- The native compiler is a separate executable, `build/skeinc`, made by `make compiler` and run as `skeinc build file.skn [-o out]`; `./skein` is unchanged (D-058).
+- At compile time (phase 1) it runs, in every namespace, only `ns`, `defmacro`, defs whose value is a function, and struct, class and condition definitions (D-058).
+- Steps, in order:
+  1. `skein.io`: `read-file`, `write-file`, `file-exists?` and `run-process`, in Phase 0 and natively.
+  2. The C backend in Skein, running on the host on the Skein expander's IR: the same C as the Lisp backend for every example and native fixture.
+  3. The compile-time environment natively: namespaces and vars at run time, symbol copies, identity tables, calling macros, and skein.core's macros compiled into the compiler.
+  4. A Core IR interpreter in Skein for phase-1 code: a program's macros and the functions they call.
+  5. The driver in Skein (`skeinc build`): finding namespaces, running phase 1, writing C and running zig. On the host it gives the same C as `skein build`.
+  6. Bootstrapping: Phase 0 builds `skeinc`, which builds itself twice; the two builds' C is identical, and `skeinc` builds every example to the same output. CI runs it on all three platforms.
 
 **Exit:** the native compiler rebuilds itself, and the second build's output is identical to the first.
 
