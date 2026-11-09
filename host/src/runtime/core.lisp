@@ -57,6 +57,7 @@
 (defcore "true?" (x) (bool (eq x t)))
 (defcore "false?" (x) (bool (false-p x)))
 (defcore "identity" (x) x)
+(defcore "boolean" (x) (bool (truthy-p x)))
 
 ;;; Macro support
 

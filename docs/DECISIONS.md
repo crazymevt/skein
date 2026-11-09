@@ -240,3 +240,17 @@ Date: 2026-11-09 · Status: Accepted
   - `skein run` detects unhandled errors through SBCL's debugger hook, not a catch-all handler, so signals and handlers inside the program behave exactly as they would at a REPL; it prints the message and the restarts active at that point. The launchers call the CLI after loading, so SBCL adds no load context to messages.
 - **Alternatives:** One CL condition class holding a Skein map (simpler redefinition, but handlers would need custom matching and host errors would not fit); CL-style format strings in `error`.
 - **Consequences:** M0.7 should fold condition types into the object system. A Skein REPL (M0.11) can list and invoke the same restarts.
+
+## D-035: The object system on CLOS
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M0.7 implements DESIGN §8 on CLOS via closer-mop. Some details are open, and `:cell :atom` slots need atoms, which were planned for M0.9.
+- **Decision:**
+  - Skein classes use the metaclass `skein-class`, whose class precedence list is computed with C3; inconsistent hierarchies are errors. Superclasses must be Skein classes.
+  - Slots are CLOS slots holding immutable values, atoms (`:cell :atom`) or plain values (`:cell :unsynchronized`). `make` fills every slot itself (initargs, then `:init`), records the creating thread as the owner, and calls the generic function `initialize`. Only the owner may `set!` an `:unsynchronized` slot; other slot kinds cannot be set.
+  - Generic functions are CLOS generic functions. A method is a Skein function that receives `call-next-method` and `next-method?` before its own parameters; a small CL method created with `ensure-method` passes them in. Standard method combination and eql specializers come from CLOS.
+  - Specializer names are resolved as class names (built-in names first, then vars holding classes or condition types), because names like `vector` and `list` are also functions. Abstract base structs were added so methods can dispatch on any map, list or seq.
+  - `equiv` and `hash-of` are generic functions. Runtime equality and hashing call them only for instances whose class has a more specific method (cached per class); otherwise instances compare by identity. A warning at the end of each loaded file flags classes that specialize only one of the two.
+  - Redefinition relies on CLOS's instance updating. When a slot only changes between immutable and `:atom`, the class forces an update; values are then wrapped or unwrapped, and the Skein generic `update-instance-for-redefined-class` is called.
+  - Atoms (`atom`, `swap!`, `reset!`, `compare-and-set!`, `@`) are added now, implemented with compare-and-swap.
+- **Alternatives:** A Skein-only object system with its own dispatch (portable to the native runtime, but much more work now, and the roadmap asks for CLOS); resolving specializers as vars (would make `vector` mean the function).
+- **Consequences:** The native runtime will need its own dispatch and redefinition machinery that matches this behavior. If an instance is not touched between two class redefinitions, it is updated only once, against the most recent change of cell kinds.

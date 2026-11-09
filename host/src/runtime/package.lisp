@@ -43,6 +43,10 @@
    #:find-condition-type #:condition-type-of #:condition-report #:throw-condition
    #:restart-cl-name #:skein-warning #:skein-condition #:skein-restart-p #:skein-restart-name
    #:skein-restart-report #:skein-compute-restarts
+   ;; Objects (DESIGN §8)
+   #:instance-p #:make-object #:with-object #:find-skein-class #:skein-class #:skein-object
+   #:skein-generic #:check-equiv-hash-methods #:equiv-hash-warning #:no-method-error
+   #:slot-error #:skein-atom-p #:skein-atom-value
    ;; Calling
    #:invoke-other #:kw-lookup
    ;; Printing

@@ -31,6 +31,7 @@ never equal; f32 and f64 compare by value."
         ((sequential-p a) (and (sequential-p b) (sequential-equiv a b)))
         ((map-p a) (and (map-p b) (map-equiv a b)))
         ((hash-set-p a) (and (hash-set-p b) (set-equiv a b)))
+        ((instance-p a) (instance-equiv a b))
         (t nil)))
 
 (defun sequential-equiv (a b)
@@ -112,7 +113,9 @@ never equal; f32 and f64 compare by value."
                            (let ((h 0))
                              (do-seq (e x) (setf h (u32 (+ h (hash-of e)))))
                              (mix-collection-hash h (count-of x)))))
-    (t (if (false-p x) 1237 (identity-hash x)))))
+    (t (cond ((false-p x) 1237)
+             ((instance-p x) (instance-hash x))
+             (t (identity-hash x))))))
 
 (defun map-hash (m)
   (let ((h 0))

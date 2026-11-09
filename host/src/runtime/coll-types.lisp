@@ -22,16 +22,27 @@ other than the one that created it."))
                                       :message (apply #'format nil control args)))
 
 ;;; ------------------------------------------------------------------------------------
+;;; Abstract bases, so that generic functions can dispatch on "any map", "any list" and
+;;; "any seq" (DESIGN §8.3). They have no slots.
+
+(defstruct (skein-seq (:constructor nil) (:copier nil) (:predicate nil))
+  "The base of every seq type.")
+(defstruct (skein-list (:include skein-seq) (:constructor nil) (:copier nil) (:predicate nil))
+  "The base of the list types: () and non-empty lists.")
+(defstruct (skein-map (:constructor nil) (:copier nil) (:predicate nil))
+  "The base of the persistent map types.")
+
+;;; ------------------------------------------------------------------------------------
 ;;; Lists
 
-(defstruct (empty-list (:constructor %make-empty-list ()) (:copier nil))
+(defstruct (empty-list (:include skein-list) (:constructor %make-empty-list ()) (:copier nil))
   "The empty list ()."
   (hash nil))
 
 (sb-ext:define-load-time-global +empty-list+ (%make-empty-list)
   "The empty list (). It is distinct from nil.")
 
-(defstruct (plist (:constructor make-plist (first rest count)) (:copier nil))
+(defstruct (plist (:include skein-list) (:constructor make-plist (first rest count)) (:copier nil))
   "A non-empty persistent list: a counted cons cell whose REST is a PLIST or +EMPTY-LIST+."
   (first nil :read-only t)
   (rest nil :read-only t)
@@ -80,7 +91,7 @@ other than the one that created it."))
 (defconstant +array-map-limit+ 8
   "The largest number of entries kept in an array map (DESIGN §6.2).")
 
-(defstruct (array-map (:constructor make-array-map (array)) (:copier nil))
+(defstruct (array-map (:include skein-map) (:constructor make-array-map (array)) (:copier nil))
   "A small persistent map: ARRAY holds keys and values alternately."
   (array #() :type simple-vector :read-only t)
   (hash nil))
@@ -88,7 +99,7 @@ other than the one that created it."))
 (sb-ext:define-load-time-global +empty-map+ (make-array-map (vector))
   "The empty map {}.")
 
-(defstruct (hash-map (:constructor make-hash-map (count root)) (:copier nil))
+(defstruct (hash-map (:include skein-map) (:constructor make-hash-map (count root)) (:copier nil))
   "A persistent hash map: a HAMT whose ROOT is a BNODE, CNODE or NIL."
   (count 0 :type fixnum :read-only t)
   (root nil :read-only t)
@@ -136,19 +147,19 @@ ARRAY (key/value pairs, in insertion order); after that ARRAY is NIL and ROOT is
 ;;; ------------------------------------------------------------------------------------
 ;;; Seqs. SEQ returns NIL or one of these (or a PLIST, which is its own seq).
 
-(defstruct (vseq (:constructor make-vseq (vec index)) (:copier nil))
+(defstruct (vseq (:include skein-seq) (:constructor make-vseq (vec index)) (:copier nil))
   "A seq over a vector from INDEX."
   (vec nil :read-only t)
   (index 0 :type fixnum :read-only t)
   (hash nil))
 
-(defstruct (aseq (:constructor make-aseq (array index)) (:copier nil))
+(defstruct (aseq (:include skein-seq) (:constructor make-aseq (array index)) (:copier nil))
   "A seq of the entries of an array map, from INDEX (a key position)."
   (array #() :type simple-vector :read-only t)
   (index 0 :type fixnum :read-only t)
   (hash nil))
 
-(defstruct (nseq (:constructor make-nseq (array index inner)) (:copier nil))
+(defstruct (nseq (:include skein-seq) (:constructor make-nseq (array index inner)) (:copier nil))
   "A seq of the entries under a HAMT node. INNER is the seq of a child node being
 walked, or NIL when INDEX is at a key/value pair."
   (array #() :type simple-vector :read-only t)
@@ -156,34 +167,44 @@ walked, or NIL when INDEX is at a key/value pair."
   (inner nil :read-only t)
   (hash nil))
 
-(defstruct (kseq (:constructor make-kseq (inner)) (:copier nil))
+(defstruct (kseq (:include skein-seq) (:constructor make-kseq (inner)) (:copier nil))
   "A seq of the keys of a seq of map entries (used for sets and keys)."
   (inner nil :read-only t)
   (hash nil))
 
-(defstruct (valseq (:constructor make-valseq (inner)) (:copier nil))
+(defstruct (valseq (:include skein-seq) (:constructor make-valseq (inner)) (:copier nil))
   "A seq of the values of a seq of map entries."
   (inner nil :read-only t)
   (hash nil))
 
-(defstruct (sseq (:constructor make-sseq (string index)) (:copier nil))
+(defstruct (sseq (:include skein-seq) (:constructor make-sseq (string index)) (:copier nil))
   "A seq of the characters of a string from INDEX."
   (string "" :type string :read-only t)
   (index 0 :type fixnum :read-only t)
   (hash nil))
 
-(defstruct (cseq (:constructor make-cseq (first more)) (:copier nil))
+(defstruct (cseq (:include skein-seq) (:constructor make-cseq (first more)) (:copier nil))
   "A cons cell whose MORE is any seqable value (often a lazy seq); not counted."
   (first nil :read-only t)
   (more nil :read-only t)
   (hash nil))
 
-(defstruct (lazy-seq (:constructor make-lazy-seq (fn)) (:copier nil))
+(defstruct (lazy-seq (:include skein-seq) (:constructor make-lazy-seq (fn)) (:copier nil))
   "A lazy seq. FN is called once, the first time the seq is needed."
   (fn nil)
   (value nil)
   (seq nil)
   (hash nil))
+
+;;; ------------------------------------------------------------------------------------
+;;; Atoms (DESIGN §6.3; functions in atoms.lisp)
+
+(defstruct (skein-atom (:constructor make-skein-atom (value)) (:copier nil))
+  "A Skein atom: a box whose value changes only by compare-and-swap."
+  (value nil))
+
+(setf (documentation 'skein-atom-p 'function) "Return true if the argument is an atom."
+      (documentation 'skein-atom-value 'function) "Return the current value of an atom.")
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Reductions

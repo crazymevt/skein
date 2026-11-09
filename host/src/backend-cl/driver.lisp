@@ -30,7 +30,9 @@ the last form. The current namespace is restored afterwards."
     (loop
       (setf (skein.reader:reader-namespace reader) (namespace-name *current-namespace*))
       (let ((form (skein.reader:read-form reader :eof-value eof)))
-        (when (eq form eof) (return value))
+        (when (eq form eof)
+          (skein.runtime:check-equiv-hash-methods)
+          (return value))
         (setf value (eval-toplevel form))))))
 
 (defun load-string (string &key file namespace)

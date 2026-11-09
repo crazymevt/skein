@@ -5,7 +5,7 @@
   :version "0.0.1"
   :author "Jessie Hughart"
   :license "MIT"
-  :depends-on ()
+  :depends-on ("closer-mop")
   :pathname "src/"
   :serial t
   ;; One package per module (src/<module>/package.lisp). Files are listed in load order:
@@ -29,6 +29,8 @@
                (:file "runtime/core")
                (:file "runtime/core-coll")
                (:file "runtime/core-conditions")
+               (:file "runtime/atoms")
+               (:file "runtime/objects")
                (:file "syntax/print")
                (:file "reader/package")
                (:file "reader/reader")
@@ -63,6 +65,7 @@
                (:file "seqs")
                (:file "macros")
                (:file "conditions")
+               (:file "objects")
                (:file "cli"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!

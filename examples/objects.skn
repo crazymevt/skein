@@ -1,0 +1,42 @@
+(ns objects)
+
+;; Classes: slots are immutable unless they are cells.
+(defclass entity []
+  (name :init "thing" :reader entity-name))
+
+(defclass ship [entity]
+  (pos :init [0 0])
+  (hp :cell :atom :init 3))
+
+(defclass asteroid [entity]
+  (size :init :large))
+
+;; Multiple dispatch on both arguments, with an eql specializer and an :around method.
+(defgeneric collide [a b])
+
+(defmethod collide [a b] :nothing)
+(defmethod collide [(a ship) (b asteroid)]
+  (swap! (:hp a) dec)
+  :ship-damaged)
+(defmethod collide [(a ship) (b (= :wall))] :ship-bounced)
+(defmethod collide :around [(a ship) b]
+  (if (pos? @(:hp a)) (call-next-method) :ship-already-destroyed))
+
+(def player (make ship :name "Falcon" :pos [10 20]))
+(def rock (make asteroid))
+
+(println (entity-name player) "vs" (entity-name rock) "->" (collide player rock))
+(println "wall ->" (collide player :wall))
+(println "hp left:" @(:hp player))
+(dotimes [_ 3] (collide player rock))
+(println "after more hits ->" (collide player rock))
+
+;; with makes a changed copy; the original is untouched.
+(def moved (with player :pos [11 20]))
+(println "positions:" (:pos player) (:pos moved))
+
+;; Value equality for a class, by specializing equiv and hash-of together.
+(defclass point [] (x) (y))
+(defmethod equiv [(a point) b] (and (instance? point b) (= (:x a) (:x b)) (= (:y a) (:y b))))
+(defmethod hash-of [(p point)] (hash-of [(:x p) (:y p)]))
+(println "equal points:" (= (make point :x 1 :y 2) (make point :x 1 :y 2)))

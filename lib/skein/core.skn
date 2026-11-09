@@ -373,3 +373,79 @@ holding the type, and defines each reader as a function of a condition."
                             [~@(map (fn [s] `['~(first s) (fn [] ~(:initform (options s)))]) slots)]
                             ~report))
        ~type-name)))
+
+;;; The object system (DESIGN §8)
+
+(defn- class-form
+  "Code that evaluates a class spec: a symbol is looked up as a class name in the
+namespace being compiled; anything else is evaluated."
+  [spec]
+  (if (symbol? spec)
+    `(%class '~spec ~(%current-namespace-name))
+    spec))
+
+(defmacro defclass
+  "Define a class: (defclass name [superclasses] doc? (slot :init expr :cell :atom
+:type t :reader f :doc \"...\")...). Slots are immutable unless they have :cell :atom or
+:cell :unsynchronized. Makes name a var holding the class, and defines each :reader as a
+generic function."
+  [class-name supers & specs]
+  (let [ns (%current-namespace-name)
+        slots (if (string? (first specs)) (rest specs) specs)
+        options (fn [[_ & opts]]
+                  (when (odd? (count opts))
+                    (error "slot options must come in pairs"))
+                  (apply hash-map opts))]
+    (when-not (vector? supers)
+      (error "defclass needs a vector of superclasses"))
+    (doseq [s slots]
+      (when-not (and (seq? s) (symbol? (first s)))
+        (error "defclass slots look like (name :option value ...)")))
+    `(do
+       (def ~class-name
+         (%define-class '~(symbol ns (name class-name))
+                        [~@(map class-form supers)]
+                        [~@(map (fn [s]
+                                  (let [o (options s)]
+                                    `['~(first s) ~(:cell o) (fn [] ~(:init o)) '~(:type o)]))
+                                slots)]))
+       ~@(keep (fn [s]
+                 (when-let [reader (:reader (options s))]
+                   `(defmethod ~reader [(obj# ~class-name)]
+                      (slot obj# ~(keyword (name (first s)))))))
+               slots)
+       ~class-name)))
+
+(defmacro defgeneric
+  "Define a generic function: (defgeneric name [params] doc?)."
+  [gf-name params & doc]
+  (when-not (vector? params)
+    (error "defgeneric needs a parameter vector"))
+  `(def ~gf-name (%define-generic '~gf-name ~(%current-namespace-name) '~params)))
+
+(defmacro defmethod
+  "Add a method: (defmethod name qualifier? [params] body...). A parameter (p class)
+specializes on a class, (p (= value)) on a value. qualifier is :before, :after or :around.
+In the body, (call-next-method) and (next-method?) refer to the next method."
+  [gf-name & more]
+  (let [ns (%current-namespace-name)
+        qualifier (when (keyword? (first more)) (first more))
+        more (if qualifier (rest more) more)
+        params (first more)
+        body (rest more)
+        required (take-while (fn [p] (not= '& p)) params)
+        rest-part (drop-while (fn [p] (not= '& p)) params)
+        names (map (fn [p] (if (seq? p) (first p) p)) required)
+        spec (fn [p]
+               (cond (not (seq? p)) nil
+                     (and (seq? (second p)) (= '= (first (second p))))
+                     `(%eql-specializer ~(second (second p)))
+                     :else (class-form (second p))))]
+    (when-not (vector? params)
+      (error "defmethod needs a parameter vector"))
+    (when (and qualifier (not (#{:before :after :around} qualifier)))
+      (error "a method qualifier must be :before, :after or :around"))
+    `(%define-method '~gf-name ~ns ~qualifier [~@(map spec required)] ~(boolean (seq rest-part))
+       (fn ~(symbol (str (name gf-name) "-method"))
+         [~'call-next-method ~'next-method? ~@names ~@rest-part]
+         ~@body))))

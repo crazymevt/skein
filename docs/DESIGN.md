@@ -210,7 +210,7 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 
 | Type | Purpose |
 |---|---|
-| `atom` | a single value updated by compare-and-swap: `swap!`, `reset!`, `compare-and-set!` |
+| `atom` | a single value updated by compare-and-swap: `swap!`, `reset!`, `compare-and-set!`; read with `@a` |
 | `ref` | an STM-managed cell **(Deferred; name reserved)** |
 | `volatile` | an unsynchronized fast box for single-fiber use |
 | `array` | a mutable, fixed-length, typed array (§9) |
@@ -290,11 +290,18 @@ Slot options:
 - **Dispatch performance:** each generic function keeps a per-call-signature dispatch cache that is invalidated on redefinition. Sealed generics can be dispatched at compile time (§12.5).
 - A `defn` function is not generic. Converting one into a generic function is a redefinition and is allowed at the REPL.
 
+Details (D-035):
+- A class name in a specializer (or in `make`, `instance?`) is a class defined with `defclass`, a condition type, or one of the built-in names: `any`, `object`, `nil-class`, `integer`, `float`, `f32`, `f64`, `number`, `char`, `string`, `keyword`, `symbol`, `vector`, `hash-map`, `hash-set`, `list`, `seq`, `fn`, `atom`, `condition`, `error`, `warning`. `true` and `false` have no class of their own; specialize on them with `(= true)`.
+- `defmethod` creates the generic function if there is none; its parameters must match the generic function's (same number of required parameters, and a rest parameter or not).
+- The generic function `initialize` is called by `make` after the slots are filled. `equiv` and `hash-of` are generic functions whose default methods use identity for instances; a warning is given at the end of a file that specializes one but not the other for a class.
+- `(with s :hp 7)` on a cell slot gives the copy a fresh cell holding 7.
+- `:type` is recorded but not checked until declarations arrive (M0.8). Custom metaclasses written in Skein, and `:cell :ref`, are not supported yet.
+
 ### 8.4 Redefinition
 Redefining a class at the REPL **updates existing instances**:
 - Added slots get their `:init` value.
 - Removed slots are dropped.
-- The generic function `update-instance-for-redefined-class` can be specialized to migrate data.
+- The generic function `update-instance-for-redefined-class` can be specialized to migrate data. Its parameters are the instance, a vector of added slot keywords, a vector of discarded slot keywords, and a map of the discarded slots' values.
 - Changing a slot from immutable to cell (or the reverse) wraps or unwraps its current value.
 
 ### 8.5 Meta-object protocol

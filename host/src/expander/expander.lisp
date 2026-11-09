@@ -396,8 +396,18 @@ that is a destructuring pattern gets a fresh local; PATTERNS lists (pattern . lo
              (resolve-global place env)
              (compile-error place "set! of a var needs a dynamic binding, which is not ~
                                    supported yet"))
-            (t (compile-error place "set! of ~A is not supported until defclass cells ~
-                                     arrive (M0.7)"
+            ((and (list-form-p place) (= (length (items place)) 2)
+                  (eq (syntax-kind (first (items place))) :atom)
+                  (kw-p (syntax-datum (first (items place)))))
+             ;; (set! (:slot obj) value) sets an :unsynchronized cell slot (DESIGN §8.2).
+             (make-call-node :location (loc form)
+                             :fn (make-var-ref-node :location (loc form)
+                                                    :var (core-var "%set-slot!"))
+                             :args (list (analyze (second (items place)) env)
+                                         (analyze (first (items place)) env)
+                                         (analyze value env))))
+            (t (compile-error place "set! needs a ^:mutable local or a slot like (:name obj), ~
+                                     not ~A"
                               (syntax-to-string place)))))))
 
 ;;; unwind-protect, block*, return-from*

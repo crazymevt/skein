@@ -1,0 +1,6 @@
+Falcon vs thing -> :ship-damaged
+wall -> :ship-bounced
+hp left: 2
+after more hits -> :ship-already-destroyed
+positions: [10 20] [11 20]
+equal points: true

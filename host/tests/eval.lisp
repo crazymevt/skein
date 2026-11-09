@@ -217,7 +217,7 @@ when they are given."
   (compile-fails "(let* [x 1] (set! x 2))"
                  "cannot set! the immutable local x; declare it ^:mutable")
   (compile-fails "(do (def v 1) (set! v 2))" "set! of a var needs a dynamic binding")
-  (compile-fails "(set! (:a x) 1)" "not supported until defclass cells arrive"))
+  (compile-fails "(set! (f x) 1)" "set! needs a ^:mutable local or a slot like (:name obj)"))
 
 ;;; unwind-protect, block*, return-from*
 

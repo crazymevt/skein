@@ -3,8 +3,10 @@
 (in-package #:skein.runtime)
 
 (defun function-display-name (f)
-  (let ((name (sb-kernel:%fun-name f)))
-    (if (stringp name) name "fn")))
+  (if (typep f 'skein-generic)
+      (generic-skein-name f)
+      (let ((name (sb-kernel:%fun-name f)))
+        (if (stringp name) name "fn"))))
 
 (defun print-elements (items stream readably &optional (separator " "))
   (loop for (x . more) on items
@@ -43,6 +45,20 @@ print does; otherwise as pr does. Values with no readable syntax print as #<...>
          (write-char #\( stream)
          (print-elements (seq-to-cl x) stream readably)
          (write-char #\) stream))
+        ((instance-p x)
+         (format stream "#<~A " (skein-class-name (class-of x)))
+         (print-value (map-from-pairs
+                       (loop for s in (skein-slots (class-of x))
+                             append (list (intern-kw (slot-name-string s))
+                                          (slot-value x (c2mop:slot-definition-name s)))))
+                      stream :readably readably)
+         (write-char #\> stream))
+        ((skein-atom-p x)
+         (write-string "#<atom " stream)
+         (print-value (skein-atom-value x) stream :readably readably)
+         (write-char #\> stream))
+        ((typep x 'skein-generic) (format stream "#<generic ~A>" (generic-skein-name x)))
+        ((typep x 'class) (format stream "#<class ~A>" (skein-class-name x)))
         ((functionp x) (format stream "#<fn ~A>" (function-display-name x)))
         ((var-p x) (format stream "#'~A" (var-qualified-name x)))
         ((namespace-p x) (format stream "#<namespace ~A>" (namespace-name x)))

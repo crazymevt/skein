@@ -12,7 +12,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.4 Persistent collections and seqs | ✅ |
 | M0.5 Macros and `skein.core` | ✅ |
 | M0.6 Conditions and restarts | ✅ |
-| M0.7 Object system | ⬜ |
+| M0.7 Object system | ✅ |
 | M0.8 Declarations, value structs, typed arrays | ⬜ |
 | M0.9 Concurrency | ⬜ |
 | M0.10 FFI and bindgen | ⬜ |
@@ -150,14 +150,17 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Phase 2: decide VS Code support for the native runtime's Swank server (a Swank-speaking extension or an LSP server); check SLY/Slynk compatibility (D-018).
 - Phase 2: decide whether FFI calls run on the fiber stack or the worker thread's native stack (D-024).
 - Phase 1: the seq library is written in CL for Phase 0 speed (D-032); port it to Skein (`lib/skein/core.skn`) with the front end, or reimplement it in the Zig runtime.
-- `atom` and `volatile` (DESIGN §6.3) have no milestone yet; atoms are listed in M0.9.
+- `volatile` (DESIGN §6.3) has no milestone yet. Atoms arrived with `:cell :atom` slots in M0.7; M0.9 should check them under contention.
 - The HAMT has no Clojure-style ArrayNode for wide nodes; add one if map benchmarks call for it.
 - Sorted maps and sets, and persistent queues, are deferred (DESIGN §6.2).
 - Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031).
 - Startup: `lib/skein/core.skn` is compiled on every start, adding about 0.15 s (0.3 s total for `skein run`). Cache it, e.g. in a saved SBCL core, if this becomes annoying.
 - `defn` and `defn-` stay built in because they attach metadata (docstrings, `^:private`) to the name; move them to Skein if runtime metadata or a metadata helper for macros is added.
 - Core macros from DESIGN §5.2 that wait on later milestones: `defclass`, `defgeneric`, `defmethod` (M0.7), `defstruct` (M0.8), `with-nursery` (M0.9), `with-open` (needs a `close` protocol, M0.7 or with `skein.io`), `binding` (dynamic vars).
-- M0.7: make condition types part of the object system (`defcondition` as a class with a condition metaclass), so methods can specialize on them.
+- Methods can specialize on condition types (M0.7), but `defcondition` still makes plain CL condition classes rather than Skein classes; unify them if conditions need slots with cells, `with`, or inheritance from Skein classes.
+- M0.8: check slot `:type`s in safe mode (they are recorded but not checked).
+- Custom metaclasses written in Skein (DESIGN §8.5) and `:cell :ref` (STM) are not supported yet.
+- Generic function arity errors come from CLOS without a Skein location.
 - Arity errors name where the function was defined, not the call site; consider reporting the call site too (M0.6 or M0.11).
 - Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form, e.g. by recording the current form in the debugger hook (M0.11).
 - M0.8: calls currently go through `&rest` argument lists and a dispatch on the count; give fixed-arity functions direct CL lambda lists for speed.
