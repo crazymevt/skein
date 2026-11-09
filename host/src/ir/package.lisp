@@ -3,7 +3,7 @@
 (defpackage #:skein.ir
   (:use #:cl)
   (:export
-   #:local #:make-local #:local-p #:local-name #:local-id #:local-mutable-p
+   #:local #:make-local #:local-p #:local-name #:local-id #:local-mutable-p #:local-type
    #:block-tag #:make-block-tag #:block-tag-p #:block-tag-name #:block-tag-id
    #:node #:node-p #:node-location
    #:const-node #:make-const-node #:const-node-p #:const-node-value
@@ -14,6 +14,7 @@
    #:def-node #:make-def-node #:def-node-p #:def-node-var #:def-node-init
    #:fn-node #:make-fn-node #:fn-node-p #:fn-node-name #:fn-node-self #:fn-node-arities
    #:arity #:make-arity #:arity-p #:arity-params #:arity-rest #:arity-body #:arity-recur-p
+   #:arity-return-type
    #:let-node #:make-let-node #:let-node-p #:let-node-bindings #:let-node-body
    #:letfn-node #:make-letfn-node #:letfn-node-p #:letfn-node-bindings #:letfn-node-body
    #:loop-node #:make-loop-node #:loop-node-p #:loop-node-bindings #:loop-node-body
@@ -35,7 +36,9 @@
    #:handler-bind-node #:make-handler-bind-node #:handler-bind-node-p
    #:handler-bind-node-bindings #:handler-bind-node-body
    #:restart-bind-node #:make-restart-bind-node #:restart-bind-node-p
-   #:restart-bind-node-bindings #:restart-bind-node-body)
+   #:restart-bind-node-bindings #:restart-bind-node-body
+   #:locally-node #:make-locally-node #:locally-node-p #:locally-node-policy
+   #:locally-node-body)
   (:documentation "Core IR: the small language the expander produces and backends consume.
 See docs/CORE-IR.md. Every node includes NODE-LOCATION; the accessors follow the
 defstruct naming convention (e.g. IF-NODE-TEST)."))

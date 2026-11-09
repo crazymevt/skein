@@ -5,7 +5,7 @@
 (defun sequential-p (x)
   "Return true if X is a sequential collection: a list, vector or seq. Sequential
 collections are equal when their elements are equal, whatever their type."
-  (typep x '(or plist empty-list pvector vseq aseq nseq kseq valseq sseq cseq lazy-seq)))
+  (typep x '(or plist empty-list pvector vseq aseq nseq kseq valseq sseq cseq lazy-seq arrseq)))
 
 (defun map-p (x)
   "Return true if X is a persistent map."
@@ -32,6 +32,7 @@ never equal; f32 and f64 compare by value."
         ((map-p a) (and (map-p b) (map-equiv a b)))
         ((hash-set-p a) (and (hash-set-p b) (set-equiv a b)))
         ((instance-p a) (instance-equiv a b))
+        ((struct-instance-def a) (struct-equiv a b))
         (t nil)))
 
 (defun sequential-equiv (a b)
@@ -106,7 +107,7 @@ never equal; f32 and f64 compare by value."
     (pvector (cached-hash x pvector-hash (ordered-hash x)))
     (plist (cached-hash x plist-hash (ordered-hash x)))
     (empty-list (mix-collection-hash 1 0))
-    ((or vseq aseq nseq kseq valseq sseq cseq lazy-seq) (ordered-hash x))
+    ((or vseq aseq nseq kseq valseq sseq cseq lazy-seq arrseq) (ordered-hash x))
     (array-map (cached-hash x array-map-hash (map-hash x)))
     (hash-map (cached-hash x hash-map-hash (map-hash x)))
     (hash-set (cached-hash x hash-set-hash
@@ -115,6 +116,7 @@ never equal; f32 and f64 compare by value."
                              (mix-collection-hash h (count-of x)))))
     (t (cond ((false-p x) 1237)
              ((instance-p x) (instance-hash x))
+             ((struct-instance-def x) (struct-hash x))
              (t (identity-hash x))))))
 
 (defun map-hash (m)

@@ -183,6 +183,12 @@ walked, or NIL when INDEX is at a key/value pair."
   (index 0 :type fixnum :read-only t)
   (hash nil))
 
+(defstruct (arrseq (:include skein-seq) (:constructor make-arrseq (array index)) (:copier nil))
+  "A seq of the elements of an array (a CL vector or a struct array) from INDEX."
+  (array nil :read-only t)
+  (index 0 :type fixnum :read-only t)
+  (hash nil))
+
 (defstruct (cseq (:include skein-seq) (:constructor make-cseq (first more)) (:copier nil))
   "A cons cell whose MORE is any seqable value (often a lazy seq); not counted."
   (first nil :read-only t)
@@ -205,6 +211,43 @@ walked, or NIL when INDEX is at a key/value pair."
 
 (setf (documentation 'skein-atom-p 'function) "Return true if the argument is an atom."
       (documentation 'skein-atom-value 'function) "Return the current value of an atom.")
+
+;;; ------------------------------------------------------------------------------------
+;;; Value structs and arrays of them (DESIGN §9; functions in structs.lisp)
+
+(defstruct (struct-def (:constructor make-struct-def (name cl-type value-p fields))
+                       (:copier nil))
+  "A type defined by defstruct. NAME is its qualified name, CL-TYPE the CL struct type,
+VALUE-P true for value structs, FIELDS a list of FIELD-DEFs. LEAVES lists, for arrays of
+value structs, the path to each primitive field as (field-def ...), with its CL type."
+  (name "" :type string :read-only t)
+  (cl-type nil :read-only t)
+  (value-p nil :read-only t)
+  (fields '() :read-only t)
+  (constructor nil)
+  (leaves '()))
+
+(defstruct (field-def (:constructor make-field-def (name type cl-type slot accessor))
+                      (:copier nil))
+  "A field of a defstruct: its NAME (a string), Skein TYPE (data), CL-TYPE, the CL SLOT
+name and the CL ACCESSOR function name."
+  (name "" :type string :read-only t)
+  (type nil :read-only t)
+  (cl-type t :read-only t)
+  (slot nil :read-only t)
+  (accessor nil :read-only t))
+
+(defstruct (struct-array (:constructor make-struct-array* (def count columns))
+                         (:copier nil))
+  "A fixed-length mutable array of value structs, stored inline as one specialized CL
+array per primitive field (COLUMNS, in the order of the DEF's leaves)."
+  (def nil :read-only t)
+  (count 0 :type fixnum :read-only t)
+  (columns #() :type simple-vector :read-only t))
+
+(setf (documentation 'struct-def-p 'function) "Return true if the argument is a struct type."
+      (documentation 'struct-array-p 'function)
+      "Return true if the argument is an array of value structs.")
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Reductions

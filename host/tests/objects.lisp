@@ -11,7 +11,7 @@
   "(defclass entity [] (id :init 1 :reader entity-id))
    (defclass ship [entity]
      \"A ship.\"
-     (pos :init [0 0] :type vec2 :doc \"Position.\")
+     (pos :init [0 0] :type vector :doc \"Position.\")
      (angle :init 0.0f)
      (hp :cell :atom :init 100)
      (scratch :cell :unsynchronized))")
@@ -282,3 +282,11 @@
            (defmethod speak [(d dog)] :bark)
            (speak rex)"
           ":bark"))
+
+(test slot-types-are-checked
+  (evp-is "(defclass typed [] (n :type integer :init 0) (s :type string :init \"x\"))
+           [(:n (make typed :n 5)) (:s (with (make typed) :s \"y\"))]"
+          "[5 \"y\"]")
+  (type-fails "(defclass typed2 [] (n :type integer)) (make typed2 :n \"five\")")
+  (type-fails "(defclass typed3 [] (n :type integer :init 0)) (with (make typed3) :n 1.5)")
+  (type-fails "(defclass typed4 [] (n :type f64 :init 1)) (make typed4)"))

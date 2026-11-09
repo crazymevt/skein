@@ -50,6 +50,11 @@ when they are given."
                    "~S: error at ~A, expected ~A:~A" ,source
                    (skein.syntax:format-location loc) ,line ,column)))))))
 
+(defmacro type-fails (source)
+  "Check that evaluating SOURCE signals a CL type error (a declared type was violated)."
+  `(is (eq :type-error (handler-case (progn (ev ,source) :no-error) (type-error () :type-error)))
+       "~S should signal a type error" ,source))
+
 (defmacro compile-fails (source message &rest keys)
   `(fails ,source ,message :type 'skein.expander:compile-error ,@keys))
 
@@ -254,7 +259,9 @@ when they are given."
 
 (test the-form
   (evals-to "(the i32 5)" 5)
-  (evals-to "(the (array f32) 5)" 5)
+  (evals-to "(the f64 1.5)" 1.5d0)
+  (is (eq :type-error (handler-case (ev "(the (array f32) 5)") (type-error () :type-error)))
+      "the checks its type under the default (dev) policy")
   (compile-fails "(the i32)" "the expects 2 arguments, got 1"))
 
 ;;; declare and reserved forms

@@ -185,7 +185,7 @@ Date: 2026-11-09 · Status: Accepted
 - **Consequences:** Analysis passes written before Phase 1 must not assume ANF.
 
 ## D-031: Phase 0 evaluation model
-Date: 2026-11-09 · Status: Accepted
+Date: 2026-11-09 · Status: Accepted (calling convention revised by D-036)
 - **Context:** M0.3 needs a concrete way to compile and run Core IR on SBCL, and some semantics that DESIGN leaves to Clojure convention.
 - **Decision:**
   - Each top-level form is read, macro-expanded, analyzed, compiled with `compile` and run before the next is read. A top-level `(do ...)` is split into top-level forms, so `ns` affects the forms after it.
@@ -254,3 +254,17 @@ Date: 2026-11-09 · Status: Accepted
   - Atoms (`atom`, `swap!`, `reset!`, `compare-and-set!`, `@`) are added now, implemented with compare-and-swap.
 - **Alternatives:** A Skein-only object system with its own dispatch (portable to the native runtime, but much more work now, and the roadmap asks for CLOS); resolving specializers as vars (would make `vector` mean the function).
 - **Consequences:** The native runtime will need its own dispatch and redefinition machinery that matches this behavior. If an instance is not touched between two class redefinitions, it is updated only once, against the most recent change of cell kinds.
+
+## D-036: Declarations, inlining and value structs in Phase 0
+Date: 2026-11-09 · Status: Accepted (record equality, inlining and the deferrals approved by Jessie)
+- **Context:** M0.8 must make declared numeric code run within 2× of hand-written SBCL code, and implement DESIGN §9 and §12.
+- **Decision:**
+  - Skein type specifiers are translated to CL types; `^type` hints, `(declare (type ...))`, return-type hints on parameter vectors and `the` become CL declarations, so SBCL does the type inference. `(declare (optimize ...))` becomes a CL `locally`. Every top-level form is compiled with the dev profile (speed 1, safety 3, debug 2) or, with `skein run --release`, the release profile (speed 3, safety 1, debug 0).
+  - Calls to skein.core's arithmetic, comparison, `count`, `sqrt` and array primitives, and to value-struct constructors and accessors, are compiled inline while their var still holds the original function, as Clojure does. Redefining one of them affects only code compiled afterwards. A call to such a primitive with an impossible argument count is a compile-time arity error.
+  - Functions take `&optional` parameters with supplied-p flags plus `&rest`, instead of a `&rest` list, so calls allocate nothing (revises D-031).
+  - The floating-point invalid-operation trap is masked process-wide, so NaN behaves as IEEE says without per-comparison masking.
+  - Value structs and records are CL structs created at run time with typed read-only slots; records compare by their fields. Arrays of value structs keep one specialized array per primitive field. Nested value structs are stored as pointers; `as-bytes` waits for the FFI; overflow at `(safety 0)` is not guaranteed to wrap.
+  - Efficiency notes are SBCL's compiler notes, mapped back to the Skein form that produced the CL form and rewritten with Skein type names, shown only for code that declares speed 2 or more.
+  - defclass slot `:type`s are checked by `make` and `with`.
+- **Alternatives:** A Skein type-inference pass (needed for the C backend, but SBCL already does this well); never inlining core functions (the 2× target would not be met).
+- **Consequences:** The n-body benchmark runs at 1.1× the SBCL reference (`bench/README.md`). The C backend will need its own inference and inlining. Threads created in M0.9 must mask the same floating-point trap.

@@ -88,8 +88,25 @@ exist. The location is the offending form's."))
                          (stringp (syntax-datum v)))
                  return (syntax-datum v)))))
 
+(defun meta-value (syntax key)
+  "Return the syntax that SYNTAX's metadata maps the keyword KEY to, or NIL."
+  (let ((meta (syntax-meta syntax)))
+    (and meta
+         (loop for (k v) on (items meta) by #'cddr
+               when (and (eq (syntax-kind k) :atom)
+                         (kw-p (syntax-datum k))
+                         (string= (kw-name (syntax-datum k)) key))
+                 return v))))
+
+(defun type-hint (syntax)
+  "Return the type that a ^type hint on SYNTAX declares (as data), or NIL."
+  (let ((tag (meta-value syntax "tag")))
+    (and tag (syntax-value tag))))
+
 (defun make-binding-local (syntax what)
-  (make-local (binding-name syntax what) :mutable-p (meta-flag-p syntax "mutable")))
+  (make-local (binding-name syntax what)
+              :mutable-p (meta-flag-p syntax "mutable")
+              :type (type-hint syntax)))
 
 ;;; Building syntax, for macros
 

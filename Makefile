@@ -13,3 +13,4 @@ repl:
 
 bench:
 	$(SBCL_BATCH) --load bench/collections.lisp
+	$(SBCL_BATCH) --load bench/nbody/compare.lisp

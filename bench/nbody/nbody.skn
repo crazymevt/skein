@@ -1,0 +1,100 @@
+(ns nbody
+  "N-body simulation (the Computer Language Benchmarks Game algorithm), the same program
+as bench/nbody/nbody.lisp, written with typed arrays and declarations.")
+
+(def pi 3.141592653589793)
+(def solar-mass (* 4.0 pi pi))
+(def days-per-year 365.24)
+
+(def body-data
+  [[0.0 0.0 0.0 0.0 0.0 0.0 1.0]
+   [4.84143144246472090e+00 -1.16032004402742839e+00 -1.03622044471123109e-01
+    1.66007664274403694e-03 7.69901118419740425e-03 -6.90460016972063023e-05
+    9.54791938424326609e-04]
+   [8.34336671824457987e+00 4.12479856412430479e+00 -4.03523417114321381e-01
+    -2.76742510726862411e-03 4.99852801234917238e-03 2.30417297573763929e-05
+    2.85885980666130812e-04]
+   [1.28943695621391310e+01 -1.51111514016986312e+01 -2.23307578892655734e-01
+    2.96460137564761618e-03 2.37847173959480950e-03 -2.96589568540237556e-05
+    4.36624404335156298e-05]
+   [1.53796971148509165e+01 -2.59193146099879641e+01 1.79258772950371181e-01
+    2.68067772490389322e-03 1.62824170038242295e-03 -9.51592254519715870e-05
+    5.15138902046611451e-05]])
+
+(defn make-bodies
+  "Seven parallel f64 arrays: x y z vx vy vz mass."
+  []
+  (let [arrays (vec (repeatedly 7 #(make-array f64 5)))]
+    (doseq [[i body] (map-indexed vector body-data)
+            [k value] (map-indexed vector body)]
+      (aset! (nth arrays k) i (cond (= k 6) (* value solar-mass)
+                                    (>= k 3) (* value days-per-year)
+                                    :else value)))
+    arrays))
+
+(defn offset-momentum [vx vy vz m]
+  (declare (type (array f64) vx vy vz m) (optimize (speed 3) (safety 1)))
+  (loop [^fixnum i 0 ^f64 px 0.0 ^f64 py 0.0 ^f64 pz 0.0]
+    (if (< i (count m))
+      (recur (inc i)
+             (+ px (* (aget vx i) (aget m i)))
+             (+ py (* (aget vy i) (aget m i)))
+             (+ pz (* (aget vz i) (aget m i))))
+      (do (aset! vx 0 (/ (- px) solar-mass))
+          (aset! vy 0 (/ (- py) solar-mass))
+          (aset! vz 0 (/ (- pz) solar-mass))))))
+
+(defn energy ^f64 [x y z vx vy vz m]
+  (declare (type (array f64) x y z vx vy vz m) (optimize (speed 3) (safety 1)))
+  (let [n (count m)]
+    (loop [^fixnum i 0 ^f64 e 0.0]
+      (if (< i n)
+        (let [e (+ e (* 0.5 (aget m i) (+ (* (aget vx i) (aget vx i))
+                                          (* (aget vy i) (aget vy i))
+                                          (* (aget vz i) (aget vz i)))))]
+          (recur (inc i)
+                 (loop [^fixnum j (inc i) ^f64 e e]
+                   (if (< j n)
+                     (let [dx (- (aget x i) (aget x j))
+                           dy (- (aget y i) (aget y j))
+                           dz (- (aget z i) (aget z j))]
+                       (recur (inc j)
+                              (- e (/ (* (aget m i) (aget m j))
+                                      (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))))
+                     e))))
+        e))))
+
+(defn advance [x y z vx vy vz m dt]
+  (declare (type (array f64) x y z vx vy vz m) (type f64 dt)
+           (optimize (speed 3) (safety 1)))
+  (let [n (count m)]
+    (loop [^fixnum i 0]
+      (when (< i n)
+        (loop [^fixnum j (inc i)]
+          (when (< j n)
+            (let [dx (- (aget x i) (aget x j))
+                  dy (- (aget y i) (aget y j))
+                  dz (- (aget z i) (aget z j))
+                  d2 (+ (* dx dx) (* dy dy) (* dz dz))
+                  mag (/ dt (* d2 (sqrt d2)))]
+              (aset! vx i (- (aget vx i) (* dx (aget m j) mag)))
+              (aset! vy i (- (aget vy i) (* dy (aget m j) mag)))
+              (aset! vz i (- (aget vz i) (* dz (aget m j) mag)))
+              (aset! vx j (+ (aget vx j) (* dx (aget m i) mag)))
+              (aset! vy j (+ (aget vy j) (* dy (aget m i) mag)))
+              (aset! vz j (+ (aget vz j) (* dz (aget m i) mag)))
+              (recur (inc j)))))
+        (recur (inc i))))
+    (loop [^fixnum i 0]
+      (when (< i n)
+        (aset! x i (+ (aget x i) (* dt (aget vx i))))
+        (aset! y i (+ (aget y i) (* dt (aget vy i))))
+        (aset! z i (+ (aget z i) (* dt (aget vz i))))
+        (recur (inc i))))))
+
+(defn run [steps]
+  (let [[x y z vx vy vz m] (make-bodies)]
+    (offset-momentum vx vy vz m)
+    (let [before (energy x y z vx vy vz m)]
+      (dotimes [_ steps] (advance x y z vx vy vz m 0.01))
+      [before (energy x y z vx vy vz m)])))

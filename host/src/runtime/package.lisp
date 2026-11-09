@@ -47,6 +47,10 @@
    #:instance-p #:make-object #:with-object #:find-skein-class #:skein-class #:skein-object
    #:skein-generic #:check-equiv-hash-methods #:equiv-hash-warning #:no-method-error
    #:slot-error #:skein-atom-p #:skein-atom-value
+   ;; Types, arrays and structs (DESIGN §9, §12)
+   #:skein-type-to-cl #:inline-entry-for #:inline-arity-mismatch #:inline-entry-emitter
+   #:inline-entry-test-p
+   #:var-ftype #:struct-redefinition-warning #:struct-array-p #:find-struct-def
    ;; Calling
    #:invoke-other #:kw-lookup
    ;; Printing

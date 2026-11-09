@@ -31,6 +31,10 @@
                (:file "runtime/core-conditions")
                (:file "runtime/atoms")
                (:file "runtime/objects")
+               (:file "runtime/inline")
+               (:file "runtime/arrays")
+               (:file "runtime/structs")
+               (:file "runtime/types")
                (:file "syntax/print")
                (:file "reader/package")
                (:file "reader/reader")
@@ -66,6 +70,7 @@
                (:file "macros")
                (:file "conditions")
                (:file "objects")
+               (:file "types")
                (:file "cli"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!

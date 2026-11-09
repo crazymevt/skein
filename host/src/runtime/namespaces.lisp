@@ -25,7 +25,9 @@ is what makes redefinition visible to existing callers."
   (macro-p nil)
   (dynamic-p nil)
   (private-p nil)
-  (doc nil))
+  (doc nil)
+  ;; A declared function type, (fn [arg-types] return-type) as data (DESIGN §12.2).
+  (ftype nil))
 
 (setf (documentation 'namespace-name 'function) "Return the name of a namespace."
       (documentation 'namespace-p 'function) "Return true if the argument is a namespace."
@@ -45,7 +47,9 @@ is what makes redefinition visible to existing callers."
 of a syntax object and an expander environment, returning a syntax object."
       (documentation 'var-dynamic-p 'function) "Return true if a var is ^:dynamic."
       (documentation 'var-private-p 'function) "Return true if a var is ^:private."
-      (documentation 'var-doc 'function) "Return a var's docstring, or NIL.")
+      (documentation 'var-doc 'function) "Return a var's docstring, or NIL."
+      (documentation 'var-ftype 'function)
+      "Return the function type declared for a var with declaim, or NIL.")
 
 (defmethod print-object ((v var) stream)
   (print-unreadable-object (v stream :type t)

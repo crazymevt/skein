@@ -361,6 +361,14 @@ These are the tools for hot loops: no per-element allocation, no pointer chasing
 ### 9.3 Memory views
 `(view arr start end)` gives a zero-copy slice. `(as-bytes arr)` gives a byte view for passing to C or GPU APIs. Views keep the underlying array alive.
 
+### 9.4 Phase 0 details (D-036)
+- Value structs and records are CL structs with typed, read-only slots. A value struct inside another is stored as a pointer, not flattened; arrays of value structs store every primitive field inline, one specialized array per field.
+- The keyword constructor form names every field: `(vec2 :x 1.0f :y 2.0f)`. Records (plain `defstruct`) compare by their fields, like value structs.
+- Redefining a struct with different fields creates a new layout and warns; existing values and code compiled against the old layout keep using it until reloaded (§15).
+- `(array T)` declares a simple (non-view) array. `view` works on arrays of primitive types and returns a slice that `aget`, `aset!` and `count` accept but `(array T)` declarations do not.
+- `update!` is `(update! coll i :field f args...)` for arrays of value structs and `defsoa` collections, and `(update! array i f args...)` for arrays of primitives. `defsoa name` defines an element value struct `name.element`, `make-name`, and a function `(field coll i)` per field.
+- `as-bytes` arrives with the FFI (M0.10).
+
 ## 10. Conditions and restarts
 
 Skein adopts the **Common Lisp condition system**, which separates *signaling* a problem, *deciding* what to do about it, and *recovering*.
@@ -472,11 +480,15 @@ There are four qualities, each with a level from 0 to 3: `speed`, `safety`, `deb
 
 Behavior at each safety level:
 - `safety ≥ 1`: declarations are checked, array bounds are checked, and fixed-width integer overflow (`fixnum` and machine integer types) **signals an error**.
-- `safety 0`: no checks, and fixed-width integer arithmetic wraps.
+- `safety 0`: no checks, and fixed-width integer arithmetic wraps. (Phase 0: overflow at `safety 0` is unchecked but not guaranteed to wrap.)
+
+`skein run --release` compiles with the release profile; the default is dev.
 
 ### 12.4 Inference and efficiency notes
 - The compiler does **local type inference** within a function: it propagates declared and literal types, inlines arithmetic on known types, and unboxes floats and value structs.
 - With `speed ≥ 2`, the compiler emits **efficiency notes** (as SBCL does) explaining why something couldn't be optimized: "generic `+`: argument type unknown", "boxing f32 to return", "allocation in loop". These notes are essential to the performance workflow and are surfaced in the REPL and the editor.
+- Phase 0 (D-036): local inference is SBCL's own; the backend turns Skein declarations into CL declarations and inlines the core arithmetic, comparison and array functions (`+`, `<`, `aget`, `aset!`, `count`, …) and value-struct constructors and accessors. Efficiency notes are SBCL's notes, placed at the Skein form they concern and given in Skein type names; they appear for code that itself declares `(optimize (speed 2))` or more, not for everything compiled with the release profile.
+- `(declaim (ftype (fn [arg-types] return-type) name...))` records a function's type; calls to it are known to return `return-type`.
 
 ### 12.5 Sealing (release builds)
 - `(seal class-name)` forbids new subclasses. `(seal-generic g)` forbids new methods. A `^:sealed` var cannot be redefined.

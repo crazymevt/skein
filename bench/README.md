@@ -31,3 +31,17 @@ Notes:
 - Persistent updates cost about 2–20× the host's mutable structures; transients close much of the gap for batch building.
 - The lazy pipeline realizes one element at a time (D-032) and allocates a lazy seq and a cons per element per stage; the transducer version avoids that and runs about 2.5–3× faster.
 - Calls into Skein functions still go through `&rest` dispatch (D-031); M0.8 revisits this.
+
+## N-body (M0.8)
+
+The M0.8 exit criterion: a float-heavy program with declarations runs within 2× of the equivalent hand-written, declared SBCL code. `bench/nbody/nbody.skn` and `bench/nbody/nbody.lisp` are the same Benchmarks Game algorithm on parallel `f64` arrays with `(optimize (speed 3) (safety 1))`; `bench/nbody/compare.lisp` checks that they compute the same energies, then times both.
+
+Recorded 2026-11-09 on Apple M4, SBCL 2.6.10, macOS:
+
+| n-body, 5,000,000 steps | Best of 5 (s) |
+|---|---|
+| hand-written SBCL (bench/nbody/nbody.lisp) | 0.268 |
+| Skein (bench/nbody/nbody.skn) | 0.296 |
+| ratio (target: at most 2.0) | 1.11 |
+
+What made the difference: inlined arithmetic, comparisons and array access (D-036), calls that allocate no argument lists, and inlining `count` on arrays so SBCL knows loop bounds are fixnums. Before the last change the ratio was 2.5×.

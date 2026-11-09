@@ -79,6 +79,18 @@
 (defcore "%no-matching-case" (value)
   (skein-error 'skein-error nil "no case clause matches ~A" (readable-string value)))
 
+(defcore "%declaim" (spec)
+  (let ((kind (and (plist-p spec) (sym-p (first* spec)) (sym-name (first* spec)))))
+    (unless (equal kind "ftype")
+      (skein-error 'skein-error nil "declaim supports (ftype (fn [arg-types] return-type) ~
+                                     names...), not ~A"
+                   (readable-string spec)))
+    (let ((type (first* (rest* spec))))
+      (dolist (name (seq-to-cl (rest* (rest* spec))))
+        (setf (var-ftype (intern-var *current-namespace* (sym-string name "a function name")))
+              type)))
+    nil))
+
 (defcore "%set-macro!" (name)
   (let ((var (find-own-var *current-namespace* (sym-string name "a macro name"))))
     (setf (var-macro-p var) t)

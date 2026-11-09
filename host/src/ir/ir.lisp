@@ -7,11 +7,13 @@
 
 (defun next-id () (incf *next-id*))
 
-(defstruct (local (:constructor make-local (name &key mutable-p (id (next-id)))))
-  "A local binding. Each binding gets its own object; references point at it."
+(defstruct (local (:constructor make-local (name &key mutable-p type (id (next-id)))))
+  "A local binding. Each binding gets its own object; references point at it. TYPE is
+the declared Skein type (as data, e.g. the symbol f64), or NIL."
   (name "" :type string :read-only t)
   (id 0 :type integer :read-only t)
-  (mutable-p nil :read-only t))
+  (mutable-p nil :read-only t)
+  (type nil))
 
 (defmethod print-object ((l local) stream)
   (print-unreadable-object (l stream :type t)
@@ -33,6 +35,8 @@
       (documentation 'local-mutable-p 'function)
       "Return true if a local was declared ^:mutable."
       (documentation 'local-p 'function) "Return true if the argument is a local."
+      (documentation 'local-type 'function)
+      "Return the declared type of a local (Skein type data), or NIL."
       (documentation 'block-tag-name 'function) "Return the source name of a block tag."
       (documentation 'block-tag-id 'function) "Return the unique id of a block tag."
       (documentation 'block-tag-p 'function) "Return true if the argument is a block tag."
@@ -65,7 +69,7 @@
 (define-node fn-node (name nil :read-only t) (self nil :read-only t)
   (arities '() :read-only t))
 (define-node arity (params '() :read-only t) (rest nil :read-only t) (body nil)
-  (recur-p nil))
+  (recur-p nil) (return-type nil))
 (define-node let-node (bindings '() :read-only t) (body nil :read-only t))
 (define-node letfn-node (bindings '() :read-only t) (body nil :read-only t))
 (define-node loop-node (bindings '() :read-only t) (body nil) (recur-p nil))
@@ -81,3 +85,4 @@
 (define-node throw-condition-node (condition nil :read-only t))
 (define-node handler-bind-node (bindings '() :read-only t) (body nil :read-only t))
 (define-node restart-bind-node (bindings '() :read-only t) (body nil :read-only t))
+(define-node locally-node (policy '() :read-only t) (body nil :read-only t))

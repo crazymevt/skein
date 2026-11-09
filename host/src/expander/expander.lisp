@@ -167,10 +167,51 @@ expansion happened."
                          :forms (loop for (f . more) on forms
                                       collect (analyze f env (and tail (null more))))))))
 
+(defparameter *policy-qualities* '("speed" "safety" "debug" "space")
+  "The optimization qualities of DESIGN §12.3.")
+
+(defun parse-declaration (spec env)
+  "Apply one declaration SPEC from (declare ...). Type declarations set the type of
+locals; optimize declarations are returned as a list of (quality . level)."
+  (let* ((parts (and (list-form-p spec) (items spec)))
+         (head (and parts (plain-name (first parts)))))
+    (cond ((equal head "type")
+           (unless (>= (length parts) 3)
+             (compile-error spec "(type T name...) needs a type and at least one name"))
+           (let ((type (syntax-value (second parts))))
+             (dolist (name-form (cddr parts))
+               (let* ((name (binding-name name-form "a declared name"))
+                      (local (or (lookup-local env name)
+                                 (compile-error name-form "no local named ~A to declare" name))))
+                 (setf (local-type local) type))))
+           '())
+          ((equal head "optimize")
+           (loop for q in (rest parts)
+                 collect (multiple-value-bind (quality level)
+                             (if (list-form-p q)
+                                 (values (plain-name (first (items q)))
+                                         (syntax-datum (second (items q))))
+                                 (values (plain-name q) 3))
+                           (unless (and (member quality *policy-qualities* :test #'equal)
+                                        (typep level '(integer 0 3)))
+                             (compile-error q "optimize takes qualities speed, safety, debug and ~
+                                               space with levels 0 to 3, not ~A"
+                                            (syntax-to-string q)))
+                           (cons quality level))))
+          (t (compile-error spec "unknown declaration ~A; expected (type ...) or (optimize ...)"
+                            (syntax-to-string spec))))))
+
 (defun analyze-body (forms env tail location)
-  "Like ANALYZE-SEQ, but first drop leading (declare ...) forms. Declarations are
-accepted and ignored until M0.8."
-  (analyze-seq (member-if-not (lambda (f) (declare-form-p f env)) forms) env tail location))
+  "Like ANALYZE-SEQ, but first apply leading (declare ...) forms (DESIGN §12.2). An
+optimize declaration wraps the body in a locally-node."
+  (let ((policy '()))
+    (loop while (and forms (declare-form-p (first forms) env))
+          do (dolist (spec (rest (items (pop forms))))
+               (setf policy (append policy (parse-declaration spec env)))))
+    (let ((body (analyze-seq forms env tail location)))
+      (if policy
+          (make-locally-node :location location :policy policy :body body)
+          body))))
 
 (defun check-arg-count (form min &optional (max min))
   "Check that the special form FORM has between MIN and MAX arguments (MAX NIL: no limit)."
@@ -273,7 +314,8 @@ that is a destructuring pattern gets a fresh local; PATTERNS lists (pattern . lo
 (defun analyze-arity (vector body env location)
   (multiple-value-bind (params rest patterns) (parse-params vector)
     (setf body (destructuring-body patterns body location))
-    (let* ((arity (make-arity :location location :params params :rest rest))
+    (let* ((arity (make-arity :location location :params params :rest rest
+                              :return-type (type-hint vector)))
            (inner (with-locals env (append params (and rest (list rest))))))
       (setf (env-recur inner) arity
             (env-recur-count inner) (+ (length params) (if rest 1 0))
@@ -460,7 +502,7 @@ that is a destructuring pattern gets a fresh local; PATTERNS lists (pattern . lo
 
 (define-special-form "the" (form env tail)
   (check-arg-count form 2)
-  (make-the-node :location (loc form) :type (second (items form))
+  (make-the-node :location (loc form) :type (syntax-value (second (items form)))
                  :expr (analyze (third (items form)) env tail)))
 
 ;;; Forms that are reserved for later milestones

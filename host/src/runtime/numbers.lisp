@@ -23,6 +23,11 @@
 NaN gives false instead of signaling (x86-64 traps on NaN comparisons; arm64 does not)."
   `(sb-int:with-float-traps-masked (:invalid) ,@body))
 
+;;; Skein follows IEEE for floats: an invalid operation (such as comparing a NaN, or
+;;; 0.0/0.0) gives NaN or false instead of trapping. Inlined comparisons rely on this.
+(sb-int:set-floating-point-modes
+ :traps (remove :invalid (getf (sb-int:get-floating-point-modes) :traps)))
+
 (defun decimal-to-float (negative mantissa exponent type)
   "Return the float nearest to MANTISSA * 10^EXPONENT, negated if NEGATIVE.
 MANTISSA is a non-negative integer and TYPE is :F64 or :F32. The result is correctly

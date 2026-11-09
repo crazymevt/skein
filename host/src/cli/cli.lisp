@@ -36,12 +36,20 @@ MAIN prints its message to the error stream and returns its exit code."))
 Usage: skein <command> [arguments]
 
 Commands:
-  run <file.skn>   run a Skein program
+  run [--release] <file.skn>
+                   run a Skein program (--release: optimize with the release profile)
   help             show this message
   version          show the Skein version
 "))
 
 (defun command-run (args)
+  (let ((skein.backend.cl:*profile* :dev))
+    (when (equal (first args) "--release")
+      (setf skein.backend.cl:*profile* :release
+            args (rest args)))
+    (command-run-file args)))
+
+(defun command-run-file (args)
   (unless (= (length args) 1)
     (cli-error +exit-usage+ "skein run: expected one file, e.g. `skein run hello.skn`"))
   (let ((file (first args)))

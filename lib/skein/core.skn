@@ -449,3 +449,44 @@ In the body, (call-next-method) and (next-method?) refer to the next method."
        (fn ~(symbol (str (name gf-name) "-method"))
          [~'call-next-method ~'next-method? ~@names ~@rest-part]
          ~@body))))
+
+;;; Types, value structs and typed arrays (DESIGN §9, §12)
+
+(defmacro declaim
+  "Global declarations: (declaim (ftype (fn [arg-types] return-type) name...))."
+  [& specs]
+  `(do ~@(map (fn [spec] `(%declaim '~spec)) specs) nil))
+
+(defmacro make-array
+  "A mutable, fixed-length, zero-initialized array: (make-array f32 n). The element type
+is a primitive type, a value struct, or any."
+  [type n]
+  `(%make-array '~type ~n))
+
+(defmacro defstruct
+  "Define a struct: (defstruct name :value? doc? (field type)...). With :value, fields
+must have primitive or value-struct types, and arrays store the structs inline. Defines
+the constructor name, taking the fields in order or as :field value pairs, and an
+accessor name-field per field. Structs are immutable and compare by their fields."
+  [struct-name & specs]
+  (let [value? (= :value (first specs))
+        specs (if value? (rest specs) specs)
+        fields (if (string? (first specs)) (rest specs) specs)]
+    (doseq [f fields]
+      (when-not (and (seq? f) (symbol? (first f)) (<= (count f) 2))
+        (error "defstruct fields look like (name type)")))
+    `(do (%define-struct '~(symbol (%current-namespace-name) (name struct-name)) ~value?
+                         '[~@(map (fn [f] [(first f) (second f)]) fields)])
+         nil)))
+
+(defmacro defsoa
+  "Define a struct-of-arrays collection: (defsoa name (field type)...). Defines make-name
+(taking a length) and, for each field, a function (field coll i). Use update! to change
+fields in place."
+  [soa-name & fields]
+  (doseq [f fields]
+    (when-not (and (seq? f) (symbol? (first f)) (= (count f) 2))
+      (error "defsoa fields look like (name type)")))
+  `(do (%define-soa '~(symbol (%current-namespace-name) (name soa-name))
+                    '[~@(map (fn [f] [(first f) (second f)]) fields)])
+       nil))

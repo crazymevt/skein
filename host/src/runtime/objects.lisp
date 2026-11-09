@@ -130,6 +130,18 @@
   "The representation of VALUE in a slot whose cell kind is CELL."
   (if (eq cell :atom) (make-skein-atom value) value))
 
+(defvar value-checks-p t
+  "True while slot :type checks are on.")
+
+(defun checked-slot-value (slot value)
+  "Check VALUE against SLOT's declared :type, if any (DESIGN §8.1), and return it."
+  (let ((type (slot-skein-type slot)))
+    (when (and type value-checks-p)
+      (let ((cl-type (skein-type-to-cl type)))
+        (unless (typep value cl-type)
+          (error 'type-error :datum value :expected-type cl-type))))
+    value))
+
 (defun cell-keyword (x)
   (cond ((null x) nil)
         ((and (kw-p x) (string= (kw-name x) "atom")) :atom)
@@ -215,8 +227,12 @@ generic function initialize on it."
                (given (loop for (k v) on kvs by #'cddr when (eq k key) return (list v))))
           (setf (slot-value obj (c2mop:slot-definition-name slot))
                 (if given
-                    (stored-value (slot-cell slot) (first given))
-                    (funcall (c2mop:slot-definition-initfunction slot))))))
+                    (stored-value (slot-cell slot) (checked-slot-value slot (first given)))
+                    (let ((stored (funcall (c2mop:slot-definition-initfunction slot))))
+                      (checked-slot-value slot (if (eq (slot-cell slot) :atom)
+                                                   (skein-atom-value stored)
+                                                   stored))
+                      stored)))))
       (setf (object-owner obj) sb-thread:*current-thread*)
       (funcall (core-fn "initialize") obj)
       obj)))
@@ -224,8 +240,11 @@ generic function initialize on it."
 (defun with-object (obj kvs)
   "Return a copy of OBJ with the slots in KVS changed. Cells are shared with OBJ unless
 KVS contains :fresh-cells true; a changed cell slot gets a fresh cell."
+  (when (struct-instance-def obj)
+    (return-from with-object (struct-with obj kvs)))
   (unless (instance-p obj)
-    (skein-error 'skein-error nil "with needs an instance, not ~A" (readable-string obj)))
+    (skein-error 'skein-error nil "with needs an instance or struct, not ~A"
+                 (readable-string obj)))
   (let* ((fresh-key (intern-kw "fresh-cells"))
          (fresh (loop for (k v) on kvs by #'cddr thereis (and (eq k fresh-key) (truthy-p v))))
          (kvs (loop for (k v) on kvs by #'cddr unless (eq k fresh-key) append (list k v)))
@@ -238,7 +257,8 @@ KVS contains :fresh-cells true; a changed cell slot gets a fresh cell."
              (value (slot-value obj name))
              (given (loop for (k v) on kvs by #'cddr when (eq k key) return (list v))))
         (setf (slot-value copy name)
-              (cond (given (stored-value (slot-cell slot) (first given)))
+              (cond (given (stored-value (slot-cell slot)
+                                         (checked-slot-value slot (first given))))
                     ((and fresh (eq (slot-cell slot) :atom))
                      (make-skein-atom (skein-atom-value value)))
                     (t value)))))
@@ -337,8 +357,11 @@ names, or a var (in NAMESPACE-NAME) holding a class or a condition type."
                                                              (find-namespace (sym-namespace x)))))
                                              (and target (find-own-var target (sym-name x))))
                                            (resolve-var ns (sym-name x)))))
-                          (value (and var (var-value var))))
+                          (value (and var (var-value var)))
+                          (struct (and value (find-struct-def x namespace-name))))
                      (cond ((typep value 'class) value)
+                           ((and struct (soa-type-p struct)) (find-class 'struct-array))
+                           (struct (find-class (struct-def-cl-type struct)))
                            ((condition-type-p value) (find-class (condition-type-class value)))
                            (t (fail))))))))))
 

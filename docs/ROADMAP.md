@@ -13,7 +13,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.5 Macros and `skein.core` | ✅ |
 | M0.6 Conditions and restarts | ✅ |
 | M0.7 Object system | ✅ |
-| M0.8 Declarations, value structs, typed arrays | ⬜ |
+| M0.8 Declarations, value structs, typed arrays | ✅ |
 | M0.9 Concurrency | ⬜ |
 | M0.10 FFI and bindgen | ⬜ |
 | M0.11 REPL, reload and dev loop | ⬜ |
@@ -154,16 +154,19 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - The HAMT has no Clojure-style ArrayNode for wide nodes; add one if map benchmarks call for it.
 - Sorted maps and sets, and persistent queues, are deferred (DESIGN §6.2).
 - Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031).
+- M0.9: new threads must mask the floating-point invalid-operation trap, as the main thread does (D-036), or NaN comparisons will trap on x86-64.
+- Type errors from declarations show CL type names and generated variable names; translate them to Skein terms and add locations.
+- Hot-path gaps: keyword access to value-struct fields (`(:x v)`) and `defsoa` field functions are not inlined; use the `vec2-x` accessors and arrays of primitives in hot code. `(aget structs i)` allocates the struct it returns.
+- Flatten nested value structs inline (DESIGN §9.1), and make `(safety 0)` integer overflow wrap (DESIGN §12.3).
+- `as-bytes` (DESIGN §9.3) with the FFI in M0.10.
 - Startup: `lib/skein/core.skn` is compiled on every start, adding about 0.15 s (0.3 s total for `skein run`). Cache it, e.g. in a saved SBCL core, if this becomes annoying.
 - `defn` and `defn-` stay built in because they attach metadata (docstrings, `^:private`) to the name; move them to Skein if runtime metadata or a metadata helper for macros is added.
 - Core macros from DESIGN §5.2 that wait on later milestones: `defclass`, `defgeneric`, `defmethod` (M0.7), `defstruct` (M0.8), `with-nursery` (M0.9), `with-open` (needs a `close` protocol, M0.7 or with `skein.io`), `binding` (dynamic vars).
 - Methods can specialize on condition types (M0.7), but `defcondition` still makes plain CL condition classes rather than Skein classes; unify them if conditions need slots with cells, `with`, or inheritance from Skein classes.
-- M0.8: check slot `:type`s in safe mode (they are recorded but not checked).
 - Custom metaclasses written in Skein (DESIGN §8.5) and `:cell :ref` (STM) are not supported yet.
 - Generic function arity errors come from CLOS without a Skein location.
 - Arity errors name where the function was defined, not the call site; consider reporting the call site too (M0.6 or M0.11).
 - Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form, e.g. by recording the current form in the debugger hook (M0.11).
-- M0.8: calls currently go through `&rest` argument lists and a dispatch on the count; give fixed-arity functions direct CL lambda lists for speed.
 - `skein run` looks for required namespaces next to the main file and in the current directory; use `project.skn` `:paths` once it exists.
 - Consider `#!` shebang lines so `.skn` files can be executable scripts.
 - First shader-using demo: pick shader cross-compilation tooling for the SDL3 GPU API, e.g. SDL_shadercross (D-020).

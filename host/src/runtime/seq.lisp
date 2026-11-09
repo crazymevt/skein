@@ -63,7 +63,7 @@
 list or seq. Signals UNSUPPORTED-OPERATION-ERROR if X is not seqable."
   (typecase x
     (null nil)
-    ((or plist vseq aseq nseq kseq valseq sseq cseq) x)
+    ((or plist vseq aseq nseq kseq valseq sseq cseq arrseq) x)
     (empty-list nil)
     (pvector (if (zerop (pvector-count x)) nil (make-vseq x 0)))
     (array-map (if (zerop (length (array-map-array x))) nil (make-aseq (array-map-array x) 0)))
@@ -72,6 +72,8 @@ list or seq. Signals UNSUPPORTED-OPERATION-ERROR if X is not seqable."
     (string (if (zerop (length x)) nil (make-sseq x 0)))
     (lazy-seq (lazy-seq-realize x))
     (eduction (seq (eduction-seq x)))
+    (vector (if (zerop (length x)) nil (make-arrseq x 0)))
+    (struct-array (if (zerop (struct-array-count x)) nil (make-arrseq x 0)))
     (t (unsupported "~A is not seqable" (readable-string x)))))
 
 (defun seq-first (s)
@@ -88,7 +90,8 @@ list or seq. Signals UNSUPPORTED-OPERATION-ERROR if X is not seqable."
     (kseq (vector-nth (seq-first (kseq-inner s)) 0))
     (valseq (vector-nth (seq-first (valseq-inner s)) 1))
     (sseq (char (sseq-string s) (sseq-index s)))
-    (cseq (cseq-first s))))
+    (cseq (cseq-first s))
+    (arrseq (aget-slow (arrseq-array s) (arrseq-index s)))))
 
 (defun seq-next (s)
   "Return the seq after the first element of the seq S, or NIL."
@@ -105,7 +108,9 @@ list or seq. Signals UNSUPPORTED-OPERATION-ERROR if X is not seqable."
     (valseq (let ((n (seq-next (valseq-inner s)))) (and n (make-valseq n))))
     (sseq (let ((i (1+ (sseq-index s))))
             (if (< i (length (sseq-string s))) (make-sseq (sseq-string s) i) nil)))
-    (cseq (seq (cseq-more s)))))
+    (cseq (seq (cseq-more s)))
+    (arrseq (let ((i (1+ (arrseq-index s))))
+              (if (< i (count-of (arrseq-array s))) (make-arrseq (arrseq-array s) i) nil)))))
 
 (defun seq-rest (s)
   "Return what follows the first element of the seq S, without realizing a lazy tail."
@@ -173,6 +178,8 @@ list or seq. Signals UNSUPPORTED-OPERATION-ERROR if X is not seqable."
     (tvector (check-edit (tvector-edit x) "transient vector") (tvector-count x))
     (tmap (check-edit (tmap-edit x) "transient map") (tmap-count x))
     (tset (count-of (tset-tmap x)))
+    (vector (length x))
+    (struct-array (struct-array-count x))
     (t (let ((n 0)) (do-seq (e x) (declare (ignore e)) (incf n)) n))))
 
 (defun coll-cons (x coll)
@@ -235,7 +242,9 @@ membership. Returns NOT-FOUND if it is absent or COLL is not associative."
               not-found
               (tmap-get (tset-tmap coll) key)))
     (condition (if (kw-p key) (condition-slot coll (kw-name key) not-found) not-found))
-    (t (if (instance-p coll) (object-get coll key not-found) not-found))))
+    (t (cond ((instance-p coll) (object-get coll key not-found))
+             ((struct-instance-def coll) (struct-get coll key not-found))
+             (t not-found)))))
 
 (defun coll-contains-p (coll key)
   (not (eq (coll-get coll key +not-found+) +not-found+)))

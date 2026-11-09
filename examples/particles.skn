@@ -1,0 +1,41 @@
+(ns particles)
+
+;; A value struct: immutable, compared by its fields, stored inline in arrays.
+(defstruct vec2 :value (x f32) (y f32))
+
+(defn v+ ^vec2 [^vec2 a ^vec2 b]
+  (vec2 (+ (vec2-x a) (vec2-x b)) (+ (vec2-y a) (vec2-y b))))
+
+(defn v* ^vec2 [^vec2 v ^f32 k]
+  (vec2 (* (vec2-x v) k) (* (vec2-y v) k)))
+
+;; Struct-of-arrays storage: one f32 array per field, behind field accessors.
+(defsoa particles
+  (pos vec2) (vel vec2) (life f32))
+
+(def ps (make-particles 3))
+
+(dotimes [i 3]
+  (update! ps i :vel (fn [_] (vec2 (* 1.0f (inc i)) 2.0f)))
+  (update! ps i :life + 1.0f))
+
+(defn step! [ps ^f32 dt]
+  (declare (type particles ps))
+  (dotimes [i (count ps)]
+    (update! ps i :pos v+ (v* (vel ps i) dt))
+    (update! ps i :life - dt)))
+
+(dotimes [_ 4] (step! ps 0.25f))
+
+(doseq [i (range 3)]
+  (println "particle" i "pos" [(vec2-x (pos ps i)) (vec2-y (pos ps i))] "life" (life ps i)))
+
+;; Typed arrays of primitives compile to plain specialized arrays.
+(defn sum ^f64 [xs]
+  (declare (type (array f64) xs) (optimize (speed 3) (safety 1)))
+  (loop [^fixnum i 0 ^f64 acc 0.0]
+    (if (< i (count xs)) (recur (inc i) (+ acc (aget xs i))) acc)))
+
+(let [xs (make-array f64 5)]
+  (dotimes [i 5] (aset! xs i (* 1.5 i)))
+  (println "sum" (sum xs) "equal vec2s?" (= (vec2 1.0f 2.0f) (vec2 1.0f 2.0f))))
