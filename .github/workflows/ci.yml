@@ -120,18 +120,8 @@ jobs:
           fi
           "$HOME/zig/zig" version
 
-      - name: Run tests
-        run: make test
-
-      - name: Launcher (bash)
-        run: ./skein --version
-
-      - name: Launcher (cmd)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: skein.cmd --version
-
-      # SDL3 for the window example (M0.10).
+      # SDL3 for the window example (M0.10), and before the tests, which expand the SDL
+      # examples (M1.7).
       - name: Install SDL3 (macOS)
         if: runner.os == 'macOS'
         run: brew install sdl3
@@ -179,6 +169,17 @@ jobs:
           Expand-Archive $zip -DestinationPath $dir
           $dll = Get-ChildItem $dir -Recurse -Filter SDL3.dll | Select-Object -First 1
           $dll.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Run tests
+        run: make test
+
+      - name: Launcher (bash)
+        run: ./skein --version
+
+      - name: Launcher (cmd)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: skein.cmd --version
 
       - name: SDL3 window example
         if: runner.os != 'Linux'

@@ -395,10 +395,14 @@ were."
   ;; The exit criterion of M1.7: the same Core IR as Phase 0 for every .skn file.
   (let ((total 0))
     (dolist (path (repository-skn-files))
-      (multiple-value-bind (mismatches count) (compare-expanders-on-file path)
-        (incf total count)
-        (is (null mismatches) "~A:~%~{~A~^~%~}" (namestring path)
-            (subseq mismatches 0 (min 3 (length mismatches))))))
+      ;; A file whose foreign library is missing (SDL3, say) can't load its requires.
+      (handler-case
+          (multiple-value-bind (mismatches count) (compare-expanders-on-file path)
+            (incf total count)
+            (is (null mismatches) "~A:~%~{~A~^~%~}" (namestring path)
+                (subseq mismatches 0 (min 3 (length mismatches)))))
+        (skein.ffi:ffi-error (e)
+          (skip "~A: ~A" (file-namestring path) e))))
     (is (> total 1000) "only ~D top-level forms were compared" total)))
 
 ;;; Compile errors: the same message and location from both expanders
