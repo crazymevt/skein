@@ -5,9 +5,11 @@
 #ifndef SKEIN_H
 #define SKEIN_H
 
+#include <math.h>
 #include <setjmp.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 typedef uint64_t sk_value;
 typedef sk_value (*sk_code)(sk_value self, uint32_t argc, const sk_value *argv);
@@ -204,5 +206,93 @@ static inline sk_value sk_equal(sk_value a, sk_value b) {
     if (SK_BOTH_FIXNUMS(a, b)) return SK_BOOL(a == b);
     return sk_equal_slow(a, b);
 }
+
+/* Typed code (M1.8, D-056): unboxed f64, f32 and int64_t values, and direct access to
+ * primitive arrays (raw words [count, kind, hash], then the elements). */
+double sk_to_f64(sk_value v, const char *location);
+float sk_to_f32(sk_value v, const char *location);
+int64_t sk_to_fixnum(sk_value v, const char *location);
+sk_value sk_check_array(sk_value a, uint32_t kind, const char *location);
+sk_value sk_integer_from_i64(int64_t n);
+_Noreturn void sk_fixnum_range_error(int64_t n, const char *location);
+_Noreturn void sk_array_index_error(int64_t i, int64_t n);
+_Noreturn void sk_integer_overflow(void);
+_Noreturn void sk_division_by_zero(void);
+
+#define SK_FIXNUM_MIN (-(INT64_C(1) << 61))
+#define SK_FIXNUM_MAX ((INT64_C(1) << 61) - 1)
+
+static inline sk_value sk_from_i64(int64_t n) {
+    return (n >= SK_FIXNUM_MIN && n <= SK_FIXNUM_MAX) ? SK_FIXNUM(n) : sk_integer_from_i64(n);
+}
+static inline int64_t sk_fixnum_range(int64_t n, const char *location) {
+    if (n < SK_FIXNUM_MIN || n > SK_FIXNUM_MAX) sk_fixnum_range_error(n, location);
+    return n;
+}
+static inline sk_value sk_from_f32(float f) {
+    uint32_t bits;
+    memcpy(&bits, &f, sizeof bits);
+    return SK_F32_BITS(bits);
+}
+
+static inline int64_t sk_add_i64(int64_t a, int64_t b) {
+    int64_t r;
+    if (__builtin_add_overflow(a, b, &r)) sk_integer_overflow();
+    return r;
+}
+static inline int64_t sk_sub_i64(int64_t a, int64_t b) {
+    int64_t r;
+    if (__builtin_sub_overflow(a, b, &r)) sk_integer_overflow();
+    return r;
+}
+static inline int64_t sk_mul_i64(int64_t a, int64_t b) {
+    int64_t r;
+    if (__builtin_mul_overflow(a, b, &r)) sk_integer_overflow();
+    return r;
+}
+static inline double sk_div_f64(double a, double b) {
+    if (b == 0.0) sk_division_by_zero();
+    return a / b;
+}
+static inline float sk_div_f32(float a, float b) {
+    if (b == 0.0f) sk_division_by_zero();
+    return a / b;
+}
+
+static inline int64_t sk_prim_count(sk_value a) { return (int64_t)SK_PAYLOAD(a)[0]; }
+static inline unsigned char *sk_prim_data(sk_value a) {
+    return (unsigned char *)(SK_PAYLOAD(a) + 3);
+}
+static inline void sk_prim_check(sk_value a, int64_t i) {
+    if (__builtin_expect((uint64_t)i >= (uint64_t)sk_prim_count(a), 0))
+        sk_array_index_error(i, sk_prim_count(a));
+}
+
+static inline void sk_index_check(int64_t i, int64_t n) {
+    if (__builtin_expect((uint64_t)i >= (uint64_t)n, 0)) sk_array_index_error(i, n);
+}
+
+#define SK_ARRAY_ACCESS(suffix, ctype)                                                     \
+    static inline ctype sk_aget_##suffix##_unchecked(sk_value a, int64_t i) {              \
+        ctype x;                                                                           \
+        memcpy(&x, sk_prim_data(a) + sizeof(ctype) * (size_t)i, sizeof x);                 \
+        return x;                                                                          \
+    }                                                                                      \
+    static inline ctype sk_aget_##suffix(sk_value a, int64_t i) {                          \
+        sk_prim_check(a, i);                                                               \
+        return sk_aget_##suffix##_unchecked(a, i);                                         \
+    }                                                                                      \
+    static inline ctype sk_aset_##suffix##_unchecked(sk_value a, int64_t i, ctype x) {     \
+        memcpy(sk_prim_data(a) + sizeof(ctype) * (size_t)i, &x, sizeof x);                 \
+        return x;                                                                          \
+    }                                                                                      \
+    static inline ctype sk_aset_##suffix(sk_value a, int64_t i, ctype x) {                 \
+        sk_prim_check(a, i);                                                               \
+        return sk_aset_##suffix##_unchecked(a, i, x);                                      \
+    }
+SK_ARRAY_ACCESS(f64, double)
+SK_ARRAY_ACCESS(f32, float)
+SK_ARRAY_ACCESS(int, int64_t)
+#undef SK_ARRAY_ACCESS
 
 #endif

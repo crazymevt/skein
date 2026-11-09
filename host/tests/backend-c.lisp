@@ -379,6 +379,28 @@ referred in place of skein.core's."
                    (asdf:system-relative-pathname "skein"
                                                   "tests/fixtures/native-structs.skn"))))
 
+(test native-typed-code
+  ;; Step 5 of M1.8: declared types compile to unboxed C with Phase 0's results and errors.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein" "tests/fixtures/native-typed.skn"))))
+
+(test native-nbody
+  ;; The n-body benchmark, built natively (release), computes Phase 0's energies exactly.
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (let* ((main (asdf:system-relative-pathname "skein" "../bench/nbody/main.skn"))
+             (expected (with-output-to-string (*standard-output*)
+                         (skein.backend.cl:run-file main :args '("2000"))))
+             (exe (skein.backend.c:build-program
+                   main :profile :release
+                        :output (uiop:native-namestring
+                                 (merge-pathnames (format nil "nbody-native~:[~;.exe~]"
+                                                          (string= (skein.platform:os-name)
+                                                                   "windows"))
+                                                  (uiop:temporary-directory))))))
+        (is (string= expected (uiop:run-program (list (uiop:native-namestring exe) "2000")
+                                                :output :string))))))
+
 (test native-library-routing
   (native-matches "(ns libroute)
 (prn (update {:n 1} :n inc) (update [1 2] 1 * 10) (update {} :k (fn [_] :new)))

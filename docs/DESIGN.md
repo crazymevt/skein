@@ -498,6 +498,11 @@ Behavior at each safety level:
 - With `speed ≥ 2`, the compiler emits **efficiency notes** (as SBCL does) explaining why something couldn't be optimized: "generic `+`: argument type unknown", "boxing f32 to return", "allocation in loop". These notes are essential to the performance workflow and are surfaced in the REPL and the editor.
 - Phase 0 (D-036): local inference is SBCL's own; the backend turns Skein declarations into CL declarations and inlines the core arithmetic, comparison and array functions (`+`, `<`, `aget`, `aset!`, `count`, …) and value-struct constructors and accessors. Efficiency notes are SBCL's notes, placed at the Skein form they concern and given in Skein type names; they appear for code that itself declares `(optimize (speed 2))` or more, not for everything compiled with the release profile.
 - `(declaim (ftype (fn [arg-types] return-type) name...))` records a function's type; calls to it are known to return `return-type`.
+- Natively (Phase 1, D-056), the C backend keeps locals declared `f64`, `f32` or `fixnum` unboxed, as C `double`, `float` and `int64_t`. So are immutable `let` locals whose init has such a type, unless it is integer arithmetic.
+  - Arithmetic, comparisons, `sqrt`, and `aget`/`aset!`/`count` on `(array f64)`, `(array f32)` and `(array fixnum)` compile to C. Bounds and fixnum overflow are checked unless `(safety 0)`.
+  - Values are boxed where they reach code without a known type. Declared parameters and stores are checked as Phase 0 checks them.
+  - Integer arithmetic is unboxed only where a typed integer is required, so results past 64 bits still become bignums.
+  - Floating-point results are exactly Phase 0's: there are no fused multiply-adds.
 
 ### 12.5 Sealing (release builds)
 - `(seal class-name)` forbids new subclasses. `(seal-generic g)` forbids new methods. A `^:sealed` var cannot be redefined.

@@ -22,6 +22,7 @@ repl:
 bench:
 	$(SBCL_BATCH) --load bench/collections.lisp
 	$(SBCL_BATCH) --load bench/nbody/compare.lisp
+	$(SBCL_BATCH) --load bench/nbody/native.lisp
 
 # Regenerate lib/sdl3/raw.skn from the installed SDL3 headers (needs clang). Set
 # SDL3_INCLUDE to the directory that holds SDL3/SDL.h.

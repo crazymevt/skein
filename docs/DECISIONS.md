@@ -665,3 +665,29 @@ Date: 2026-11-09 · Status: Accepted
   - `examples/particles.skn` runs natively: seven of the eight examples now pass.
   - n-body runs natively with Phase 0's exact energies, still boxed; the rest of step 5 compiles declared code unboxed.
   - A fixture of structs, records, nested value structs, every array kind, views, `update!` and `defsoa` prints the same as Phase 0. The differences are noted in the ROADMAP: char arrays, and the error type for an out-of-bounds index.
+
+## D-056: Declared types compiled to unboxed C
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.8's exit criterion includes n-body within 1.5× of C. Natively every number was boxed: 500k steps took 1.95s, about 120× slower than C. Phase 0 gets its speed from SBCL's inference over declared types (D-036).
+- **Decision:** the C backend gets a typed layer (`host/src/backend-c/typed.lisp`).
+  - **Static types:**
+    - `f64`, `f32` and `int` values are held unboxed as C `double`, `float` and `int64_t`. A `:bool` is a C condition.
+    - `(array f64)`, `(array f32)` and `(array fixnum)` are known primitive arrays, still held as values.
+  - **Typed locals:** a pass over each function before it is emitted gives a static type to:
+    - declared locals (`^type` or `declare`);
+    - immutable `let` locals whose init has a float type, or an integer type that can't overflow (a literal, a local, `count`).
+  - **Primitives:** with typed operands, `+ - * /`, `inc`, `dec`, the comparisons, `zero?`, `pos?`, `neg?`, `not`, `sqrt` and `aget`/`aset!`/`count` on typed arrays compile to C.
+    - Numbers convert by contagion, as in Phase 0: integer `/` gives f64, f32 with f64 gives f64.
+    - Bounds, division by zero and int64 overflow are checked unless `(safety 0)`. A typed array's length is read once, when it is bound.
+  - **Boxing and checks:**
+    - A value is boxed only where it reaches code without a known type.
+    - Declared parameters are checked on entry, and stores to declared locals and `the` are checked, as Phase 0 checks at safety 1 and above. A declared `fixnum` checks the fixnum range.
+  - **Integers past 64 bits:** integer arithmetic is unboxed only where a typed integer is required (a fixnum local, an index, a comparison). Elsewhere its result may be a bignum, so it stays on the boxed path.
+  - **Exact floats:** programs compile with `-ffp-contract=off`, so C fuses no multiply-adds and floating-point results are bit for bit Phase 0's.
+  - `bench/nbody/nbody.c` is the C reference: the same algorithm, layout and operation order. `make bench` compares it with the native build of `nbody.skn`.
+- **Alternatives:**
+  - Full type inference across a function, with types flowing through `if` and loop locals without declarations. More speed is possible, but each inferred type must be proven safe against Phase 0's semantics (bignums, contagion, declared checks), and it isn't needed for the target.
+  - Keeping the raw data pointers of typed arrays in locals: the GC moves young objects, and stack pinning would have to cover derived pointers.
+- **Consequences:**
+  - n-body runs at 1.35× of C (0.249s against 0.184s for 5M steps), with Phase 0's exact energies.
+  - A fixture of typed parameters, locals, contagion, typed arrays, closures over typed locals, `set!`, `the`, errors, `(safety 0)` and bignum results prints the same as Phase 0, in dev and release builds.

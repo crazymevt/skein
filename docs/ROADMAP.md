@@ -197,7 +197,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   2. ✅ Seqs: `seq`/`first`/`rest` over every collection, lazy seqs, the seq library, `reduced` and transducers.
   3. ✅ The rest of skein.core's functions, and multiple values.
   4. ✅ The object system: classes, instances, generic functions with dispatch caches.
-  5. Value structs, typed arrays and `defsoa`; declarations compiled to unboxed code (n-body).
+  5. ✅ Value structs, typed arrays and `defsoa`; declarations compiled to unboxed code (n-body).
   6. Concurrency on OS threads: nurseries, tasks, futures, channels, `pmap`, `skein.jobs`.
 
 **Exit:** every example with an `.expected` file passes natively on all three platforms; the n-body benchmark is within 1.5× of C.
@@ -275,6 +275,10 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
   - Macros run at compile time: skein.core's are compiled into the compiler, and a program's own run in an interpreter (D-050).
   - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native in M1.8, before self-hosting (D-050).
+- Native typed code (D-056):
+  - Only `f64`, `f32`, `fixnum` and `(array f64/f32/fixnum)` are unboxed. Other declared types (`i32`, `u8`, classes, structs) are neither unboxed nor checked natively yet.
+  - Inference is per function and simple: declared locals, plus immutable `let` locals whose init has a float type, or an integer type that can't overflow.
+  - n-body is 1.35× of C. The rest is mostly aliasing: C knows its global arrays are distinct.
 - Native structs and arrays (D-055): struct values are boxed natively; DESIGN §9.1's inline storage holds in arrays (one column per field), not yet in locals or other structs. Phase 0's char arrays are CL strings, so they print and behave as strings; natively they are arrays. An out-of-bounds index on a primitive array is an `index-error` natively, CL's own error in Phase 0.
 - Native object system (D-054):
   - Redefining a class affects new instances only; existing ones keep their layout, and `update-instance-for-redefined-class` isn't called.

@@ -1,0 +1,99 @@
+(ns native-typed)
+
+;; Declared types natively (M1.8 step 5): typed locals and parameters compile to unboxed
+;; C, and must give exactly what Phase 0 gives, errors included. The C backend tests
+;; check that this prints the same natively as with `skein run`.
+
+;; (An out-of-bounds index is CL's own error in Phase 0, an index-error natively, so both
+;; count as :error here.)
+(defn kind [thunk] (try (thunk) (catch arithmetic-error e :arithmetic-error)
+                        (catch error e :error)))
+
+;; Arithmetic on declared and inferred types, with contagion
+(defn f64-math ^f64 [^f64 a ^f64 b]
+  (let [s (+ a b) d (- a b) p (* a b 2) q (/ a b) n (- a)]
+    (+ s d p q n (sqrt (* a a)))))
+(defn mixed [^f64 a ^fixnum i ^f32 f]
+  [(+ a i) (* i 2.5) (+ f i) (+ f a) (/ i 4) (/ f 2) (- i) (inc i) (dec a) (sqrt i) (sqrt f)])
+(defn compare-all [^f64 a ^fixnum i]
+  [(< a i) (> a i) (<= i i 3) (>= a 1.0 0.5) (== i 3) (== a 2.0) (zero? (- i 3)) (pos? a)
+   (neg? (- a 10.0)) (not (< a i))])
+(prn (f64-math 3.0 1.5) (mixed 2.5 3 1.5f) (compare-all 2.0 3))
+(prn (f64-math 1.0 3.0) (mixed -0.0 -7 -2.0f) (compare-all 4.0 3))
+
+;; Loops with typed locals; results used boxed and unboxed
+(defn sum-to ^f64 [^fixnum n]
+  (loop [^fixnum i 0 ^f64 acc 0.0]
+    (if (< i n) (recur (inc i) (+ acc (* i 0.5))) acc)))
+(defn count-up [n]
+  (let [^fixnum limit n]
+    (loop [^fixnum i 0 out []]
+      (if (< i limit) (recur (inc i) (conj out (* i i))) out))))
+(prn (sum-to 10) (sum-to 0) (count-up 5) (let [x (sum-to 4)] [x (+ x 1) (str x)]))
+
+;; Typed arrays
+(defn fill! [xs ^f64 v]
+  (declare (type (array f64) xs))
+  (dotimes [i (count xs)] (aset! xs i (+ v i)))
+  xs)
+(defn total ^f64 [xs]
+  (declare (type (array f64) xs) (optimize (speed 3) (safety 1)))
+  (loop [^fixnum i 0 ^f64 acc 0.0]
+    (if (< i (count xs)) (recur (inc i) (+ acc (aget xs i))) acc)))
+(defn scale-ints! [xs ^fixnum k]
+  (declare (type (array fixnum) xs))
+  (loop [^fixnum i 0] (when (< i (count xs)) (aset! xs i (* (aget xs i) k)) (recur (inc i))))
+  xs)
+(defn f32-sum ^f32 [xs]
+  (declare (type (array f32) xs))
+  (loop [^fixnum i 0 ^f32 acc 0.0f]
+    (if (< i (count xs)) (recur (inc i) (+ acc (aget xs i))) acc)))
+(def a (fill! (make-array f64 4) 0.25))
+(def ints (make-array fixnum 3))
+(dotimes [i 3] (aset! ints i (inc i)))
+(def fs (make-array f32 3))
+(dotimes [i 3] (aset! fs i (* 1.5f i)))
+(prn a (total a) (scale-ints! ints 10) (f32-sum fs) (total (make-array f64 0)))
+
+;; Typed values in if, let, closures, set! and the
+(defn pick ^f64 [^f64 x] (if (> x 0.0) (* x 2.0) (- x)))
+(defn capture [^f64 x] (let [^fixnum n 3] (fn [y] [x n (+ x y)])))
+(defn mutate [^f64 x]
+  (let [^:mutable ^f64 m x]
+    (set! m (* m 3.0))
+    (set! m (+ m 1.0))
+    m))
+(defn with-the [v] (+ (the f64 v) 1.0))
+(prn (pick 2.0) (pick -3.5) ((capture 1.5) 2) (mutate 2.0) (with-the 0.5))
+
+;; Errors: declared types, bounds, division by zero, fixnum range
+(prn (kind (fn [] (f64-math 1 2.0))) (kind (fn [] (mixed 1.0 2.5 1.0f)))
+     (kind (fn [] (mixed 1.0 2 1.0))) (kind (fn [] (total [1.0])))
+     (kind (fn [] (total (make-array f32 2)))) (kind (fn [] (f64-math 1.0 0.0)))
+     (kind (fn [] (let [^f64 x 1] x))) (kind (fn [] (with-the 1))))
+(defn oob [xs ^fixnum i]
+  (declare (type (array f64) xs))
+  (aget xs i))
+(defn oob-set [xs ^fixnum i]
+  (declare (type (array f64) xs))
+  (aset! xs i 1.0))
+(prn (kind (fn [] (oob a 4))) (kind (fn [] (oob a -1))) (kind (fn [] (oob-set a 9))) (oob a 3))
+(defn int-div [^fixnum a ^fixnum b] (/ a b))
+(prn (int-div 7 2) (kind (fn [] (int-div 1 0))))
+(defn grow [^fixnum i] (* i i))
+(defn wide [^fixnum i] (let [^fixnum j (* i 1000)] j))
+(prn (grow 3037000499) (kind (fn [] (wide 2305843009213693))))
+
+;; safety 0 removes checks; with valid input the results are the same
+(defn fast-total ^f64 [xs]
+  (declare (type (array f64) xs) (optimize (speed 3) (safety 0)))
+  (loop [^fixnum i 0 ^f64 acc 0.0]
+    (if (< i (count xs)) (recur (inc i) (+ acc (aget xs i))) acc)))
+(prn (fast-total a))
+
+;; Integer arithmetic past int64 becomes a bignum, as in Phase 0, unless it is stored in a
+;; fixnum local (regression: literal and inferred arithmetic overflowed in typed code).
+(defn cube [^fixnum i] (let [x (* i i i)] x))
+(prn (cube 3037000499) (* 99999999999 99999999999 99999999999) (+ 9223372036854775807 1)
+     (let [^fixnum i 4611686018427387 j (* i 1000000)] j)
+     (kind (fn [] (let [^fixnum k (cube 3037000499)] k))))

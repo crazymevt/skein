@@ -53,7 +53,11 @@ yet. The message names the milestone that adds it."))
   (blocks (make-hash-table :test 'eq))
   ;; True if the function calls setjmp (it has a block* or unwind-protect), so its locals
   ;; are declared volatile: a longjmp back into it must see their current values.
-  (volatile nil))
+  (volatile nil)
+  ;; Local -> static type (typed.lisp) for locals held unboxed or known to be arrays.
+  (types (make-hash-table :test 'eq))
+  ;; Typed array local -> the C variable holding its length.
+  (array-counts (make-hash-table :test 'eq)))
 
 (defvar *ctx*)
 
@@ -222,15 +226,17 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
   (etypecase node
     (const-node (single-value (constant-expr (const-node-value node) node)))
     (local-ref-node
-     (single-value
-      (or (gethash (local-ref-node-local node) (ctx-locals *ctx*))
-          (unsupported node "internal error: no C variable for the local ~A"
-                       (local-name (local-ref-node-local node))))))
+     (let ((local (local-ref-node-local node)))
+       (single-value
+        (box (or (gethash local (ctx-locals *ctx*))
+                 (unsupported node "internal error: no C variable for the local ~A"
+                              (local-name local)))
+             (local-static-type local)))))
     (var-ref-node (single-value (emit-var-ref node)))
     (if-node (emit-if node))
     (do-node (let ((value "SK_NIL") (forms (do-node-forms node)))
                (loop for (f . more) on forms
-                     do (setf value (if more (emit f) (emit-tail f)))
+                     do (setf value (if more (emit-as f :void) (emit-tail f)))
                         (when (eq value :recur) (return)))
                value))
     (def-node
@@ -245,18 +251,26 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
      (emit-tail (let-node-body node)))
     (loop-node (emit-loop node))
     (recur-node (emit-recur node))
-    (call-node (emit-call node))
-    (the-node (emit-tail (the-node-expr node)))
-    (locally-node (emit-tail (locally-node-body node)))
+    (call-node (let ((type (node-type node)))
+                 ;; A primitive on typed values is computed unboxed, then boxed.
+                 (if (and (scalar-type-p type) (not (overflowing-p node)))
+                     (single-value (box (emit-typed node type) type))
+                     (emit-call node))))
+    (the-node (let ((type (declared-type (the-node-type node))))
+                (if (scalar-type-p type)
+                    (single-value (box (emit-as (the-node-expr node) type :strict t) type))
+                    (emit-tail (the-node-expr node)))))
+    (locally-node (let ((*safety* (policy-safety (locally-node-policy node))))
+                    (emit-tail (locally-node-body node))))
     (letfn-node (emit-letfn node))
     (set-node
      (let ((local (set-node-local node)))
        (when (gethash local (ctx-captured *ctx*))
          (unsupported node "a closure can't set! the ^:mutable local ~A of an enclosing ~
                             function yet" (local-name local)))
-       (let ((v (emit (set-node-value node))))
+       (let ((v (local-store local (set-node-value node))))
          (stmt "~A = ~A;" (gethash local (ctx-locals *ctx*)) v)
-         (single-value v))))
+         (single-value (box v (local-static-type local))))))
     (block-node (emit-block node))
     (return-from-node (emit-return-from node))
     (unwind-protect-node (emit-unwind-protect node))
@@ -362,18 +376,20 @@ constant), the library's var, or a compile error."
                 (c-string-literal (skein.runtime:var-qualified-name var))
                 (c-string-literal (location-string node)))))
 
-(defun emit-if (node)
-  (let ((test (emit (if-node-test node)))
+(defun emit-if (node &optional type)
+  "if; with TYPE, its value is computed as that static type (typed.lisp)."
+  (let ((test (emit-as (if-node-test node) :bool))
         (result (fresh "t")))
-    (stmt "~A ~A = SK_NIL;" (value-type) result)
-    (let ((then-recur nil) (else-recur nil))
-      (with-block ("if (SK_TRUTHY(~A)) {" test)
-        (let ((v (emit-tail (if-node-then node))))
-          (if (eq v :recur) (setf then-recur t) (stmt "~A = ~A;" result v))))
-      (with-block ("else {")
-        (let ((v (emit-tail (if-node-else node))))
-          (if (eq v :recur) (setf else-recur t) (stmt "~A = ~A;" result v))))
-      (if (and then-recur else-recur) :recur result))))
+    (stmt "~A ~A~:[ = SK_NIL~;~];" (decl-type type) result type)
+    (flet ((branch (n) (if type (emit-as n type) (emit-tail n))))
+      (let ((then-recur nil) (else-recur nil))
+        (with-block ("if (~A) {" test)
+          (let ((v (branch (if-node-then node))))
+            (if (eq v :recur) (setf then-recur t) (stmt "~A = ~A;" result v))))
+        (with-block ("else {")
+          (let ((v (branch (if-node-else node))))
+            (if (eq v :recur) (setf else-recur t) (stmt "~A = ~A;" result v))))
+        (if (and then-recur else-recur) :recur result)))))
 
 (defun bind-local (local)
   "Declare a C variable for LOCAL and return its name."
@@ -390,8 +406,11 @@ constant), the library's var, or a compile error."
 
 (defun emit-let (bindings)
   (loop for (local . init) in bindings
-        do (let ((value (emit init)))
-             (stmt "~A ~A = ~A;" (value-type) (bind-local local) value))))
+        do (let ((value (local-store local init)))
+             (when (eq value :recur) (setf value "0"))
+             (stmt "~A ~A = ~A;" (decl-type (local-static-type local)) (bind-local local)
+                   value)
+             (note-array-count local (gethash local (ctx-locals *ctx*))))))
 
 ;;; loop* and recur. A recur target is a label plus the C names of its locals.
 
@@ -399,31 +418,41 @@ constant), the library's var, or a compile error."
   "C names of the frames (blocks, handler and restart clusters, unwind-protects) the code
 being emitted is inside, in the current function, innermost first.")
 
-(defstruct (target (:constructor make-target (label names &optional (frames *frames*))))
-  label names frames)
+(defstruct (target (:constructor make-target (label names locals &optional (frames *frames*))))
+  label names locals frames)
 
 (defvar *targets* '()
   "Alist of loop-node or arity -> target, innermost first.")
 
-(defun emit-loop (node)
+(defun emit-loop (node &optional type)
+  "loop*; with TYPE, its value is computed as that static type (typed.lisp)."
   (emit-let (loop-node-bindings node))
   (let ((label (fresh "loop"))
-        (result (fresh "t")))
-    (stmt "~A ~A = SK_NIL;" (value-type) result)
+        (result (fresh "t"))
+        (locals (mapcar #'car (loop-node-bindings node))))
+    (stmt "~A ~A~:[ = SK_NIL~;~];" (decl-type type) result type)
     (stmt "~A: ;" label)
     (stmt "SK_POLL();")
-    (let* ((*targets* (acons node (make-target label (mapcar (lambda (b) (gethash (car b) (ctx-locals *ctx*)))
-                                                             (loop-node-bindings node)))
+    (let* ((*targets* (acons node (make-target label
+                                               (mapcar (lambda (l) (gethash l (ctx-locals *ctx*)))
+                                                       locals)
+                                               locals)
                              *targets*))
-           (v (emit-tail (loop-node-body node))))
+           (v (if type (emit-as (loop-node-body node) type) (emit-tail (loop-node-body node)))))
       (unless (eq v :recur) (stmt "~A = ~A;" result v)))
     result))
 
 (defun emit-recur (node)
   (let* ((target (or (cdr (assoc (recur-node-target node) *targets*))
                      (unsupported node "recur outside its loop or function")))
-         (values (mapcar (lambda (a) (let ((v (emit a))) (if (eq v :recur) "SK_NIL" (temp v))))
-                         (recur-node-args node)))
+         ;; Each value is computed first, as the local it goes to stores it.
+         (values (loop for a in (recur-node-args node)
+                       for l in (target-locals target)
+                       collect (let ((v (local-store l a))
+                                     (type (local-static-type l)))
+                                 (if (eq v :recur)
+                                     (if type "0" "SK_NIL")
+                                     (typed-temp v type)))))
          ;; recur can leave blocks (block* passes tail position through): pop them.
          (left (ldiff *frames* (target-frames target))))
     (when left
@@ -501,6 +530,8 @@ locals it captured. A function that captures nothing is made once, at startup."
           (*frames* '()))
       (setf (ctx-volatile *ctx*)
             (some (lambda (a) (uses-setjmp-p (arity-body a))) (fn-node-arities node)))
+      (note-parameter-types (fn-node-arities node))
+      (dolist (a (fn-node-arities node)) (infer-locals (arity-body a)))
       (when (fn-node-self node)
         (setf (gethash (fn-node-self node) (ctx-locals *ctx*)) "self"))
       (loop for l in captured
@@ -526,12 +557,13 @@ locals it captured. A function that captures nothing is made once, at startup."
         (values (temp (format nil "sk_closure(~A, ~A, ~D, (const sk_value[]){~{~A~^, ~}})"
                               code (c-string-literal display) (length captured)
                               (mapcar (lambda (l)
-                                        (or (gethash l (ctx-locals *ctx*))
-                                            (unsupported node "internal error: ~A is not in ~
-                                                               scope"
-                                                         (if (local-p l)
-                                                             (local-name l)
-                                                             (block-tag-name l)))))
+                                        (box (or (gethash l (ctx-locals *ctx*))
+                                                 (unsupported node "internal error: ~A is not in ~
+                                                                    scope"
+                                                              (if (local-p l)
+                                                                  (local-name l)
+                                                                  (block-tag-name l))))
+                                             (and (local-p l) (local-static-type l))))
                                       captured)))
                 captured))))
 
@@ -558,17 +590,21 @@ so the functions can call each other."
   (let ((n (length (arity-params arity)))
         (rest (arity-rest arity)))
     (with-block ((if rest "if (argc >= ~D) {" "if (argc == ~D) {") n)
+      ;; A parameter with a declared type is checked and unboxed on entry.
       (loop for p in (arity-params arity)
             for i from 0
-            do (stmt "~A ~A = argv[~D];" (value-type) (bind-local p) i))
+            do (let ((type (local-static-type p)))
+                 (stmt "~A ~A = ~A;" (decl-type type) (bind-local p)
+                       (unbox (format nil "argv[~D]" i) type arity))
+                 (note-array-count p (gethash p (ctx-locals *ctx*)))))
       (when rest
         (stmt "~A ~A = sk_rest_list(argc, argv, ~D);" (value-type) (bind-local rest) n))
       (let* ((label (fresh "top"))
-             (names (mapcar (lambda (p) (gethash p (ctx-locals *ctx*)))
-                            (append (arity-params arity) (and rest (list rest))))))
+             (locals (append (arity-params arity) (and rest (list rest))))
+             (names (mapcar (lambda (p) (gethash p (ctx-locals *ctx*))) locals)))
         (stmt "~A: ;" label)
         (stmt "SK_POLL();")
-        (let* ((*targets* (acons arity (make-target label names) *targets*))
+        (let* ((*targets* (acons arity (make-target label names locals) *targets*))
                ;; A function's values are those of its body.
                (v (let ((*mv* t)) (emit (arity-body arity)))))
           (unless (eq v :recur) (stmt "return ~A;" v)))))))
@@ -979,6 +1015,7 @@ through their function objects).")
         (*targets* '())
         (*frames* '()))
     (setf (ctx-volatile *ctx*) (uses-setjmp-p node))
+    (infer-locals node)
     (with-block ("{")
       (let ((v (emit node)))
         (unless (eq v :recur) (stmt "(void)~A;" v))))))
@@ -989,6 +1026,8 @@ through their function objects).")
     (format out "#include \"skein.h\"~%#include <string.h>~%~%")
     (format out "static double sk_bits_f64(uint64_t bits) {~%  double d;~%  ~
                  memcpy(&d, &bits, sizeof d);~%  return d;~%}~%~%")
+    (format out "static float sk_bits_f32(uint32_t bits) {~%  float f;~%  ~
+                 memcpy(&f, &bits, sizeof f);~%  return f;~%}~%~%")
     ;; Every global value lives in one array, registered with the garbage collector as
     ;; roots, so it keeps its objects alive and is updated when they move.
     (let ((globals (append (mapcar #'car (unit-var-decls unit))

@@ -45,3 +45,13 @@ Recorded 2026-11-09 on Apple M4, SBCL 2.6.10, macOS:
 | ratio (target: at most 2.0) | 1.11 |
 
 What made the difference: inlined arithmetic, comparisons and array access (D-036), calls that allocate no argument lists, and inlining `count` on arrays so SBCL knows loop bounds are fixnums. Before the last change the ratio was 2.5×.
+
+## n-body natively (M1.8)
+
+Recorded 2026-11-09 on Apple M4, Zig 0.17.1, macOS, by `bench/nbody/native.lisp`: `nbody.skn` built natively with the release profile, and the same algorithm in C (`nbody.c`, `zig cc -O2`). Both compute the same energies. M1.8's exit criterion is a ratio of at most 1.5.
+
+| n-body, 5,000,000 steps | Best of 5 (s) |
+|---|---|
+| C (zig cc -O2) | 0.184 |
+| Skein, native release build | 0.249 |
+| Ratio | 1.35x |

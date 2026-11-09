@@ -1,0 +1,8 @@
+(ns main
+  "Runs nbody.skn natively for the step count on the command line, printing the energy
+before and after (bench/nbody/native.sh compares it with nbody.c)."
+  (:require [nbody]))
+
+(defn -main [& args]
+  (let [steps (parse-long (or (first args) "1000"))]
+    (prn (nbody/run steps))))

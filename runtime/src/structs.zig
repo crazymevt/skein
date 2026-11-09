@@ -819,3 +819,46 @@ export fn sk_soa_maker(def: Value) Value {
 export fn sk_soa_field(def: Value, i: u32) Value {
     return soaFieldFn(def, i);
 }
+
+// Typed code (D-056): checks where values enter typed C code, and its errors.
+
+export fn sk_to_f64(v: Value, location: [*:0]const u8) f64 {
+    if (!v.isObjectOf(.f64)) rt.raise(.type_error, "{s} is not a f64 at {s}", .{ readable(v), std.mem.span(location) });
+    return num.unboxF64(v);
+}
+
+export fn sk_to_f32(v: Value, location: [*:0]const u8) f32 {
+    if (!v.isF32()) rt.raise(.type_error, "{s} is not a f32 at {s}", .{ readable(v), std.mem.span(location) });
+    return v.toF32();
+}
+
+export fn sk_to_fixnum(v: Value, location: [*:0]const u8) i64 {
+    if (!v.isFixnum()) rt.raise(.type_error, "{s} is not a fixnum at {s}", .{ readable(v), std.mem.span(location) });
+    return v.toFixnum();
+}
+
+export fn sk_check_array(a: Value, kind: u32, location: [*:0]const u8) Value {
+    if (!(a.isObjectOf(.prim_array) and @intFromEnum(primKind(a)) == kind))
+        rt.raise(.type_error, "{s} is not an (array {s}) at {s}", .{ readable(a), @tagName(@as(Kind, @enumFromInt(@as(u8, @intCast(kind))))), std.mem.span(location) });
+    return a;
+}
+
+export fn sk_integer_from_i64(n: i64) Value {
+    return num.fromI128(n);
+}
+
+export fn sk_fixnum_range_error(n: i64, location: [*:0]const u8) noreturn {
+    rt.raise(.type_error, "{d} is not a fixnum at {s}", .{ n, std.mem.span(location) });
+}
+
+export fn sk_array_index_error(i: i64, n: i64) noreturn {
+    rt.raise(.index_error, "index {d} is out of bounds for an array of {d}", .{ i, n });
+}
+
+export fn sk_integer_overflow() noreturn {
+    rt.raise(.arithmetic_error, "integer overflow in typed arithmetic", .{});
+}
+
+export fn sk_division_by_zero() noreturn {
+    rt.raise(.arithmetic_error, "division by zero", .{});
+}

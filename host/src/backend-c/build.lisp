@@ -152,11 +152,13 @@ the C source is left next to the executable."
     (ensure-directories-exist c-file)
     (with-open-file (s c-file :direction :output :if-exists :supersede :external-format :utf-8)
       (write-string c-source s))
-    (run-tool (append (list (zig-program) "cc" "-std=c11"
+    ;; No fused multiply-adds: floating-point results must be exactly Phase 0's.
+    (run-tool (append (list (zig-program) "cc" "-std=c11" "-ffp-contract=off"
                             (if (eq profile :release) "-O2" "-O1")
                             "-I" (uiop:native-namestring (merge-pathnames "include/" prefix)))
                       (when target (list "-target" target))
                       (list (uiop:native-namestring c-file)
                             (uiop:native-namestring (runtime-library prefix))
-                            "-o" (uiop:native-namestring (merge-pathnames output)))))
+                            "-o" (uiop:native-namestring (merge-pathnames output)))
+                      (unless windows (list "-lm"))))
     (merge-pathnames output)))

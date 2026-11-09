@@ -64,6 +64,7 @@
                (:file "backend-cl/driver")
                (:file "backend-c/package")
                (:file "backend-c/emit")
+               (:file "backend-c/typed")
                (:file "backend-c/build")
                (:file "repl/package")
                (:file "repl/repl")
