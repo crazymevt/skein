@@ -14,6 +14,7 @@ const func = @import("func.zig");
 const print = @import("print.zig");
 const gc = @import("gc.zig");
 const platform = @import("platform");
+const cond = @import("cond.zig");
 const Value = @import("value.zig").Value;
 
 const Args = []const Value;
@@ -25,11 +26,11 @@ fn typeName(v: Value) []const u8 {
 }
 
 fn badArg(comptime name: []const u8, v: Value) noreturn {
-    rt.fatal(name ++ " can't use {s}", .{typeName(v)});
+    rt.raise(.type_error, name ++ " can't use {s}", .{typeName(v)});
 }
 
 fn index(comptime name: []const u8, v: Value) usize {
-    if (!v.isFixnum() or v.toFixnum() < 0) rt.fatal(name ++ " needs a non-negative integer index, not {s}", .{typeName(v)});
+    if (!v.isFixnum() or v.toFixnum() < 0) rt.raise(.type_error, name ++ " needs a non-negative integer index, not {s}", .{typeName(v)});
     return @intCast(v.toFixnum());
 }
 
@@ -68,7 +69,7 @@ fn conj1(c: Value, x: Value) Value {
             coll.mapEach(x, &ctx, Into.entry);
             return ctx.to;
         }
-        rt.fatal("conj on a map needs a [key value] vector or a map, not {s}", .{typeName(x)});
+        rt.raise(.type_error, "conj on a map needs a [key value] vector or a map, not {s}", .{typeName(x)});
     }
     badArg("conj", c);
 }
@@ -122,6 +123,9 @@ fn get(c: Value, k: Value, not_found: Value) Value {
         return Value.fromChar(string.charAt(c, @intCast(k.toFixnum())));
     }
     if (c.isObjectOf(.transient_map)) return coll.tmapGet(c, k) orelse not_found;
+    // A condition's slots, by keyword: (:path c) (DESIGN §10).
+    if (cond.isCondition(c) and (names.isKeyword(k) or names.isSymbol(k)))
+        return cond.slotValue(c, names.nameOf(k)) orelse not_found;
     if (c.isObjectOf(.transient_vector)) {
         if (!k.isFixnum() or k.toFixnum() < 0) return not_found;
         return coll.tvectorNth(c, @intCast(k.toFixnum())) orelse not_found;
@@ -205,7 +209,7 @@ fn rest(c: Value) Value {
 }
 
 fn unsupportedSeq(comptime name: []const u8, c: Value) noreturn {
-    rt.fatal(name ++ " of {s} needs seqs, which the native runtime gets in M1.9", .{typeName(c)});
+    rt.raise(.unsupported_operation_error, name ++ " of {s} needs seqs, which the native runtime gets in M1.9", .{typeName(c)});
 }
 
 // ---------------------------------------------------------------------------------------
@@ -352,12 +356,21 @@ fn applyFn(a: Args) Value {
     const fixed = a[1 .. a.len - 1];
     var buf: [256]Value = undefined;
     const n = if (last == Value.nil) 0 else count(last);
-    if (fixed.len + n > buf.len) rt.fatal("apply with more than {d} arguments is not supported natively yet", .{buf.len});
+    if (fixed.len + n > buf.len) rt.raise(.unsupported_operation_error, "apply with more than {d} arguments is not supported natively yet", .{buf.len});
     @memcpy(buf[0..fixed.len], fixed);
     var ctx: Collect = .{ .buf = buf[fixed.len..] };
     each(last, &ctx, Collect.add);
     return func.call(a[0], @intCast(fixed.len + n), &buf);
 }
+
+const MapInto = struct {
+    f: Value,
+    to: Value,
+    fn add(c: *MapInto, x: Value) void {
+        const args = [_]Value{x};
+        c.to = coll.vectorConj(c.to, func.call(c.f, 1, &args));
+    }
+};
 
 fn intoFn(a: Args) Value {
     var ctx: IntoEach = .{ .to = if (a[0] == Value.nil) coll.empty_list else a[0] };
@@ -416,7 +429,7 @@ fn swapFn(a: Args) Value {
     const at = a[0];
     if (!at.isObjectOf(.atom)) badArg("swap!", at);
     var buf: [16]Value = undefined;
-    if (a.len - 1 > buf.len) rt.fatal("swap! with that many arguments is not supported natively yet", .{});
+    if (a.len - 1 > buf.len) rt.raise(.unsupported_operation_error, "swap! with that many arguments is not supported natively yet", .{});
     while (true) {
         const old = coll.atomGet(at);
         buf[0] = old;
@@ -458,26 +471,26 @@ fn remFn(a: Args) Value {
 
 fn quotFn(a: Args) Value {
     if (a[0].isFixnum() and a[1].isFixnum()) {
-        if (a[1].toFixnum() == 0) rt.fatal("division by zero", .{});
+        if (a[1].toFixnum() == 0) rt.raise(.arithmetic_error, "division by zero", .{});
         return int(@divTrunc(a[0].toFixnum(), a[1].toFixnum()));
     }
     const x = num.toF64(a[0]);
     const y = num.toF64(a[1]);
-    if (y == 0) rt.fatal("division by zero", .{});
+    if (y == 0) rt.raise(.arithmetic_error, "division by zero", .{});
     return num.boxF64(@trunc(x / y));
 }
 
 fn intDivision(comptime name: []const u8, x: Value, y: Value, comptime mode: enum { floor, trunc }) Value {
     if (x.isFixnum() and y.isFixnum()) {
         const b = y.toFixnum();
-        if (b == 0) rt.fatal("division by zero", .{});
+        if (b == 0) rt.raise(.arithmetic_error, "division by zero", .{});
         return int(if (mode == .floor) @mod(x.toFixnum(), b) else @rem(x.toFixnum(), b));
     }
     if (!num.isNumber(x)) num.notANumber(name, x);
     if (!num.isNumber(y)) num.notANumber(name, y);
     const fx = num.toF64(x);
     const fy = num.toF64(y);
-    if (fy == 0) rt.fatal("division by zero", .{});
+    if (fy == 0) rt.raise(.arithmetic_error, "division by zero", .{});
     return num.boxF64(if (mode == .floor) @mod(fx, fy) else @rem(fx, fy));
 }
 
@@ -603,7 +616,7 @@ const table = [_]Entry{
     }.f),
     e("hash-map", 0, null, struct {
         fn f(a: Args) Value {
-            if (a.len % 2 != 0) rt.fatal("hash-map needs keys and values in pairs", .{});
+            if (a.len % 2 != 0) rt.raise(.@"error", "hash-map needs keys and values in pairs", .{});
             return coll.mapOf(a);
         }
     }.f),
@@ -639,7 +652,7 @@ const table = [_]Entry{
     }.f),
     e("assoc", 3, null, struct {
         fn f(a: Args) Value {
-            if ((a.len - 1) % 2 != 0) rt.fatal("assoc needs keys and values in pairs", .{});
+            if ((a.len - 1) % 2 != 0) rt.raise(.@"error", "assoc needs keys and values in pairs", .{});
             var c = a[0];
             var i: usize = 1;
             while (i < a.len) : (i += 2) c = assoc1(c, a[i], a[i + 1]);
@@ -729,7 +742,7 @@ const table = [_]Entry{
             if (coll.isVector(c)) return coll.vectorPop(c);
             if (c.isObjectOf(.list)) return coll.get(c, 1);
             if (c == Value.nil) return Value.nil;
-            if (c.isObjectOf(.empty_list)) rt.fatal("cannot pop an empty list", .{});
+            if (c.isObjectOf(.empty_list)) rt.raise(.@"error", "cannot pop an empty list", .{});
             badArg("pop", c);
         }
     }.f),
@@ -747,7 +760,7 @@ const table = [_]Entry{
             const n = string.count(s);
             const start = index("subs", a[1]);
             const end = if (a.len == 3) index("subs", a[2]) else n;
-            if (start > end or end > n) rt.fatal("subs range {d} to {d} is outside a string of {d} characters", .{ start, end, n });
+            if (start > end or end > n) rt.raise(.index_error, "subs range {d} to {d} is outside a string of {d} characters", .{ start, end, n });
             return string.substring(s, start, end);
         }
     }.f),
@@ -774,7 +787,7 @@ const table = [_]Entry{
     }.f),
     e("deref", 1, 1, struct {
         fn f(a: Args) Value {
-            if (!a[0].isObjectOf(.atom)) rt.fatal("deref (@) needs an atom, not {s}", .{typeName(a[0])});
+            if (!a[0].isObjectOf(.atom)) rt.raise(.type_error, "deref (@) needs an atom, not {s}", .{typeName(a[0])});
             return coll.atomGet(a[0]);
         }
     }.f),
@@ -801,7 +814,7 @@ const table = [_]Entry{
             if (t.isObjectOf(.transient_set)) return coll.tsetConj(t, a[1]);
             if (t.isObjectOf(.transient_map)) {
                 const x = a[1];
-                if (!coll.isVector(x) or coll.vectorCount(x) != 2) rt.fatal("conj! on a transient map needs a [key value] vector", .{});
+                if (!coll.isVector(x) or coll.vectorCount(x) != 2) rt.raise(.type_error, "conj! on a transient map needs a [key value] vector", .{});
                 return coll.tmapAssoc(t, coll.vectorNth(x, 0).?, coll.vectorNth(x, 1).?);
             }
             badArg("conj!", t);
@@ -890,6 +903,106 @@ const table = [_]Entry{
             return v.isObjectOf(.atom);
         }
     }.t)),
+    e("mapv", 2, null, struct {
+        fn f(a: Args) Value {
+            if (a.len > 2) rt.raise(.unsupported_operation_error, "mapv over more than one collection arrives natively in M1.9", .{});
+            var ctx: MapInto = .{ .f = a[0], .to = coll.vectorOf(&.{}) };
+            each(a[1], &ctx, MapInto.add);
+            return ctx.to;
+        }
+    }.f),
+    e("%no-matching-case", 1, 1, struct {
+        fn f(a: Args) Value {
+            rt.raise(.@"error", "no case clause matches {s}", .{typeName(a[0])});
+        }
+    }.f),
+    // Conditions and restarts (DESIGN §10, M1.5)
+    e("error", 1, null, struct {
+        fn f(a: Args) Value {
+            cond.signalError(cond.toCondition(a[0], a[1..], .@"error"));
+        }
+    }.f),
+    e("signal", 1, null, struct {
+        fn f(a: Args) Value {
+            cond.signal(cond.toCondition(a[0], a[1..], .condition));
+            return Value.nil;
+        }
+    }.f),
+    e("warn", 1, null, struct {
+        fn f(a: Args) Value {
+            cond.warn(cond.toCondition(a[0], a[1..], .warning));
+            return Value.nil;
+        }
+    }.f),
+    e("make-condition", 1, null, struct {
+        fn f(a: Args) Value {
+            return cond.makeCondition(a[0], a[1..]);
+        }
+    }.f),
+    e("condition?", 1, 1, pred(cond.isCondition)),
+    e("error?", 1, 1, pred(struct {
+        fn t(v: Value) bool {
+            return cond.isCondition(v) and cond.isA(v, cond.builtinType(.@"error"));
+        }
+    }.t)),
+    e("condition-message", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!cond.isCondition(a[0])) badArg("condition-message", a[0]);
+            return cond.messageOf(a[0]);
+        }
+    }.f),
+    e("condition-type", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!cond.isCondition(a[0])) badArg("condition-type", a[0]);
+            return cond.conditionType(a[0]);
+        }
+    }.f),
+    e("condition-type-name", 1, 1, struct {
+        fn f(a: Args) Value {
+            return cond.typeNameSymbol(cond.findType(a[0], null));
+        }
+    }.f),
+    e("invoke-restart", 1, null, struct {
+        fn f(a: Args) Value {
+            return cond.invokeRestart(a[0], a[1..]);
+        }
+    }.f),
+    e("find-restart", 1, 2, struct {
+        fn f(a: Args) Value {
+            return cond.findRestart(a[0]);
+        }
+    }.f),
+    e("compute-restarts", 0, 1, struct {
+        fn f(_: Args) Value {
+            return cond.computeRestarts();
+        }
+    }.f),
+    e("restart-name", 1, 1, struct {
+        fn f(a: Args) Value {
+            return cond.restartName(a[0]);
+        }
+    }.f),
+    e("restart-report", 1, 1, struct {
+        fn f(a: Args) Value {
+            return cond.restartReport(a[0]);
+        }
+    }.f),
+    e("%condition-type", 1, 2, struct {
+        fn f(a: Args) Value {
+            const ns = if (a.len == 2 and string.isString(a[1])) string.bytes(a[1]) else null;
+            return cond.findType(a[0], ns);
+        }
+    }.f),
+    e("%define-condition", 4, 4, struct {
+        fn f(a: Args) Value {
+            return cond.defineType(a[0], a[1], a[2], a[3]);
+        }
+    }.f),
+    e("%condition-slot", 2, 2, struct {
+        fn f(a: Args) Value {
+            return cond.slot(a[0], a[1]);
+        }
+    }.f),
 };
 
 /// The code pointer that runs table entry `i`, checking the argument count.
@@ -899,7 +1012,7 @@ fn entryCode(comptime i: usize) func.Code {
             _ = self;
             const entry = table[i];
             if (argc < entry.min or (entry.max != null and argc > entry.max.?))
-                rt.fatal("wrong number of arguments ({d}) passed to skein.core/{s}", .{ argc, entry.name });
+                rt.raise(.arity_error, "wrong number of arguments ({d}) passed to skein.core/{s}", .{ argc, entry.name });
             return entry.impl(argv[0..argc]);
         }
     }.code;

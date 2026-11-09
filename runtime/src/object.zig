@@ -63,6 +63,15 @@ pub const TypeId = enum(u16) {
     atom = 21,
     /// A transient's owner: [owning thread's id].
     edit_token = 22,
+    // M1.5's types (D-047).
+    /// A condition type: [name (qualified string), parents (vector of types), slots
+    /// (vector of [symbol initform-fn]), report (function or nil), defined (true if
+    /// defcondition made it)]; permanent.
+    condition_type = 23,
+    /// [type, message (string or nil), slots (map of slot symbol to value)].
+    condition = 24,
+    /// A restart value: [name (symbol), report (string), frame serial, index].
+    restart = 25,
     _,
 };
 

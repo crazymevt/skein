@@ -81,11 +81,11 @@ pub fn indexError(i: Value, count: usize) noreturn {
     const print = @import("print.zig");
     var buf: std.ArrayList(u8) = .empty;
     print.write(i, &buf, true);
-    rt.fatal("index {s} is out of bounds for a vector of {d}", .{ buf.items, count });
+    rt.raise(.index_error, "index {s} is out of bounds for a vector of {d}", .{ buf.items, count });
 }
 
 pub fn unsupported(comptime fmt: []const u8, args: anytype) noreturn {
-    rt.fatal(fmt, args);
+    rt.raise(.unsupported_operation_error, fmt, args);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -129,9 +129,9 @@ fn makeEdit() Value {
 }
 
 fn checkEdit(edit: Value, comptime what: []const u8) void {
-    if (edit == Value.nil) rt.fatal(what ++ " used after persistent!", .{});
+    if (edit == Value.nil) rt.raise(.@"error", what ++ " used after persistent!", .{});
     if (ux(get(edit, 0)) != gc.currentThreadId())
-        rt.fatal(what ++ " used by a thread that does not own it", .{});
+        rt.raise(.@"error", what ++ " used by a thread that does not own it", .{});
 }
 
 // ---------------------------------------------------------------------------------------

@@ -22,7 +22,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.2 C backend, first slice | ✅ |
 | M1.3 Garbage collector | ✅ |
 | M1.4 Core data in the runtime | ✅ |
-| M1.5 Conditions and unwinding | ⬜ |
+| M1.5 Conditions and unwinding | ✅ |
 | M1.6 Reader in Skein | ⬜ |
 | M1.7 Expander and Core IR in Skein | ⬜ |
 | M1.8 Self-hosting | ⬜ |
@@ -259,3 +259,8 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Native runtime (D-046): atoms and functions hash by identity differently from Phase 0, so maps keyed by them iterate in a different order natively. Seqs over maps and sets, lazy seqs, `reduced` and most of skein.core wait for M1.9; `first`/`rest` work on lists, vectors and strings. Vars are made per compiled program, not looked up by name (namespaces at run time come with multi-file programs, M1.9).
 - GC (D-045): a nursery segment promoted for one pinned object keeps its whole 256 KiB until the next major collection; consider moving pinned objects' neighbors out, or smaller pinning granularity. Marking is stop-the-world; incremental marking (DESIGN §18.1) and `with-frame-arena` (§18.2) are still to do.
 - FFI callbacks from foreign threads work as SBCL allows; DESIGN §14.3's attach-as-fiber behavior waits for Phase 2.
+- Native conditions (D-047):
+  - No top-level `abort`/`continue`/`exit` restarts exist natively; Phase 0's come from `skein run` and SBCL.
+  - A condition type named by a symbol at run time (`(error 'foo)`) is found by its unique unqualified name, until namespaces exist at run time (M1.9).
+  - Some native messages differ from Phase 0's, where Phase 0 shows CL's wording (index errors, returning to an exited block).
+  - M1.10 (native FFI) must decide what unwinding through foreign C frames does, as in a Skein callback that signals into a `handler-case` outside the C call. longjmp skips foreign cleanups on POSIX and needs unwind tables on Windows.

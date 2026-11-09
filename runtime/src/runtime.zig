@@ -1,6 +1,8 @@
 //! The Skein runtime (DESIGN §17, §18), Phase 1. Compiled Skein code (from the C backend,
 //! M1.2) links against it.
 //!
+//! M1.5 added conditions, restarts and non-local exits (cond.zig, unwind.c).
+//!
 //! M1.3 replaced M1.1's bump-only heap with the garbage collector (gc.zig).
 //!
 //! M1.1 provided the foundations: tagged values, the object header, per-thread bump
@@ -26,6 +28,7 @@ pub const names = @import("names.zig");
 pub const coll = @import("coll.zig");
 pub const equal = @import("equal.zig");
 pub const core = @import("core.zig");
+pub const cond = @import("cond.zig");
 
 pub const Value = value.Value;
 
@@ -33,6 +36,7 @@ pub const Value = value.Value;
 // library exports them all.
 comptime {
     for (std.meta.declarations(api)) |name| _ = &@field(api, name);
+    for (std.meta.declarations(cond)) |name| _ = &@field(cond, name);
 }
 
 test {
@@ -52,5 +56,7 @@ test {
     _ = equal;
     _ = @import("coll_test.zig");
     _ = core;
+    _ = cond;
+    _ = @import("cond_test.zig");
     _ = @import("platform_test.zig");
 }

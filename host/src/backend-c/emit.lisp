@@ -46,7 +46,12 @@ yet. The message names the milestone that adds it."))
   ;; Local -> C expression naming it.
   (locals (make-hash-table :test 'eq))
   ;; Locals of enclosing functions that this function captured.
-  (captured (make-hash-table :test 'eq)))
+  (captured (make-hash-table :test 'eq))
+  ;; Block tag -> C name of its frame, for the blocks of this function.
+  (blocks (make-hash-table :test 'eq))
+  ;; True if the function calls setjmp (it has a block* or unwind-protect), so its locals
+  ;; are declared volatile: a longjmp back into it must see their current values.
+  (volatile nil))
 
 (defvar *ctx*)
 
@@ -65,10 +70,14 @@ yet. The message names the milestone that adds it."))
             (decf (ctx-indent *ctx*)))
           (stmt "}")))
 
+(defun value-type ()
+  "The C type of a local or temporary in the function being emitted."
+  (if (ctx-volatile *ctx*) "volatile sk_value" "sk_value"))
+
 (defun temp (expr)
   "Store EXPR in a fresh temporary and return its name."
   (let ((name (fresh "t")))
-    (stmt "sk_value ~A = ~A;" name expr)
+    (stmt "~A ~A = ~A;" (value-type) name expr)
     name))
 
 (defun location-string (node)
@@ -220,10 +229,15 @@ yet. The message names the milestone that adds it."))
        (let ((v (emit (set-node-value node))))
          (stmt "~A = ~A;" (gethash local (ctx-locals *ctx*)) v)
          v)))
-    ((or unwind-protect-node block-node return-from-node throw-condition-node
-         handler-bind-node restart-bind-node)
-     (unsupported node "the native backend can't compile non-local exits or conditions ~
-                        yet (M1.5)"))
+    (block-node (emit-block node))
+    (return-from-node (emit-return-from node))
+    (unwind-protect-node (emit-unwind-protect node))
+    (handler-bind-node (emit-handler-bind node))
+    (restart-bind-node (emit-restart-bind node))
+    (throw-condition-node
+     (let ((c (emit (throw-condition-node-condition node))))
+       (stmt "sk_throw_condition(~A);" c)
+       "SK_NIL"))
     ((or values-node let-values-node)
      (unsupported node "the native backend can't compile multiple values yet (M1.9)"))))
 
@@ -236,7 +250,12 @@ yet. The message names the milestone that adds it."))
     "str" "subs" "keyword" "symbol" "name" "namespace" "atom" "deref" "reset!" "swap!"
     "compare-and-set!" "transient" "persistent!" "conj!" "assoc!" "dissoc!" "disj!" "pop!"
     "nil?" "some?" "true?" "false?" "vector?" "map?" "set?" "list?" "seq?" "coll?" "string?"
-    "keyword?" "symbol?" "number?" "integer?" "float?" "char?" "boolean?" "fn?" "atom?")
+    "keyword?" "symbol?" "number?" "integer?" "float?" "char?" "boolean?" "fn?" "atom?"
+    "mapv" "%no-matching-case"
+    ;; Conditions and restarts (M1.5)
+    "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
+    "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
+    "restart-name" "restart-report" "%condition-type" "%define-condition" "%condition-slot")
   "The skein.core functions the native runtime has (runtime/src/core.zig). Calls to the
 arithmetic, comparison and printing ones are compiled inline.")
 
@@ -248,10 +267,19 @@ arithmetic, comparison and printing ones are compiled inline.")
                          arrives in M1.9" name))
     (startup-constant (list :core name) (format nil "sk_core(~A)" (c-string-literal name)))))
 
+(defparameter *builtin-condition-types*
+  '("arithmetic-error" "type-error" "index-error" "arity-error" "unbound-var-error"
+    "not-callable-error" "unsupported-operation-error" "transient-error" "namespace-error")
+  "The skein.core vars that hold built-in condition types.")
+
 (defun emit-var-ref (node)
   (let ((var (var-ref-node-var node)))
     (if (core-var-p var)
-        (native-core-function node var)
+        (if (member (var-name var) *builtin-condition-types* :test #'string=)
+            (startup-constant (list :condition-type (var-name var))
+                              (format nil "sk_builtin_condition_type(~A)"
+                                      (c-string-literal (var-name var))))
+            (native-core-function node var))
         (temp (format nil "sk_var_get(~A, ~A, ~A)" (var-c-name var)
                       (c-string-literal (skein.runtime:var-qualified-name var))
                       (c-string-literal (location-string node)))))))
@@ -259,7 +287,7 @@ arithmetic, comparison and printing ones are compiled inline.")
 (defun emit-if (node)
   (let ((test (emit (if-node-test node)))
         (result (fresh "t")))
-    (stmt "sk_value ~A = SK_NIL;" result)
+    (stmt "~A ~A = SK_NIL;" (value-type) result)
     (let ((then-recur nil) (else-recur nil))
       (with-block ("if (SK_TRUTHY(~A)) {" test)
         (let ((v (emit (if-node-then node))))
@@ -285,11 +313,16 @@ arithmetic, comparison and printing ones are compiled inline.")
 (defun emit-let (bindings)
   (loop for (local . init) in bindings
         do (let ((value (emit init)))
-             (stmt "sk_value ~A = ~A;" (bind-local local) value))))
+             (stmt "~A ~A = ~A;" (value-type) (bind-local local) value))))
 
 ;;; loop* and recur. A recur target is a label plus the C names of its locals.
 
-(defstruct (target (:constructor make-target (label names))) label names)
+(defvar *frames* '()
+  "C names of the frames (blocks, handler and restart clusters, unwind-protects) the code
+being emitted is inside, in the current function, innermost first.")
+
+(defstruct (target (:constructor make-target (label names &optional (frames *frames*))))
+  label names frames)
 
 (defvar *targets* '()
   "Alist of loop-node or arity -> target, innermost first.")
@@ -298,7 +331,7 @@ arithmetic, comparison and printing ones are compiled inline.")
   (emit-let (loop-node-bindings node))
   (let ((label (fresh "loop"))
         (result (fresh "t")))
-    (stmt "sk_value ~A = SK_NIL;" result)
+    (stmt "~A ~A = SK_NIL;" (value-type) result)
     (stmt "~A: ;" label)
     (stmt "SK_POLL();")
     (let* ((*targets* (acons node (make-target label (mapcar (lambda (b) (gethash (car b) (ctx-locals *ctx*)))
@@ -312,7 +345,11 @@ arithmetic, comparison and printing ones are compiled inline.")
   (let* ((target (or (cdr (assoc (recur-node-target node) *targets*))
                      (unsupported node "recur outside its loop or function")))
          (values (mapcar (lambda (a) (let ((v (emit a))) (if (eq v :recur) "SK_NIL" (temp v))))
-                         (recur-node-args node))))
+                         (recur-node-args node)))
+         ;; recur can leave blocks (block* passes tail position through): pop them.
+         (left (ldiff *frames* (target-frames target))))
+    (when left
+      (stmt "sk_frame_pop(&~A);" (car (last left))))
     (loop for name in (target-names target)
           for v in values
           do (stmt "~A = ~A;" name v))
@@ -323,7 +360,9 @@ arithmetic, comparison and printing ones are compiled inline.")
 
 (defun free-locals (fn-node)
   "The locals FN-NODE refers to but does not bind (its captured values), in order of
-first use. Locals are unique objects (CORE-IR.md), so binding is a set, not a scope."
+first use. Locals are unique objects (CORE-IR.md), so binding is a set, not a scope. The
+block tags of enclosing blocks it returns from count as locals: it captures their
+tokens."
   (let ((bound (make-hash-table :test 'eq))
         (refs '()))
     (labels ((bind (l) (setf (gethash l bound) t))
@@ -355,8 +394,9 @@ first use. Locals are unique objects (CORE-IR.md), so binding is a set, not a sc
                  (locally-node (walk (locally-node-body n)))
                  (unwind-protect-node (walk (unwind-protect-node-body n))
                   (walk (unwind-protect-node-cleanup n)))
-                 (block-node (walk (block-node-body n)))
-                 (return-from-node (walk (return-from-node-value n)))
+                 (block-node (bind (block-node-tag n)) (walk (block-node-body n)))
+                 (return-from-node (use (return-from-node-tag n))
+                  (walk (return-from-node-value n)))
                  (values-node (mapc #'walk (values-node-args n)))
                  (let-values-node
                   (loop for (ls . i) in (let-values-node-bindings n) do (mapc #'bind ls) (walk i))
@@ -379,7 +419,10 @@ locals it captured. A function that captures nothing is made once, at startup."
          (captured (free-locals node))
          (out (make-string-output-stream)))
     (let ((*ctx* (make-ctx :out out))
-          (*targets* '()))
+          (*targets* '())
+          (*frames* '()))
+      (setf (ctx-volatile *ctx*)
+            (some (lambda (a) (uses-setjmp-p (arity-body a))) (fn-node-arities node)))
       (when (fn-node-self node)
         (setf (gethash (fn-node-self node) (ctx-locals *ctx*)) "self"))
       (loop for l in captured
@@ -407,7 +450,10 @@ locals it captured. A function that captures nothing is made once, at startup."
                               (mapcar (lambda (l)
                                         (or (gethash l (ctx-locals *ctx*))
                                             (unsupported node "internal error: ~A is not in ~
-                                                               scope" (local-name l))))
+                                                               scope"
+                                                         (if (local-p l)
+                                                             (local-name l)
+                                                             (block-tag-name l)))))
                                       captured)))
                 captured))))
 
@@ -416,7 +462,7 @@ locals it captured. A function that captures nothing is made once, at startup."
 so the functions can call each other."
   (let ((bindings (letfn-node-bindings node)))
     (loop for (local) in bindings
-          do (stmt "sk_value ~A = SK_NIL;" (bind-local local)))
+          do (stmt "~A ~A = SK_NIL;" (value-type) (bind-local local)))
     (let ((made (loop for (local . fn) in bindings
                       collect (multiple-value-bind (expr captured) (emit-fn fn)
                                 (stmt "~A = ~A;" (gethash local (ctx-locals *ctx*)) expr)
@@ -436,9 +482,9 @@ so the functions can call each other."
     (with-block ((if rest "if (argc >= ~D) {" "if (argc == ~D) {") n)
       (loop for p in (arity-params arity)
             for i from 0
-            do (stmt "sk_value ~A = argv[~D];" (bind-local p) i))
+            do (stmt "~A ~A = argv[~D];" (value-type) (bind-local p) i))
       (when rest
-        (stmt "sk_value ~A = sk_rest_list(argc, argv, ~D);" (bind-local rest) n))
+        (stmt "~A ~A = sk_rest_list(argc, argv, ~D);" (value-type) (bind-local rest) n))
       (let* ((label (fresh "top"))
              (names (mapcar (lambda (p) (gethash p (ctx-locals *ctx*)))
                             (append (arity-params arity) (and rest (list rest))))))
@@ -447,6 +493,170 @@ so the functions can call each other."
         (let* ((*targets* (acons arity (make-target label names) *targets*))
                (v (emit (arity-body arity))))
           (unless (eq v :recur) (stmt "return ~A;" v)))))))
+
+;;; Non-local exits and conditions (M1.5, D-047). Frames live in the C function's own
+;;; stack frame; runtime/src/cond.zig keeps them on a per-thread chain.
+
+(defun node-children (node)
+  "The nodes directly inside NODE, not counting the bodies of nested functions."
+  (etypecase node
+    ((or const-node var-ref-node local-ref-node fn-node) '())
+    (if-node (list (if-node-test node) (if-node-then node) (if-node-else node)))
+    (do-node (do-node-forms node))
+    (def-node (and (def-node-init node) (list (def-node-init node))))
+    (let-node (append (mapcar #'cdr (let-node-bindings node)) (list (let-node-body node))))
+    (loop-node (append (mapcar #'cdr (loop-node-bindings node)) (list (loop-node-body node))))
+    (letfn-node (list (letfn-node-body node)))
+    (recur-node (recur-node-args node))
+    (set-node (list (set-node-value node)))
+    (call-node (cons (call-node-fn node) (call-node-args node)))
+    (the-node (list (the-node-expr node)))
+    (locally-node (list (locally-node-body node)))
+    (unwind-protect-node (list (unwind-protect-node-body node)
+                               (unwind-protect-node-cleanup node)))
+    (block-node (list (block-node-body node)))
+    (return-from-node (list (return-from-node-value node)))
+    (values-node (values-node-args node))
+    (let-values-node (append (mapcar #'cdr (let-values-node-bindings node))
+                             (list (let-values-node-body node))))
+    (throw-condition-node (list (throw-condition-node-condition node)))
+    (handler-bind-node (append (loop for (ty . h) in (handler-bind-node-bindings node)
+                                     collect ty collect h)
+                               (list (handler-bind-node-body node))))
+    (restart-bind-node (append (loop for (nil f r) in (restart-bind-node-bindings node)
+                                     collect f collect r)
+                               (list (restart-bind-node-body node))))))
+
+(defun uses-setjmp-p (node)
+  "True if NODE, outside nested functions, has a block* or unwind-protect."
+  (or (block-node-p node) (unwind-protect-node-p node)
+      (some #'uses-setjmp-p (node-children node))))
+
+(defun emit-block (node)
+  "block*: a frame that return-from* unwinds to. Its token (the frame's serial) is what
+closures capture to return from it."
+  (let ((frame (fresh "fr"))
+        (result (fresh "t"))
+        (tag (block-node-tag node)))
+    (stmt "sk_frame ~A;" frame)
+    (stmt "sk_frame_push(&~A, SK_FRAME_BLOCK);" frame)
+    (stmt "~A ~A = SK_NIL;" (value-type) result)
+    (setf (gethash tag (ctx-blocks *ctx*)) frame
+          (gethash tag (ctx-locals *ctx*)) (format nil "SK_BLOCK_TOKEN(~A)" frame))
+    (with-block ("if (SK_SETJMP(~A.jb) == 0) {" frame)
+      (let* ((*frames* (cons frame *frames*))
+             (v (emit (block-node-body node))))
+        (unless (eq v :recur)
+          (stmt "~A = ~A;" result v)
+          (stmt "sk_frame_pop(&~A);" frame))))
+    (with-block ("else {")
+      (stmt "~A = ~A.value;" result frame)
+      (stmt "sk_frame_pop(&~A);" frame))
+    result))
+
+(defun emit-return-from (node)
+  (let ((tag (return-from-node-tag node))
+        (v (emit (return-from-node-value node))))
+    (when (eq v :recur) (setf v "SK_NIL"))
+    (let ((frame (gethash tag (ctx-blocks *ctx*))))
+      (if frame
+          (stmt "sk_unwind_to(&~A, ~A);" frame v)
+          (stmt "sk_return_from(~A, ~A);"
+                (or (gethash tag (ctx-locals *ctx*))
+                    (unsupported node "internal error: no token for the block ~A"
+                                 (block-tag-name tag)))
+                v)))
+    "SK_NIL"))
+
+(defun emit-unwind-protect (node)
+  "The body runs under an unwind-protect frame. Whether it finishes or an unwind passes
+through, the frame is popped and the cleanup runs; an unwind then continues."
+  (let ((frame (fresh "fr"))
+        (unwinding (fresh "uw"))
+        (result (fresh "t")))
+    (stmt "sk_frame ~A;" frame)
+    (stmt "sk_frame_push(&~A, SK_FRAME_UNWIND);" frame)
+    (stmt "volatile int ~A = 0;" unwinding)
+    (stmt "~A ~A = SK_NIL;" (value-type) result)
+    (with-block ("if (SK_SETJMP(~A.jb) == 0) {" frame)
+      (let* ((*frames* (cons frame *frames*))
+             (v (emit (unwind-protect-node-body node))))
+        (unless (eq v :recur) (stmt "~A = ~A;" result v))
+        (stmt "sk_frame_pop(&~A);" frame)))
+    (with-block ("else {")
+      (stmt "~A = 1;" unwinding))
+    (emit (unwind-protect-node-cleanup node))
+    (stmt "if (~A) sk_continue_unwind(&~A);" unwinding frame)
+    result))
+
+(defun emit-cluster-body (frame body)
+  "Emit BODY inside the cluster FRAME (already pushed), pop it and return the value."
+  (let* ((result (fresh "t"))
+         (v (progn (stmt "~A ~A = SK_NIL;" (value-type) result)
+                   (let ((*frames* (cons frame *frames*))) (emit body)))))
+    (unless (eq v :recur) (stmt "~A = ~A;" result v))
+    (stmt "sk_frame_pop(&~A);" frame)
+    result))
+
+(defun emit-handler-bind (node)
+  "handler-bind*: the types and handlers are evaluated in order, then pushed as a cluster."
+  (let ((bindings (handler-bind-node-bindings node)))
+    (if (null bindings)
+        (emit (handler-bind-node-body node))
+        (let* ((pairs (emit-args (loop for (ty . h) in bindings collect ty collect h)))
+               (types (fresh "ty")) (fns (fresh "hf")) (frame (fresh "fr")))
+          (stmt "sk_value ~A[] = {~{~A~^, ~}};" types
+                (loop for (ty) on pairs by #'cddr collect ty))
+          (stmt "const sk_value ~A[] = {~{~A~^, ~}};" fns
+                (loop for (nil h) on pairs by #'cddr collect h))
+          (stmt "sk_frame ~A;" frame)
+          (stmt "sk_frame_push_handlers(&~A, ~D, ~A, ~A);" frame (length bindings) types fns)
+          (emit-cluster-body frame (handler-bind-node-body node))))))
+
+(defun emit-restart-bind (node)
+  "restart-bind*: names are symbols; functions and reports are evaluated in order."
+  (let ((bindings (restart-bind-node-bindings node)))
+    (if (null bindings)
+        (emit (restart-bind-node-body node))
+        (let* ((names (mapcar (lambda (b) (constant-expr (first b) node)) bindings))
+               (values (emit-args (loop for (nil f r) in bindings collect f collect r)))
+               (rn (fresh "rn")) (rf (fresh "rf")) (rr (fresh "rr")) (frame (fresh "fr")))
+          (stmt "sk_value ~A[] = {~{~A~^, ~}};" rn names)
+          (stmt "const sk_value ~A[] = {~{~A~^, ~}};" rf
+                (loop for (f) on values by #'cddr collect f))
+          (stmt "const sk_value ~A[] = {~{~A~^, ~}};" rr
+                (loop for (nil r) on values by #'cddr collect r))
+          (stmt "sk_frame ~A;" frame)
+          (stmt "sk_frame_push_restarts(&~A, ~D, ~A, ~A, ~A);" frame (length bindings) rn rf rr)
+          (emit-cluster-body frame (restart-bind-node-body node))))))
+
+(defun qualify-condition-type-call (fn args)
+  "ARGS, with the symbol in a call (skein.core/%condition-type 'name \"ns\") qualified by
+the namespace its var is in, which the compiler knows from the program's ns form and
+requires, so the runtime can find the type by its full name (D-047)."
+  (if (and (var-ref-node-p fn) (core-var-p (var-ref-node-var fn))
+           (string= (var-name (var-ref-node-var fn)) "%condition-type")
+           (= (length args) 2) (const-node-p (first args)) (const-node-p (second args))
+           (sym-p (const-node-value (first args))) (stringp (const-node-value (second args))))
+      (let* ((sym (const-node-value (first args)))
+             (ns (skein.runtime:find-namespace (const-node-value (second args))))
+             (qualified
+               (cond ((null ns) sym)
+                     ((sym-namespace sym)
+                      (let ((target (skein.runtime:find-alias ns (sym-namespace sym))))
+                        (if target
+                            (skein.runtime:intern-sym (sym-name sym) (namespace-name target))
+                            sym)))
+                     ((member (sym-name sym) '("condition" "error" "warning") :test #'string=)
+                      sym)
+                     (t (let ((var (skein.runtime:resolve-var ns (sym-name sym))))
+                          (if var
+                              (skein.runtime:intern-sym (sym-name sym)
+                                                        (namespace-name (var-namespace var)))
+                              sym))))))
+        (cons (make-const-node :location (node-location (first args)) :value qualified)
+              (rest args)))
+      args))
 
 ;;; Calls
 
@@ -463,7 +673,7 @@ so the functions can call each other."
 
 (defun emit-call (node)
   (let ((fn (call-node-fn node))
-        (args (call-node-args node)))
+        (args (qualify-condition-type-call (call-node-fn node) (call-node-args node))))
     (if (and (var-ref-node-p fn) (core-var-p (var-ref-node-var fn))
              (member (var-name (var-ref-node-var fn)) *inline-primitives* :test #'string=))
         (emit-primitive node (var-name (var-ref-node-var fn)) args)
@@ -550,7 +760,9 @@ through their function objects).")
 (defun emit-toplevel (node)
   "Emit a top-level form into the program body."
   (let ((*ctx* (make-ctx :out (unit-body *unit*)))
-        (*targets* '()))
+        (*targets* '())
+        (*frames* '()))
+    (setf (ctx-volatile *ctx*) (uses-setjmp-p node))
     (with-block ("{")
       (let ((v (emit node)))
         (unless (eq v :recur) (stmt "(void)~A;" v))))))

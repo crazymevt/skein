@@ -438,3 +438,39 @@ Date: 2026-11-09 · Status: Accepted
   - The tests compare native and Phase 0 output for the whole core-function program, closures, and large collections built under GC.
   - The Zig model tests check vectors, maps with forced hash collisions, sets and transients against plain containers, across garbage collections, in all three build modes.
   - Atoms and functions hash by identity differently from Phase 0, so maps keyed by them may iterate in a different order (ROADMAP note).
+
+## D-047: Conditions and non-local exits in native code
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.5 brings DESIGN §10 to the native runtime: `block*`/`return-from*`, `unwind-protect`, `handler-bind*`, `restart-bind*` and `throw-condition`, which the core macros (`handler-case`, `try`, `restart-case`, `defcondition`) expand into. Native code must unwind across compiled Skein frames and the runtime's own Zig frames, and DESIGN §19.3 asks for SEH-compatible unwinding on Windows.
+- **Decision:**
+  - **Frames.** Each thread has a chain of frames, innermost first (`runtime/src/cond.zig`). Compiled code allocates them as `sk_frame` locals in its own C stack frame and pushes and pops them through the runtime. There are four kinds:
+    - a block (`block*`);
+    - an unwind-protect;
+    - a handler cluster (`handler-bind*`: types and handler functions in C arrays);
+    - a restart cluster (`restart-bind*`: names, functions and reports).
+    Every frame gets a per-thread serial number. A block's token, which closures capture to return from it, is its serial, so returning to a block that has already exited is an error rather than a jump to a reused address. Restart values hold the serial too, which is how they stay safe after their extent.
+  - **Unwinding is setjmp/longjmp.**
+    - A function that has a block or unwind-protect calls setjmp itself (`_setjmp` on macOS, which doesn't save the signal mask) and declares its locals `volatile`.
+    - An unwind walks the chain from the top and lands at its target. At each unwind-protect on the way it first jumps there, storing the target and value in that frame; the cleanup then runs and continues the unwind. A cleanup that exits through blocks of its own doesn't lose the interrupted unwind.
+    - `recur` may leave blocks (`block*` passes tail position through), so it pops them before jumping.
+  - **Windows:** with `x86_64-windows-gnu`, mingw's `longjmp` unwinds through `RtlUnwindEx`, which walks the SEH unwind tables of every frame it crosses. That is the SEH-compatible unwinding §19.3 asks for, and it works over the frames M1.5 crosses: compiled Skein C, the runtime's Zig, and libc.
+  - **Handlers follow CL.**
+    - `signal` walks the chain and calls every matching handler, innermost first and in order within a cluster.
+    - While a handler runs, its cluster and everything above it are disabled; a condition signaled inside the handler skips them.
+    - A handler that returns declines.
+  - **Errors:**
+    - `error` and `throw-condition` signal, then report an unhandled error as `skein run` does: `error: <message>`, then `available restarts:` with one `name: report` line each, then exit with status 1.
+    - `warn` signals with a `muffle-warning` restart established; if no handler takes it, it prints `WARNING: <message>`.
+  - **The runtime's errors are conditions.** Division by zero, bad indexes, non-numbers, arity errors, unbound vars and calls of non-functions signal conditions of the built-in types (`arithmetic-error`, `index-error`, `type-error`, `arity-error`, `unbound-var-error`, `not-callable-error`, `unsupported-operation-error`). Only errors a program can't survive, such as running out of memory, are still fatal.
+  - **Condition objects** are runtime objects: types (permanent, kept in a registry by qualified name; redefinition updates them in place), conditions (type, message, slot map) and restart values. Slots are read with readers, `%condition-slot` or keywords.
+  - **Type names are resolved at compile time.** `condition-type-form` passes the namespace being compiled, but namespaces don't exist at run time yet. So the C backend qualifies the symbol in `(%condition-type 'name "ns")` itself, through the compiler's aliases and refers. A symbol passed at run time, as in `(error 'asset-missing ...)`, is looked up as `skein.core/name`, then by its unqualified name, which must be unique: Phase 0's fallback rule (§10).
+- **Alternatives:**
+  - Table-driven zero-cost unwinding (DWARF or SEH personality routines, or C++ exceptions). It would make setting up a block free, but it needs C++ or hand-written personality code per platform.
+  - Zig error unions or a pending-exception flag checked after every call. That puts a cost on every call instead of on frames.
+  - `__builtin_setjmp`/`__builtin_longjmp`. They are cheaper, but they skip SEH unwinding on Windows.
+- **Consequences:**
+  - `examples/conditions.skn` and all of Phase 0's condition tests (`host/tests/fixtures/native-conditions.skn`) print the same natively as on the host.
+  - A block or unwind-protect costs a setjmp. A handler or restart cluster costs a frame push and no setjmp. 90,000 caught errors with restarts take 0.3 s in a release build.
+  - Runtime code that may signal must not hold locks or rely on `defer`, because longjmp skips them (scratch buffers leak).
+  - The runtime's scratch allocator is now malloc rather than the page allocator, and looking up an interned name no longer allocates. Both were a system call per error.
+  - Natively, no restarts exist outside the program's own: Phase 0's `skein run` adds `abort`, `continue` and `exit`. Some messages differ from Phase 0's, where Phase 0 shows CL's wording (ROADMAP note).

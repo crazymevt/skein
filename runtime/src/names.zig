@@ -44,6 +44,14 @@ fn qualified(ns: ?[]const u8, name: []const u8) []u8 {
 fn intern(table: *std.StringHashMapUnmanaged(Value), t: object.TypeId, ns: ?[]const u8, name: []const u8, salt: u32) Value {
     lock.lock();
     defer lock.unlock();
+    // Look up with the key on the stack; allocate it only for a new name.
+    var buf: [256]u8 = undefined;
+    const probe = if (ns) |n|
+        std.fmt.bufPrint(&buf, "{s}/{s}", .{ n, name }) catch null
+    else if (name.len <= buf.len) name else null;
+    if (probe) |p| {
+        if (table.get(p)) |v| return v;
+    }
     const key = qualified(ns, name);
     if (table.get(key)) |v| {
         table_alloc.free(key);

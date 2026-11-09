@@ -13,7 +13,7 @@ const equal = @import("equal.zig");
 const platform = @import("platform");
 const Value = @import("value.zig").Value;
 
-fn put(out: *std.ArrayList(u8), bytes: []const u8) void {
+pub fn put(out: *std.ArrayList(u8), bytes: []const u8) void {
     out.appendSlice(rt.scratch, bytes) catch rt.fatal("out of memory", .{});
 }
 
@@ -82,6 +82,7 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
         .transient_vector => put(out, "#<transient vector>"),
         .transient_map => put(out, "#<transient map>"),
         .transient_set => put(out, "#<transient set>"),
+        .condition, .condition_type, .restart => @import("cond.zig").write(v, out),
         else => put(out, "#<object>"),
     }
 }

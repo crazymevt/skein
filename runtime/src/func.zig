@@ -30,7 +30,7 @@ pub fn name(v: Value) []const u8 {
 pub fn call(f: Value, argc: u32, argv: [*]const Value) Value {
     // A keyword looks itself up in its argument: (:a m) and (:a m default).
     if (f.isObjectOf(.keyword)) {
-        if (argc < 1 or argc > 2) rt.fatal("wrong number of arguments ({d}) passed to a keyword", .{argc});
+        if (argc < 1 or argc > 2) rt.raise(.arity_error, "wrong number of arguments ({d}) passed to a keyword", .{argc});
         const args = [_]Value{ argv[0], f, if (argc == 2) argv[1] else Value.nil };
         return call(@import("core.zig").function("get").?, 3, &args);
     }
@@ -38,7 +38,7 @@ pub fn call(f: Value, argc: u32, argv: [*]const Value) Value {
         const print = @import("print.zig");
         var buf: std.ArrayList(u8) = .empty;
         print.write(f, &buf, true);
-        rt.fatal("{s} is not a function", .{buf.items});
+        rt.raise(.not_callable_error, "{s} is not a function", .{buf.items});
     }
     const code: Code = @ptrFromInt(f.toObject().payload()[0]);
     return code(f, argc, argv);

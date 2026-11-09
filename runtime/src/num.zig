@@ -185,7 +185,7 @@ pub fn notANumber(name: []const u8, v: Value) noreturn {
     const print = @import("print.zig");
     var buf: std.ArrayList(u8) = .empty;
     print.write(v, &buf, true);
-    rt.fatal("{s} needs numbers, not {s}", .{ name, buf.items });
+    rt.raise(.type_error, "{s} needs numbers, not {s}", .{ name, buf.items });
 }
 
 fn checkNumbers(name: []const u8, a: Value, b: Value) struct { Kind, Kind } {
@@ -208,7 +208,7 @@ pub fn arith(op: Op, a: Value, b: Value) Value {
     };
     const ka, const kb = checkNumbers(name, a, b);
     if (op == .div) {
-        if (isZero(b)) rt.fatal("division by zero", .{});
+        if (isZero(b)) rt.raise(.arithmetic_error, "division by zero", .{});
         if (ka == .int and kb == .int) return boxF64(toF64(a) / toF64(b));
     } else if (ka == .int and kb == .int) {
         return intArith(switch (op) {

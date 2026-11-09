@@ -28,6 +28,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "platform", .module = platform }},
     });
     runtime.addCSourceFile(.{ .file = b.path("src/spill.c"), .flags = &.{"-std=c11"} });
+    runtime.addCSourceFile(.{ .file = b.path("src/unwind.c"), .flags = &.{"-std=c11"} });
+    runtime.addIncludePath(b.path("include"));
 
     const lib = b.addLibrary(.{
         .name = "skein_runtime",

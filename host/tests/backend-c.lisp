@@ -74,7 +74,7 @@
 (test native-examples
   (if (not (zig-available-p))
       (skip "zig is not installed")
-      (dolist (name '("hello" "fib"))
+      (dolist (name '("hello" "fib" "conditions"))
         (let ((file (asdf:system-relative-pathname "skein" (format nil "../examples/~A.skn" name))))
           (with-source-tree (dir ("unused.skn" ""))
             (let ((exe (skein.backend.c:build-program
@@ -239,6 +239,52 @@
   (prn d)
   (prn (= m (build-map 50000)) (= v (build-vec 100000)) (into {} (take-n 12 m))))"))
 
+;;; Conditions and unwinding (M1.5)
+
+(test native-conditions
+  ;; The Phase 0 condition tests (conditions.lisp) as one program.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein"
+                                                  "tests/fixtures/native-conditions.skn"))))
+
+(test native-conditions-under-load
+  ;; Many unwinds with allocation in between: frames are popped, conditions collected.
+  (native-matches "(ns cload)
+(defcondition bad [error] (v :reader bad-v))
+(defn junk [i]
+  (loop [j 0 acc []] (if (< j (mod i 20)) (recur (inc j) (conj acc (str \"s\" j))) acc)))
+(defn step [i]
+  (try
+    (let [js (junk i)] (if (zero? (mod i 3)) (error bad :v [i js]) (count js)))
+    (catch bad e (count (nth (bad-v e) 1)))
+    (finally nil)))
+(defn run [n]
+  (loop [i 0 total 0]
+    (if (< i n)
+      (recur (inc i) (+ total (step i)
+                        (handler-case (restart-case (error bad :v i) (again [x] x))
+                          (bad [c] (bad-v c)))
+                        (restart-case (handler-bind [bad (fn [c]
+                                                           (invoke-restart 'again (bad-v c)))]
+                                        (error bad :v 1))
+                          (again [x] x))))
+      total)))
+(prn (run 30000) (find-restart 'again))"))
+
+(test native-unhandled-errors
+  ;; As skein run does: the message and the active restarts on stderr, exit status 1.
+  (native-fails "(ns unhandled)
+(println \"signal:\" (signal \"ignored\"))
+(warn \"careful\" 1)
+(restart-case (error \"it broke\")
+  (use-default [] :report \"Use the default\" 1)
+  (try-again [] 2))"
+                "WARNING: careful 1"
+                (format nil "error: it broke~%available restarts:~%  ~
+                             use-default: Use the default~%  try-again: try-again~%"))
+  (native-fails "(ns unhandled2) (defcondition oops [error] (n)) (error oops :n 1)"
+                (format nil "error: unhandled2/oops {:n 1}~%")))
+
 ;;; Runtime errors: a message on stderr and exit status 1
 
 (test native-runtime-errors
@@ -255,7 +301,7 @@
 (test native-unsupported
   (build-fails "(ns u3) (println (map inc [1 2]))" "can't use skein.core/map yet")
   (build-fails "(ns u4) (def f range)" "can't use skein.core/range yet")
-  (build-fails "(ns u5) (try 1 (catch error e 2))" "conditions yet (M1.5)")
+  (build-fails "(ns u5) (prn (values 1 2))" "multiple values yet (M1.9)")
   (build-fails "(ns u6) (println (inc 1 2))" "wrong number of arguments (2) passed to skein.core/inc"))
 
 ;;; The command

@@ -5,6 +5,7 @@
 #ifndef SKEIN_H
 #define SKEIN_H
 
+#include <setjmp.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -71,6 +72,52 @@ sk_value sk_set_of(size_t count, const sk_value *items);
 sk_value sk_rest_list(uint32_t argc, const sk_value *argv, uint32_t from);
 sk_value sk_closure(sk_code code, const char *name, size_t count, const sk_value *captured);
 void sk_closure_set(sk_value f, size_t i, sk_value value);
+
+/* Non-local exits and conditions (M1.5, D-047). Each thread has a chain of frames that
+ * compiled code keeps in its own C stack frames: blocks (block*), unwind-protects,
+ * handler clusters (handler-bind*) and restart clusters (restart-bind*). Leaving a frame
+ * unwinds with longjmp to the frame's jmp_buf, so a function that pushes a block or
+ * unwind-protect frame calls SK_SETJMP itself and keeps its locals volatile.
+ * runtime/src/cond.zig mirrors every field before jb. */
+enum { SK_FRAME_BLOCK = 1, SK_FRAME_UNWIND = 2, SK_FRAME_HANDLERS = 3, SK_FRAME_RESTARTS = 4 };
+
+typedef struct sk_frame {
+    struct sk_frame *prev;
+    void *skips;              /* the handler clusters disabled when the frame was pushed */
+    uint64_t serial;          /* unique per thread: names the frame in tokens and restarts */
+    uint32_t kind;
+    uint32_t count;           /* handlers or restarts in the cluster */
+    sk_value value;           /* the value an unwind delivers */
+    sk_value *a;              /* handler types or restart names */
+    const sk_value *b;        /* handler or restart functions */
+    const sk_value *c;        /* restart reports */
+    struct sk_frame *target;  /* unwind-protect: where the interrupted unwind is going */
+    jmp_buf jb;
+} sk_frame;
+
+void sk_frame_push(sk_frame *f, uint32_t kind);
+void sk_frame_push_handlers(sk_frame *f, uint32_t count, sk_value *types, const sk_value *fns);
+void sk_frame_push_restarts(sk_frame *f, uint32_t count, sk_value *names, const sk_value *fns,
+                            const sk_value *reports);
+void sk_frame_pop(sk_frame *f);
+_Noreturn void sk_unwind_to(sk_frame *f, sk_value value);
+_Noreturn void sk_return_from(sk_value token, sk_value value);
+_Noreturn void sk_continue_unwind(sk_frame *f);
+_Noreturn void sk_throw_condition(sk_value condition);
+sk_value sk_builtin_condition_type(const char *name);
+
+/* setjmp without saving the signal mask, which on macOS costs a system call. glibc's
+ * setjmp already doesn't save it; mingw's longjmp unwinds through SEH. */
+#if defined(__APPLE__)
+#define SK_SETJMP(jb) _setjmp(jb)
+#define SK_LONGJMP(jb) _longjmp(jb, 1)
+#else
+#define SK_SETJMP(jb) setjmp(jb)
+#define SK_LONGJMP(jb) longjmp(jb, 1)
+#endif
+
+/* A block's token, which closures capture to return from it. */
+#define SK_BLOCK_TOKEN(f) SK_FIXNUM((f).serial)
 
 /* An object's payload words, after its header (the pointer is tagged with 1). */
 #define SK_PAYLOAD(v) ((sk_value *)(uintptr_t)((v) - 1) + 1)

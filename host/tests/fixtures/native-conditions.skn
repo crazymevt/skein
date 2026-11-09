@@ -1,0 +1,181 @@
+(ns native-conditions)
+
+;; The condition tests of host/tests/conditions.lisp as one program (M1.5). The C backend
+;; tests build it natively and check that it prints what `skein run` prints.
+
+(defn message-of [thunk]
+  (handler-case (thunk) (error [e] (condition-message e))))
+
+;; error, signal, warn
+(prn (handler-case (error "bad value:" 42) (error [e] (condition-message e))))
+(prn (handler-case (error "x") (error [e] [(condition? e) (error? e)])))
+(prn (message-of (fn [] (error "plain" :k))))
+(prn (signal "nobody listens"))
+(prn (handler-case (signal "heard") (condition [c] (condition-message c))))
+(prn (handler-bind [warning (fn [w] (invoke-restart 'muffle-warning))]
+       (warn "quiet")
+       :done))
+(prn (handler-case (warn "w") (warning [w] (error? w))))
+
+;; throw-condition
+(prn (handler-case (throw-condition (make-condition 'error)) (error [e] :thrown)))
+(prn (message-of (fn [] (throw-condition 5))))
+
+;; host errors are conditions
+(prn (handler-case (/ 1 0) (arithmetic-error [e] :divide-by-zero)))
+(prn (handler-case (+ 1 "a") (type-error [e] :type)))
+(prn (handler-case (nth [1] 5) (index-error [e] :index)))
+(prn (handler-case ((fn [x] x)) (arity-error [e] :arity)))
+(prn (handler-case (5 1) (not-callable-error [e] :not-callable)))
+
+;; defcondition
+(defcondition asset-missing [error] (path :reader asset-path))
+(prn (handler-case (error 'asset-missing :path "a.png")
+       (asset-missing [c] [(asset-path c) (:path c) (error? c)])))
+(defcondition note [] (n :initform (+ 1 2)))
+(prn (handler-case (signal 'note) (note [c] [(:n c) (error? c)])))
+(defcondition base [error] (a :reader base-a))
+(defcondition derived [base] (b :reader derived-b))
+(prn (handler-case (error derived :a 1 :b 2) (base [c] [(base-a c) (derived-b c)])))
+(defcondition loud [error] (x :reader loud-x)
+  (:report (fn [c] (str "loud: " (loud-x c)))))
+(prn (handler-case (error 'loud :x 5) (error [c] (condition-message c))))
+(defcondition plain [error] (x))
+(prn (handler-case (error 'plain :x 1) (error [c] (condition-message c))))
+(defcondition c1 [error])
+(prn (= (condition-type-name c1) 'c1) (condition-type-name c1))
+(defcondition c3 [error])
+(prn (handler-case (error c3) (error [c] (= (condition-type c) c3))))
+(defcondition c4 [error])
+(prn (condition? (make-condition 'c4)) (make-condition c4) c4)
+(defcondition grows [error] (a :reader grows-a))
+(defcondition grows [error] (a :reader grows-a) (b :reader grows-b))
+(prn (handler-case (error 'grows :a 1 :b 2) (grows [c] [(grows-a c) (grows-b c)])))
+(prn (message-of (fn [] (error 'no-such-condition-type))))
+(defcondition k1 [error])
+(prn (message-of (fn [] (error 'k1 :nope 1))))
+(prn (message-of (fn [] (error 'k1 "x" 1))))
+
+;; handler-bind: handlers run without unwinding
+(prn (let [log (transient [])]
+       (handler-case
+         (handler-bind [error (fn [c] (conj! log :handler))]
+           (unwind-protect (error "boom") (conj! log :cleanup)))
+         (error [e] (conj! log :caught)))
+       (persistent! log)))
+(prn (let [log (transient [])]
+       (handler-case
+         (handler-bind [error (fn [c] (conj! log :outer))]
+           (handler-bind [error (fn [c] (conj! log :inner))
+                          condition (fn [c] (conj! log :same-cluster))]
+             (error "x")))
+         (error [e] (conj! log :caught)))
+       (persistent! log)))
+(prn (let [log (transient [])]
+       (handler-bind [warning (fn [w] (conj! log :not-for-errors))]
+         (handler-case (error "x") (error [e] (conj! log :caught))))
+       (persistent! log)))
+;; A handler that signals doesn't see its own condition; outer handlers do.
+(prn (let [log (transient [])]
+       (handler-case
+         (handler-bind [error (fn [c] (conj! log [:outer (condition-message c)]))]
+           (handler-bind [error (fn [c]
+                                  (conj! log [:inner (condition-message c)])
+                                  (when (= "first" (condition-message c)) (error "second")))]
+             (error "first")))
+         (error [e] (conj! log [:caught (condition-message e)])))
+       (persistent! log)))
+
+(defn load-texture [path]
+  (restart-case
+    (if (= path "good.png") [:texture path] (error 'asset-missing :path path))
+    (use-placeholder [] :placeholder)
+    (use-path [p] (load-texture p))))
+(prn [(handler-bind [asset-missing (fn [c] (invoke-restart 'use-placeholder))]
+        (load-texture "missing.png"))
+      (handler-bind [asset-missing (fn [c] (invoke-restart 'use-path "good.png"))]
+        (load-texture "missing.png"))])
+
+;; Restarts
+(prn (restart-case (invoke-restart 'second 1 2) (first [] :first) (second [a b] (+ a b))))
+(prn (restart-case (invoke-restart 'opt) (opt [& xs] (count xs))))
+(prn (restart-case :no-restart-used (r [] :r)))
+;; Phase 0's `skein run` adds restarts of its own (abort, exit) outside the program's.
+(prn (restart-case (let [rs (mapv restart-name (compute-restarts))] [(nth rs 0) (nth rs 1)])
+       (a [] 1) (b [] 2)))
+(prn (restart-case (restart-report (find-restart 'r)) (r [] :report "Do the thing" 1)))
+(prn (find-restart 'nowhere))
+(prn (restart-case (restart-case (invoke-restart 'r) (r [] :inner)) (r [] :outer)))
+(prn (restart-case (invoke-restart (find-restart 'r) 5) (r [x] (* x 2))))
+(prn (message-of (fn [] (invoke-restart 'not-active))))
+(prn (let [r (restart-case (find-restart 'r) (r [] 1))] (restart-name r)))
+(prn (message-of (fn [] (let [r (restart-case (find-restart 'r) (r [] 1))] (invoke-restart r)))))
+(prn (first (restart-case (compute-restarts) (late [] 1))))
+(prn (restart-case (invoke-restart 'retry-it) (some.ns/retry-it [] :found)))
+(prn (restart-case (invoke-restart 'other.ns/retry-it) (retry-it [] :found)))
+(defmacro with-again [& body] `(restart-case (do ~@body) (again [] :again)))
+(prn (with-again (invoke-restart 'again)))
+(prn (restart-case (restart-name (find-restart 'x.y/plain)) (plain [] nil)))
+
+;; handler-case and try
+(prn (handler-case (error "x") (arithmetic-error [e] :arith) (error [e] :error)))
+(prn (handler-case (/ 1 0) (arithmetic-error [e] :arith) (error [e] :error)))
+(prn (handler-case (error "x") (error [] :no-var)))
+(prn (handler-case 42 (error [e] :never)))
+(prn (handler-case (handler-case (/ 1 0) (index-error [e] :inner)) (error [e] :outer)))
+(prn (try 1 2))
+(prn (try (/ 1 0) (catch arithmetic-error e :caught)))
+(prn (let [log (transient [])]
+       (conj! log (try (conj! log :body) :value (finally (conj! log :finally))))
+       (persistent! log)))
+(prn (let [log (transient [])]
+       (try (error "x") (catch error e (conj! log :catch)) (finally (conj! log :finally)))
+       (persistent! log)))
+(prn (let [log (transient [])]
+       (try (try (error "x") (finally (conj! log :inner-finally)))
+            (catch error e (conj! log :outer-catch)))
+       (persistent! log)))
+
+;; unwind-protect ordering
+(prn (let [log (transient [])]
+       (handler-case
+         (unwind-protect
+           (unwind-protect (error "x") (conj! log :inner) (conj! log :inner2))
+           (conj! log :outer))
+         (error [e] (conj! log :handler)))
+       (persistent! log)))
+(prn (let [log (transient [])]
+       (restart-case
+         (unwind-protect (invoke-restart 'r) (conj! log :cleanup))
+         (r [] (conj! log :restart)))
+       (persistent! log)))
+(prn (let [log (transient [])]
+       (block* b (unwind-protect (unwind-protect (return-from* b 1) (conj! log 1))
+                                 (conj! log 2)))
+       (persistent! log)))
+;; A cleanup that exits through its own block doesn't lose the unwind it interrupted.
+(prn (let [log (transient [])]
+       (conj! log (block* outer
+                    (unwind-protect (return-from* outer :outer)
+                      (conj! log (block* inner (return-from* inner :inner))))))
+       (persistent! log)))
+
+;; Non-local exits through closures, core functions and loops
+(defn find-first [pred coll]
+  (block* found
+    (reduce (fn [_ x] (when (pred x) (return-from* found x))) nil coll)
+    :none))
+(prn (find-first (fn [x] (> x 2)) [1 3 4]) (find-first (fn [x] (> x 9)) [1 3]))
+(prn (loop [i 0 acc []]
+       (if (< i 3)
+         (recur (inc i) (conj acc (block* b (if (= i 1) (return-from* b :one) i))))
+         acc)))
+(prn (loop [i 0] (block* b (if (< i 5) (recur (inc i)) i))))
+(def escape (atom nil))
+(block* gone (reset! escape (fn [] (return-from* gone 1))))
+(prn (handler-case (@escape) (error [e] :block-has-returned)))
+(prn (handler-case (mapv (fn [x] (if (= x 2) (error "two") x)) [1 2 3])
+       (error [e] (condition-message e))))
+(prn (case 3 1 :a 3 :c :d) (message-of (fn [] (case 9 1 :a))))
+(prn (make-condition asset-missing :path "p") (condition-type (make-condition 'note))
+     arithmetic-error)

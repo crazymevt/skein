@@ -28,6 +28,7 @@ comptime {
 export fn sk_init() void {
     _ = gc.attachThread();
     coll.ensureConstants();
+    @import("cond.zig").ensureBuiltins();
 }
 
 /// Finish normally: print GC statistics if SKEIN_GC_STATS is set.
@@ -82,13 +83,13 @@ export fn sk_call(f: Value, argc: u32, argv: [*]const Value) Value {
 }
 
 export fn sk_arity_error(self: Value, argc: u32, defined_at: [*:0]const u8) Value {
-    rt.fatal("wrong number of arguments ({d}) passed to {s} (defined at {s})", .{
+    rt.raise(.arity_error, "wrong number of arguments ({d}) passed to {s} (defined at {s})", .{
         argc, func.name(self), std.mem.span(defined_at),
     });
 }
 
 export fn sk_unbound(name: [*:0]const u8, location: [*:0]const u8) Value {
-    rt.fatal("{s} is unbound at {s}", .{ std.mem.span(name), std.mem.span(location) });
+    rt.raise(.unbound_var_error, "{s} is unbound at {s}", .{ std.mem.span(name), std.mem.span(location) });
 }
 
 // Numbers: the slow paths behind skein.h's inline fixnum cases.
@@ -162,6 +163,11 @@ export fn sk_var_set(v: Value, x: Value) Value {
 export fn sk_core(name: [*:0]const u8) Value {
     return core.function(std.mem.span(name)) orelse
         rt.fatal("the native runtime has no skein.core/{s}", .{std.mem.span(name)});
+}
+
+/// The built-in condition type skein.core/`name` (the value of its var).
+export fn sk_builtin_condition_type(name: [*:0]const u8) Value {
+    return @import("cond.zig").findType(names.symbol("skein.core", std.mem.span(name)), null);
 }
 
 // Collections built from compiled literals

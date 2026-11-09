@@ -409,6 +409,7 @@ Details (D-034):
 - `(handler-case expr (type [c] body...)...)`, and `(try body... (catch type e body...)... (finally body...))` as in Clojure.
 - `(restart-case expr (name [params] :report "text"? body...)...)`; `invoke-restart`, `find-restart`, `compute-restarts`, `restart-name` and `restart-report`. CL's standard restarts (`abort`, `continue`, `muffle-warning`, `use-value`, `store-value`) can be invoked by name. A restart value can safely outlive its `restart-case`; invoking it afterwards is an error. Restarts match by their **plain name**, ignoring any namespace: a restart a syntax-quoted macro establishes as `skein.game/retry-frame` is found by `(invoke-restart 'retry-frame)` (D-041). As in CL, the innermost restart with a name wins.
 - When `skein run` meets an unhandled error, it prints the message and the restarts that were active.
+- Natively (Phase 1, D-047), handler and restart clusters, blocks and unwind-protects are frames on a per-thread chain kept in compiled code's C stack frames. Unwinding uses setjmp/longjmp, which on Windows unwinds through SEH. The runtime's own errors (division by zero, bad indexes, arity errors, ...) are conditions of the built-in types. An unhandled error prints as under `skein run` and exits with status 1.
 
 **Conditions and concurrency.** This is the feature that sets Skein apart.
 - Each fiber has its own handler and restart stack.
@@ -831,7 +832,7 @@ skein build --target x86_64-windows-gnu --profile release
 
 ### 19.3 Platform rules
 - OS-specific code lives **only** in `runtime/platform/<os>/` (native) or `host/src/platform/` (Phase 0) behind a common interface. macOS and Linux share `runtime/platform/posix/`; Windows has `runtime/platform/windows/` (D-043).
-- **Windows:** use SEH-compatible unwinding in the runtime. There's no `fork`. Paths must handle backslashes and drive letters, and console versus GUI subsystem is a build flag.
+- **Windows:** use SEH-compatible unwinding in the runtime (mingw's `longjmp` unwinds through `RtlUnwindEx`, D-047). There's no `fork`. Paths must handle backslashes and drive letters, and console versus GUI subsystem is a build flag.
 - **macOS:** apps ship as `.app` bundles. Code signing and notarization go in `skein package`. Dev-mode JIT and dynamic loading need the `com.apple.security.cs.allow-jit` and `disable-library-validation` entitlements. The main thread is required for Cocoa/SDL windowing.
 - **Linux:** link against an old glibc baseline via zig's glibc versioning for wide compatibility.
 

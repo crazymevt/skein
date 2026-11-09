@@ -201,6 +201,7 @@ pub fn hashOf(v: Value) u32 {
         .hash_map => cached(v, 2, mapHash),
         .hash_set => cached(v, 1, setHash),
         .atom => @intCast(coll.get(v, 1).toFixnum()),
+        .condition, .condition_type, .restart => @import("cond.zig").hashOf(v),
         // Identity: a function's code pointer, or for other objects... (permanent ones
         // never move, so their address will do).
         .function => hash.mix32(@truncate(v.toObject().payload()[0] >> 3)),
@@ -252,7 +253,7 @@ pub fn compare(a: Value, b: Value) i32 {
     var bb: std.ArrayList(u8) = .empty;
     print.write(a, &ba, true);
     print.write(b, &bb, true);
-    rt.fatal("cannot compare {s} with {s}", .{ ba.items, bb.items });
+    rt.raise(.type_error, "cannot compare {s} with {s}", .{ ba.items, bb.items });
 }
 
 fn order(o: std.math.Order) i32 {
