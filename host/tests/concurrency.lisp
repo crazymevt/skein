@@ -258,3 +258,18 @@
   "(try (with-timeout 0.005 (with-nursery [n] (spawn n (sleep 5)) (spawn n (<! (chan)))))
      (catch timeout e :timed-out))"
   ":timed-out")
+
+(test timed-waits-keep-their-mutex
+  ;; Regression: SBCL's CONDITION-WAIT can time out without re-acquiring its mutex, which
+  ;; broke the worker pool under load in CI. Thread B's wait times out while A holds the
+  ;; mutex; afterwards B must still hold it.
+  (let ((m (sb-thread:make-mutex)) (q (sb-thread:make-waitqueue)) (held nil))
+    (let ((b (sb-thread:make-thread
+              (lambda ()
+                (sb-thread:with-mutex (m)
+                  (skein.runtime::timed-wait q m 0.02)
+                  (setf held (sb-thread:holding-mutex-p m)))))))
+      (sleep 0.005)
+      (sb-thread:with-mutex (m) (sleep 0.1))
+      (sb-thread:join-thread b)
+      (is (eq t held)))))

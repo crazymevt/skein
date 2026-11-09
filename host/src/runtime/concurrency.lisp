@@ -75,7 +75,17 @@ TASK-TIMEOUT if a with-timeout deadline has passed."
             (run-task task)))))
 
 ;;; ------------------------------------------------------------------------------------
-;;; Waiting. Every blocking operation waits through WAIT-FOR, which wakes at least every
+;;; Waiting
+
+(defun timed-wait (queue mutex seconds)
+  "Wait on QUEUE for at most SECONDS, with MUTEX held before and after. SBCL's
+CONDITION-WAIT may time out without re-acquiring the mutex, so take it back then."
+  (or (sb-thread:condition-wait queue mutex :timeout seconds)
+      (progn (unless (sb-thread:holding-mutex-p mutex)
+               (sb-thread:grab-mutex mutex))
+             nil)))
+
+;;; Every blocking operation waits through WAIT-FOR, which wakes at least every
 ;;; 20 ms to run main-thread work and check for cancellation.
 
 (defun wait-for (mutex queue ready on-ready &key deadline)
@@ -85,7 +95,7 @@ it. Returns :TIMEOUT instead if DEADLINE (internal time) passes first."
     (sb-thread:with-mutex (mutex)
       (when (funcall ready) (return (funcall on-ready)))
       (when (and deadline (>= (now) deadline)) (return :timeout))
-      (sb-thread:condition-wait queue mutex :timeout 0.02))
+      (timed-wait queue mutex 0.02))
     (drain-main-thread)
     (check-cancellation)))
 
@@ -169,7 +179,7 @@ TASK-CANCELLED-ERROR. Returns :TIMEOUT if DEADLINE passes first."
         (incf **idle-workers**)
         (let ((deadline (seconds-from-now *worker-idle-seconds*)))
           (loop until (or **pool-queue** (>= (now) deadline))
-                do (sb-thread:condition-wait **pool-wake** **pool-lock** :timeout 1)))
+                do (timed-wait **pool-wake** **pool-lock** 1)))
         (decf **idle-workers**)
         (if **pool-queue**
             (setf task (pop **pool-queue**))

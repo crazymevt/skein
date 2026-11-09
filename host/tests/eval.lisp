@@ -372,7 +372,8 @@ when they are given."
   "Write FILES, a list of (relative-path contents), under a fresh temporary DIR, and run
 BODY with *SOURCE-PATHS* set to it."
   `(let ((,dir (uiop:ensure-directory-pathname
-                (merge-pathnames (format nil "skein-test-~D/" (random 1000000000))
+                (merge-pathnames (format nil "skein-test-~D/"
+                                         (random 1000000000 (make-random-state t)))
                                  (uiop:temporary-directory)))))
      (unwind-protect
           (progn
