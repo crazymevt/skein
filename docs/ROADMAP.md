@@ -6,7 +6,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 
 | Milestone | Status |
 |---|---|
-| M0.1 Repository scaffolding | 🟨 in progress: done locally on macOS; CI not yet run on GitHub |
+| M0.1 Repository scaffolding | ✅ |
 | M0.2 Reader | ✅ |
 | M0.3 Core IR, expander skeleton, CL backend | ⬜ |
 | M0.4 Persistent collections and seqs | ⬜ |
