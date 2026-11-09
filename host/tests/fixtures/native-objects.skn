@@ -25,7 +25,8 @@
 (let [{:keys [r name]} c] (prn r name))
 
 ;; make, with and cells
-(defclass counter [] (n :cell :atom :init 0) (local :cell :unsynchronized :init 10) (fixed :init :f))
+(defclass counter []
+  (n :cell :atom :init 0) (local :cell :unsynchronized :init 10) (fixed :init :f))
 (def k (make counter))
 (prn (update-slot! k :n + 5) (set-slot! k :n 7) (:n k) @(cell k :n))
 (prn (set-slot! k :local 11) (update-slot! k :local inc) (:local k))
@@ -109,7 +110,8 @@
 (prn (= p1 (make pt :x 1 :y 2)) (= p1 (make pt :x 1 :y 3)) (= c (make circle :r 3)) (= c c))
 (prn (count (hash-set p1 (make pt :x 1 :y 2) (make pt :x 0 :y 0)))
      (get {p1 :found} (make pt :x 1 :y 2))
-     (message-of (fn [] #{p1 (make pt :x 1 :y 2)})) (message-of (fn [] {p1 1 (make pt :x 1 :y 2) 2}))
+     (message-of (fn [] #{p1 (make pt :x 1 :y 2)}))
+     (message-of (fn [] {p1 1 (make pt :x 1 :y 2) 2}))
      (= (hash-of p1) (hash-of (make pt :x 1 :y 2))))
 
 ;; Condition types as specializers
