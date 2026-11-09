@@ -1,0 +1,37 @@
+(ns conditions)
+
+;; A condition type with a slot and a reader.
+(defcondition asset-missing [error]
+  (path :reader asset-path))
+
+;; Low-level code signals the problem and offers ways to recover, without deciding.
+(defn load-texture [path]
+  (restart-case
+    (if (= path "hero.png")
+      {:texture path}
+      (error asset-missing :path path))
+    (use-placeholder [] :report "Use the placeholder texture" {:texture "placeholder.png"})
+    (use-path [p] :report "Load a different file" (load-texture p))))
+
+(defn load-level [paths]
+  (mapv load-texture paths))
+
+;; High-level code decides, without unwinding the stack: the handler picks a restart.
+(println "placeholder:"
+         (handler-bind [asset-missing (fn [c] (invoke-restart 'use-placeholder))]
+           (load-level ["hero.png" "missing.png"])))
+
+(println "fallback:"
+         (handler-bind [asset-missing (fn [c] (invoke-restart 'use-path "hero.png"))]
+           (load-level ["gone.png"])))
+
+;; handler-case and try unwind, like exceptions elsewhere.
+(println "handler-case:"
+         (handler-case (load-texture "nope.png")
+           (asset-missing [c] (str "missing " (asset-path c)))))
+
+(println "try:"
+         (try
+           (/ 1 0)
+           (catch arithmetic-error e :divided-by-zero)
+           (finally (println "  (finally runs)"))))

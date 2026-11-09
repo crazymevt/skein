@@ -42,13 +42,15 @@ All nodes include `location`. "Body" fields hold one node; a multi-form body bec
 | `values-node` | `args` | `(values a b ...)` | return multiple values |
 | `let-values-node` | `bindings`, `body` | `(let-values* [[a b] expr] ...)` | `bindings` is a list of `(locals . init-node)`; missing values are `nil`, extra ones are dropped |
 | `the-node` | `type`, `expr` | `(the type expr)` | a type assertion. `type` is the type's syntax. Phase 0 evaluates `expr` and does not check yet (M0.8) |
+| `throw-condition-node` | `condition` | `(throw-condition c)` | signal the condition; if no handler unwinds, it is unhandled |
+| `handler-bind-node` | `bindings`, `body` | `(handler-bind* [type handler ...] body...)` | `bindings` is a list of `(type-node . handler-node)`. Types are evaluated once on entry; handlers run in order without unwinding |
+| `restart-bind-node` | `bindings`, `body` | `(restart-bind* [name fn report ...] body...)` | `bindings` is a list of `(name-symbol fn-node report-node)`. Invoking the restart calls `fn` with the arguments; `restart-case` builds unwinding on top |
 
 ## Not in the IR yet
 
 | Form | Milestone |
 |---|---|
 | `(declare ...)` | Accepted at the start of bodies and ignored until M0.8 adds declarations. |
-| `throw-condition`, `handler-bind*`, `restart-bind*` | M0.6 (conditions and restarts) |
 | `%ffi-call` | M0.10 (FFI) |
 | `set!` of a dynamic var binding or an `:unsynchronized` cell | Dynamic binding (M0.5 or later) and `defclass` cells (M0.7) |
 

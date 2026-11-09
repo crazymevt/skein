@@ -49,6 +49,13 @@ print does; otherwise as pr does. Values with no readable syntax print as #<...>
         ((tvector-p x) (write-string "#<transient vector>" stream))
         ((tmap-p x) (write-string "#<transient map>" stream))
         ((tset-p x) (write-string "#<transient set>" stream))
+        ((typep x 'condition)
+         (let ((type (condition-type-of x)))
+           (format stream "#<~A ~A>" (if type (condition-type-name type) (type-of x))
+                   (condition-report x))))
+        ((condition-type-p x) (format stream "#<condition-type ~A>" (condition-type-name x)))
+        ((skein-restart-p x) (format stream "#<restart ~A>"
+                                     (readable-string (skein-restart-name x))))
         ((reduced-p x)
          (write-string "#<reduced " stream)
          (print-value (reduced-value x) stream :readably readably)

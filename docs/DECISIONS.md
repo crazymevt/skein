@@ -227,3 +227,16 @@ Date: 2026-11-09 · Status: Accepted (both choices approved by Jessie). Revises 
   - Destructuring is a front-end function, `skein.core/destructure`, used by the `let`, `loop`, `doseq` and `for` macros; the `fn` special form destructures parameters by wrapping its body in `let`.
 - **Alternatives:** Racket-style macros over syntax objects with explicit accessors; strict phase rules that require helper functions to live in a separate namespace.
 - **Consequences:** Clojure macros port with little change. Hygienic `define-syntax` (Phase 3) will work on syntax objects alongside `defmacro`. The native compiler must instantiate a macro's namespace (its earlier forms) at compile time, as Clojure's compiler does.
+
+## D-034: Conditions and restarts on the CL condition system
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M0.6 implements DESIGN §10, which fixes the semantics but not every detail of the surface syntax or the Phase 0 representation.
+- **Decision:**
+  - A Skein condition type is a runtime object wrapping a CL condition class; `defcondition` creates or redefines the class at run time. Handlers match with `typep`, so host errors (division by zero, type errors) are Skein conditions too.
+  - `defcondition` takes `[parents]`, slots `(name :reader f :initform expr)` and an optional `(:report f)`; parents default to `[condition]`. Slots can be read with keywords. Unknown initargs are errors.
+  - `error`, `signal` and `warn` accept a condition, a type, a symbol naming a type, or a message string. Message arguments are joined with spaces, like `println`. A message given to `signal` makes a plain (non-error) condition, as in CL. A quoted type name is looked up in the current namespace, then globally if only one namespace defines it; passing the type itself (`(error asset-missing ...)`) always works.
+  - `handler-case` clauses are `(type [c] body...)`; `try` uses Clojure's `catch`/`finally`. `handler-case`, `try` and `restart-case` are macros in `lib/skein/core.skn` over `block*`, `return-from*`, `handler-bind*` and `restart-bind*`.
+  - Restart names are symbols, mapped to CL symbols in the `SKEIN-RESTARTS` package. Because SBCL allocates restarts on the stack, Skein code only ever sees copies (name and report); using one after its `restart-case` has exited is a Skein error rather than a crash.
+  - `skein run` detects unhandled errors through SBCL's debugger hook, not a catch-all handler, so signals and handlers inside the program behave exactly as they would at a REPL; it prints the message and the restarts active at that point. The launchers call the CLI after loading, so SBCL adds no load context to messages.
+- **Alternatives:** One CL condition class holding a Skein map (simpler redefinition, but handlers would need custom matching and host errors would not fit); CL-style format strings in `error`.
+- **Consequences:** M0.7 should fold condition types into the object system. A Skein REPL (M0.11) can list and invoke the same restarts.

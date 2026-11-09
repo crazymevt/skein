@@ -1,0 +1,5 @@
+placeholder: [{:texture hero.png} {:texture placeholder.png}]
+fallback: [{:texture hero.png}]
+handler-case: missing nope.png
+  (finally runs)
+try: :divided-by-zero

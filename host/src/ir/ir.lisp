@@ -78,3 +78,6 @@
 (define-node values-node (args '() :read-only t))
 (define-node let-values-node (bindings '() :read-only t) (body nil :read-only t))
 (define-node the-node (type nil :read-only t) (expr nil :read-only t))
+(define-node throw-condition-node (condition nil :read-only t))
+(define-node handler-bind-node (bindings '() :read-only t) (body nil :read-only t))
+(define-node restart-bind-node (bindings '() :read-only t) (body nil :read-only t))

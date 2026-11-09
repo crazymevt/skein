@@ -263,8 +263,6 @@ when they are given."
   (evals-to "((fn [x] (declare (type i32 x)) (+ x 1)) 1)" 2)
   (evals-to "(let* [x 1] (declare (type i32 x)) x)" 1)
   (compile-fails "(do (declare x) 1)" "declare is only allowed at the start of a body")
-  (compile-fails "(throw-condition 1)" "not supported until conditions arrive (M0.6)")
-  (compile-fails "(handler-bind* 1)" "not supported until conditions arrive")
   (compile-fails "(%ffi-call 1)" "not supported until the FFI arrives (M0.10)"))
 
 ;;; Calls

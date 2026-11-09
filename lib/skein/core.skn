@@ -34,7 +34,7 @@ and the bootstrap macros ns, defmacro, defn and defn- are built into the host.")
   [& clauses]
   (when clauses
     (when-not (next clauses)
-      (%error "cond needs an even number of forms"))
+      (error "cond needs an even number of forms"))
     `(if ~(first clauses)
        ~(second clauses)
        (cond ~@(next (next clauses))))))
@@ -53,7 +53,7 @@ and the bootstrap macros ns, defmacro, defn and defn- are built into the host.")
 
 (defn- binding-pair [bindings what]
   (when-not (and (vector? bindings) (= 2 (count bindings)))
-    (%error what "needs a binding vector of one name and one test"))
+    (error what "needs a binding vector of one name and one test"))
   bindings)
 
 (defmacro if-let
@@ -91,7 +91,7 @@ and the bootstrap macros ns, defmacro, defn and defn- are built into the host.")
   [bindings & body]
   (let [pairs (partition 2 bindings)]
     (when-not (even? (count bindings))
-      (%error "loop needs an even number of binding forms"))
+      (error "loop needs an even number of binding forms"))
     (if (every? (fn [[b _]] (symbol? b)) pairs)
       `(loop* ~bindings ~@body)
       (let [names (map (fn [[b _]] (if (symbol? b) b (gensym "loop__"))) pairs)]
@@ -221,7 +221,7 @@ An odd final form is the default; with no default and no match, signal an error.
 :when and :while modifiers, as in for. Returns nil."
   [seq-exprs & body]
   (when-not (and (vector? seq-exprs) (even? (count seq-exprs)))
-    (%error "doseq needs a vector with an even number of forms"))
+    (error "doseq needs a vector with an even number of forms"))
   `(do ~(doseq-code (seq seq-exprs) body nil) nil))
 
 (defn- for-code
@@ -251,5 +251,125 @@ done is what the innermost binding returns when a :while test fails."
 and :while modifiers."
   [seq-exprs body]
   (when-not (and (vector? seq-exprs) (even? (count seq-exprs)))
-    (%error "for needs a vector with an even number of forms"))
+    (error "for needs a vector with an even number of forms"))
   (for-code (seq seq-exprs) body () ()))
+
+;;; Conditions and restarts (DESIGN §10). These build on the special forms
+;;; throw-condition, handler-bind* and restart-bind*.
+
+(defn- condition-type-form
+  "Code that evaluates a condition type spec: a symbol is looked up by name in the
+namespace being compiled; anything else is evaluated."
+  [spec]
+  (if (symbol? spec)
+    `(%condition-type '~spec ~(%current-namespace-name))
+    spec))
+
+(defmacro handler-bind
+  "Run the body with handlers: [type handler ...]. A handler is a function of the
+condition. It runs without unwinding, so restarts established inside the body are still
+available; if it returns, the next applicable handler runs."
+  [bindings & body]
+  (when-not (and (vector? bindings) (even? (count bindings)))
+    (error "handler-bind needs a vector of condition types and handlers"))
+  `(handler-bind* [~@(mapcat (fn [[type handler]] [(condition-type-form type) handler])
+                             (partition 2 bindings))]
+     ~@body))
+
+(defmacro handler-case
+  "Evaluate expr. If a condition matching a clause (type [c] body...) is signaled, unwind
+to here and evaluate that clause with c bound to the condition."
+  [expr & clauses]
+  (let [outer (gensym "handler_case__")
+        inner (gensym "handler_case_inner__")
+        result (gensym "result__")
+        indexed (map-indexed vector clauses)]
+    (doseq [clause clauses]
+      (when-not (and (seq? clause) (vector? (second clause)) (<= (count (second clause)) 1))
+        (error "handler-case clauses look like (type [c] body...)")))
+    `(block* ~outer
+       (let [~result (block* ~inner
+                       (return-from* ~outer
+                         (handler-bind* [~@(mapcat (fn [[i [type]]]
+                                                     [(condition-type-form type)
+                                                      `(fn [c#] (return-from* ~inner [~i c#]))])
+                                                   indexed)]
+                           ~expr)))]
+         (case (nth ~result 0)
+           ~@(mapcat (fn [[i [_ params & body]]]
+                       [i (if (seq params)
+                            `(let [~(first params) (nth ~result 1)] ~@body)
+                            `(do ~@body))])
+                     indexed))))))
+
+(defmacro try
+  "Evaluate the body. (catch type e body...) clauses handle matching conditions by
+unwinding, as handler-case does; a (finally body...) clause always runs last."
+  [& forms]
+  (let [clause? (fn [head f] (and (seq? f) (= head (first f))))
+        body (remove (fn [f] (or (clause? 'catch f) (clause? 'finally f))) forms)
+        catches (filter (fn [f] (clause? 'catch f)) forms)
+        finally (first (filter (fn [f] (clause? 'finally f)) forms))
+        guarded (if (seq catches)
+                  `(handler-case (do ~@body)
+                     ~@(map (fn [[_ type e & handler]] `(~type [~e] ~@handler)) catches))
+                  `(do ~@body))]
+    (if finally
+      `(unwind-protect ~guarded ~@(rest finally))
+      guarded)))
+
+(defmacro restart-case
+  "Evaluate expr with restarts established: (name [params] body...), optionally with
+:report \"description\" after the parameters. Invoking a restart unwinds to here and
+evaluates its body with the arguments given to invoke-restart."
+  [expr & clauses]
+  (let [outer (gensym "restart_case__")
+        inner (gensym "restart_case_inner__")
+        result (gensym "result__")
+        parse (fn [clause]
+                (when-not (and (seq? clause) (symbol? (first clause)) (vector? (second clause)))
+                  (error "restart-case clauses look like (name [params] body...)"))
+                (let [[name params & more] clause
+                      report? (= :report (first more))]
+                  {:name name :params params
+                   :report (when report? (second more))
+                   :body (if report? (next (next more)) more)}))
+        indexed (map-indexed vector (map parse clauses))]
+    `(block* ~outer
+       (let [~result (block* ~inner
+                       (return-from* ~outer
+                         (restart-bind* [~@(mapcat (fn [[i {:keys [name report]}]]
+                                                     [name
+                                                      `(fn [& args#]
+                                                         (return-from* ~inner [~i args#]))
+                                                      report])
+                                                   indexed)]
+                           ~expr)))]
+         (case (nth ~result 0)
+           ~@(mapcat (fn [[i {:keys [params body]}]]
+                       [i `(apply (fn ~params ~@body) (nth ~result 1))])
+                     indexed))))))
+
+(defmacro defcondition
+  "Define a condition type: (defcondition name [parents] doc? (slot :reader f
+:initform expr)... (:report f)?). Parents default to [condition]. Makes name a var
+holding the type, and defines each reader as a function of a condition."
+  [type-name parents & specs]
+  (let [ns (%current-namespace-name)
+        specs (if (string? (first specs)) (rest specs) specs)
+        report (some (fn [s] (when (= :report (first s)) (second s))) specs)
+        slots (remove (fn [s] (keyword? (first s))) specs)
+        options (fn [[_ & opts]] (apply hash-map opts))]
+    (when-not (vector? parents)
+      (error "defcondition needs a vector of parent condition types"))
+    `(do
+       ~@(keep (fn [s]
+                 (when-let [reader (:reader (options s))]
+                   `(defn ~reader [c#] (%condition-slot c# '~(first s)))))
+               slots)
+       (def ~type-name
+         (%define-condition '~(symbol ns (name type-name))
+                            [~@(map condition-type-form (if (empty? parents) '[condition] parents))]
+                            [~@(map (fn [s] `['~(first s) (fn [] ~(:initform (options s)))]) slots)]
+                            ~report))
+       ~type-name)))

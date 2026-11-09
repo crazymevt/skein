@@ -38,6 +38,11 @@
    #:seq #:seq-first #:seq-next #:seq-rest #:seq-to-cl #:count-of
    #:coll-get #:coll-conj #:coll-assoc
    #:equiv #:hash-of #:compare-values #:sequential-p #:map-p
+   ;; Conditions and restarts (DESIGN §10)
+   #:condition-type #:condition-type-p #:condition-type-name #:condition-type-class
+   #:find-condition-type #:condition-type-of #:condition-report #:throw-condition
+   #:restart-cl-name #:skein-warning #:skein-condition #:skein-restart-p #:skein-restart-name
+   #:skein-restart-report #:skein-compute-restarts
    ;; Calling
    #:invoke-other #:kw-lookup
    ;; Printing

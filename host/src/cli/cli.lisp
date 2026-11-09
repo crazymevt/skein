@@ -47,11 +47,35 @@ Commands:
   (let ((file (first args)))
     (unless (probe-file file)
       (cli-error +exit-failure+ "skein run: file not found: ~A" file))
-    (handler-case (skein.backend.cl:run-file file)
-      (error (e)
+    (multiple-value-bind (condition restarts) (run-reporting-unhandled file)
+      (when condition
         (finish-output *standard-output*)
         (let ((*print-pretty* nil))
-          (cli-error +exit-failure+ "error: ~A" e))))))
+          (cli-error +exit-failure+ "error: ~A~:[~;~%available restarts:~{~%  ~A~}~]"
+                     condition restarts restarts))))))
+
+(defun skein-restart-descriptions ()
+  "Describe the restarts that Skein code established, innermost first."
+  (loop for r in (skein.runtime:skein-compute-restarts)
+        when (eq (symbol-package (restart-name (skein.runtime::skein-restart-restart r)))
+                 (find-package '#:skein-restarts))
+          collect (format nil "~A: ~A"
+                          (skein.runtime:readable-string (skein.runtime:skein-restart-name r))
+                          (skein.runtime:skein-restart-report r))))
+
+(defun run-reporting-unhandled (file)
+  "Run FILE. If an error goes unhandled, return it and descriptions of the restarts that
+were active when it was signaled; otherwise return NIL. Only unhandled errors stop the
+program: a signal that no one handles still returns nil, as it should."
+  (let ((result
+          (catch 'unhandled
+            (let ((sb-ext:*invoke-debugger-hook*
+                    (lambda (condition hook)
+                      (declare (ignore hook))
+                      (throw 'unhandled (list condition (skein-restart-descriptions))))))
+              (skein.backend.cl:run-file file)
+              nil))))
+    (values (first result) (second result))))
 
 (defun main (args &key (out *standard-output*) (err *error-output*))
   "Run the `skein` command line with ARGS, a list of strings, and return an exit code.
@@ -83,10 +107,16 @@ see TOPLEVEL."
 (defun toplevel ()
   "Entry point for the `skein` launcher scripts: run MAIN on the process's command-line
 arguments, then exit with its exit code."
-  (let ((code (handler-case (main (uiop:command-line-arguments))
-                (error (e)
-                  (format *error-output* "skein: internal error: ~A~%" e)
-                  +exit-failure+))))
+  (let ((code (catch 'internal-error
+                ;; Only errors that nothing handles reach the debugger hook, so a Skein
+                ;; program's own signals and handlers behave normally.
+                (let ((sb-ext:*invoke-debugger-hook*
+                        (lambda (condition hook)
+                          (declare (ignore hook))
+                          (let ((*print-pretty* nil))
+                            (format *error-output* "skein: internal error: ~A~%" condition))
+                          (throw 'internal-error +exit-failure+))))
+                  (main (uiop:command-line-arguments))))))
     (finish-output *standard-output*)
     (finish-output *error-output*)
     (uiop:quit code)))

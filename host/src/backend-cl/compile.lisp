@@ -147,7 +147,53 @@ runs the body produced by BODY-THUNK so that a recur to TARGET restarts it."
            (setf body `(multiple-value-bind ,syms ,(emit (cdr b))
                          ,(declare-ignorable syms)
                          ,body))))))
-    (the-node (emit (the-node-expr node)))))
+    (the-node (emit (the-node-expr node)))
+    (throw-condition-node `(skein.runtime:throw-condition
+                            ,(emit (throw-condition-node-condition node))))
+    (handler-bind-node (emit-handler-bind node))
+    (restart-bind-node (emit-restart-bind node))))
+
+(defun emit-handler-bind (node)
+  "Handlers are tried in order. Each type is evaluated once, on entry, to a condition
+type; the CL handler tests the condition against its class."
+  (let ((entries (loop for (type . handler) in (handler-bind-node-bindings node)
+                       collect (list (make-symbol "TYPE") (make-symbol "HANDLER")
+                                     (emit type) (emit handler)))))
+    `(let (,@(loop for (tsym hsym type handler) in entries
+                   collect `(,tsym (skein.runtime:condition-type-class
+                                    (skein.runtime:find-condition-type ,type)))
+                   collect `(,hsym ,handler)))
+       (handler-bind (,@(loop for (tsym hsym) in entries
+                              collect `(condition (lambda (c)
+                                                    (when (typep c ,tsym)
+                                                      (if (functionp ,hsym)
+                                                          (funcall ,hsym c)
+                                                          (skein.runtime:invoke-other
+                                                           ,hsym nil c)))))))
+         ,(emit (handler-bind-node-body node))))))
+
+(defun emit-restart-bind (node)
+  (let ((entries (loop for (name fn report) in (restart-bind-node-bindings node)
+                       collect (list (skein.runtime:restart-cl-name name)
+                                     (make-symbol "RESTART") (make-symbol "REPORT")
+                                     (emit fn) (emit report)))))
+    `(let (,@(loop for (nil fsym rsym fn report) in entries
+                   collect `(,fsym ,fn)
+                   collect `(,rsym ,report)))
+       (restart-bind (,@(loop for (cl-name fsym rsym) in entries
+                              collect `(,cl-name
+                                        (lambda (&rest args)
+                                          (if (functionp ,fsym)
+                                              (apply ,fsym args)
+                                              (apply #'skein.runtime:invoke-other
+                                                     ,fsym nil args)))
+                                        :report-function
+                                        (lambda (stream)
+                                          (write-string (if ,rsym
+                                                            (skein.runtime:display-string ,rsym)
+                                                            ,(symbol-name cl-name))
+                                                        stream)))))
+         ,(emit (restart-bind-node-body node))))))
 
 (defun compile-node (node)
   "Compile the Core IR NODE into a CL function of no arguments that evaluates it."

@@ -234,6 +234,7 @@ membership. Returns NOT-FOUND if it is absent or COLL is not associative."
     (tset (if (eq (tmap-get (tset-tmap coll) key +not-found+) +not-found+)
               not-found
               (tmap-get (tset-tmap coll) key)))
+    (condition (if (kw-p key) (condition-slot coll (kw-name key) not-found) not-found))
     (t not-found)))
 
 (defun coll-contains-p (coll key)

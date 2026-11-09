@@ -3,4 +3,5 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec "${SBCL:-sbcl}" --noinform --no-userinit --non-interactive \
-  --load "$here/host/tools/launch.lisp" --end-toplevel-options "$@"
+  --load "$here/host/tools/launch.lisp" --eval "(skein.cli:toplevel)" \
+  --end-toplevel-options "$@"

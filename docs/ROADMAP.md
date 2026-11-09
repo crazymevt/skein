@@ -11,7 +11,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.3 Core IR, expander skeleton, CL backend | ✅ |
 | M0.4 Persistent collections and seqs | ✅ |
 | M0.5 Macros and `skein.core` | ✅ |
-| M0.6 Conditions and restarts | ⬜ |
+| M0.6 Conditions and restarts | ✅ |
 | M0.7 Object system | ⬜ |
 | M0.8 Declarations, value structs, typed arrays | ⬜ |
 | M0.9 Concurrency | ⬜ |
@@ -156,9 +156,10 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031).
 - Startup: `lib/skein/core.skn` is compiled on every start, adding about 0.15 s (0.3 s total for `skein run`). Cache it, e.g. in a saved SBCL core, if this becomes annoying.
 - `defn` and `defn-` stay built in because they attach metadata (docstrings, `^:private`) to the name; move them to Skein if runtime metadata or a metadata helper for macros is added.
-- Core macros from DESIGN §5.2 that wait on later milestones: `try` and `defcondition` (M0.6), `defclass`, `defgeneric`, `defmethod` (M0.7), `defstruct` (M0.8), `with-nursery` (M0.9), `with-open` (needs `try`), `binding` (dynamic vars).
+- Core macros from DESIGN §5.2 that wait on later milestones: `defclass`, `defgeneric`, `defmethod` (M0.7), `defstruct` (M0.8), `with-nursery` (M0.9), `with-open` (needs a `close` protocol, M0.7 or with `skein.io`), `binding` (dynamic vars).
+- M0.7: make condition types part of the object system (`defcondition` as a class with a condition metaclass), so methods can specialize on them.
 - Arity errors name where the function was defined, not the call site; consider reporting the call site too (M0.6 or M0.11).
-- Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form (M0.6).
+- Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form, e.g. by recording the current form in the debugger hook (M0.11).
 - M0.8: calls currently go through `&rest` argument lists and a dispatch on the count; give fixed-arity functions direct CL lambda lists for speed.
 - `skein run` looks for required namespaces next to the main file and in the current directory; use `project.skn` `:paths` once it exists.
 - Consider `#!` shebang lines so `.skn` files can be executable scripts.

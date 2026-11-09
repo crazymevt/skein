@@ -150,8 +150,8 @@ Following Racket, code runs either at **compile time (phase 1)**, which is macro
 | `(letfn* [(f [..] ..) ...] body...)` | mutually recursive local functions |
 | `(loop* [name val ...] body...)` / `(recur ...)` | explicit tail loop |
 | `(set! place value)` | assign a local declared `^:mutable`, a dynamic var binding, or an `:unsynchronized` cell |
-| `(throw-condition c)` | signal-and-unwind primitive underlying `error` |
-| `(handler-bind* ...)`, `(restart-bind* ...)` | condition-system primitives (§10) |
+| `(throw-condition c)` | signal the condition `c`; if no handler unwinds, it is unhandled (the primitive under `error`) |
+| `(handler-bind* [type-expr handler ...] body...)`, `(restart-bind* [name fn report ...] body...)` | condition-system primitives (§10); restart names are unevaluated symbols |
 | `(unwind-protect body cleanup...)` | guaranteed cleanup |
 | `(block* tag body...)` / `(return-from* tag v)` | lexical non-local exit |
 | `(values a b ...)` / `(let-values* [[a b] expr] body...)` | multiple values |
@@ -384,6 +384,14 @@ Skein adopts the **Common Lisp condition system**, which separates *signaling* a
 | `handler-case` / `try` | unwinding handlers, like conventional exceptions |
 | `restart-case` | establish named restarts |
 | `invoke-restart`, `find-restart`, `compute-restarts` | choose recovery |
+
+Details (D-034):
+- `(defcondition name [parents] doc? (slot :reader f :initform expr)... (:report f)?)` defines a condition type and a var `name` holding it. Parents default to `[condition]`. Slots are also readable with keywords: `(:path c)`.
+- `(error x & args)`, `(signal x & args)` and `(warn x & args)` take a condition, a condition type (or a symbol naming one, looked up in the current namespace, then globally if the name is unique) followed by keyword initargs, or a message string whose arguments are joined like `println`'s. `signal` returns `nil` when no handler takes action.
+- Built-in types include `condition`, `error`, `warning`, `arithmetic-error`, `type-error`, `index-error`, `arity-error` and `unbound-var-error`. Host errors such as division by zero are conditions of these types.
+- `(handler-case expr (type [c] body...)...)`, and `(try body... (catch type e body...)... (finally body...))` as in Clojure.
+- `(restart-case expr (name [params] :report "text"? body...)...)`; `invoke-restart`, `find-restart`, `compute-restarts`, `restart-name` and `restart-report`. CL's standard restarts (`abort`, `continue`, `muffle-warning`, `use-value`, `store-value`) can be invoked by name. A restart value can safely outlive its `restart-case`; invoking it afterwards is an error.
+- When `skein run` meets an unhandled error, it prints the message and the restarts that were active.
 
 **Conditions and concurrency.** This is the feature that sets Skein apart.
 - Each fiber has its own handler and restart stack.

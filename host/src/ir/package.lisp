@@ -29,7 +29,13 @@
    #:values-node #:make-values-node #:values-node-p #:values-node-args
    #:let-values-node #:make-let-values-node #:let-values-node-p
    #:let-values-node-bindings #:let-values-node-body
-   #:the-node #:make-the-node #:the-node-p #:the-node-type #:the-node-expr)
+   #:the-node #:make-the-node #:the-node-p #:the-node-type #:the-node-expr
+   #:throw-condition-node #:make-throw-condition-node #:throw-condition-node-p
+   #:throw-condition-node-condition
+   #:handler-bind-node #:make-handler-bind-node #:handler-bind-node-p
+   #:handler-bind-node-bindings #:handler-bind-node-body
+   #:restart-bind-node #:make-restart-bind-node #:restart-bind-node-p
+   #:restart-bind-node-bindings #:restart-bind-node-body)
   (:documentation "Core IR: the small language the expander produces and backends consume.
 See docs/CORE-IR.md. Every node includes NODE-LOCATION; the accessors follow the
 defstruct naming convention (e.g. IF-NODE-TEST)."))

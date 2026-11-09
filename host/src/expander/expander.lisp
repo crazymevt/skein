@@ -458,12 +458,37 @@ that is a destructuring pattern gets a fresh local; PATTERNS lists (pattern . lo
 (define-special-form "declare" (form env tail)
   (compile-error form "declare is only allowed at the start of a body"))
 
-(dolist (name '("throw-condition" "handler-bind*" "restart-bind*"))
-  (let ((name name))
-    (setf (gethash name *special-forms*)
-          (lambda (form env tail)
-            (declare (ignore env tail))
-            (compile-error form "~A is not supported until conditions arrive (M0.6)" name)))))
+;;; Conditions (DESIGN §10). The macros in lib/skein/core.skn build on these.
+
+(define-special-form "throw-condition" (form env tail)
+  (check-arg-count form 1)
+  (make-throw-condition-node :location (loc form)
+                             :condition (analyze (second (items form)) env)))
+
+(define-special-form "handler-bind*" (form env tail)
+  ;; (handler-bind* [type-expr handler-expr ...] body...): handlers run without unwinding.
+  (check-arg-count form 1 nil)
+  (make-handler-bind-node
+   :location (loc form)
+   :bindings (loop for (type . handler) in (binding-pairs form (second (items form))
+                                                          "handler-bind*")
+                   collect (cons (analyze type env) (analyze handler env)))
+   :body (analyze-seq (cddr (items form)) env nil (loc form))))
+
+(define-special-form "restart-bind*" (form env tail)
+  ;; (restart-bind* [name fn-expr report-expr ...] body...): NAME is an unevaluated symbol.
+  (check-arg-count form 1 nil)
+  (let ((vector (second (items form))))
+    (unless (and (vector-form-p vector) (zerop (mod (length (items vector)) 3)))
+      (compile-error vector "restart-bind* needs a vector of name, function and report triples"))
+    (make-restart-bind-node
+     :location (loc form)
+     :bindings (loop for (name fn report) on (items vector) by #'cdddr
+                     collect (list (or (sym-datum name)
+                                       (compile-error name "a restart name must be a symbol"))
+                                   (analyze fn env)
+                                   (analyze report env)))
+     :body (analyze-seq (cddr (items form)) env nil (loc form)))))
 
 (define-special-form "%ffi-call" (form env tail)
   (compile-error form "%ffi-call is not supported until the FFI arrives (M0.10)"))
