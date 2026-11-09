@@ -72,6 +72,20 @@ pub const TypeId = enum(u16) {
     condition = 24,
     /// A restart value: [name (symbol), report (string), frame serial, index].
     restart = 25,
+    // M1.8's seqs (D-052).
+    /// A cons cell whose rest is any seqable value, often a lazy seq: [first, more].
+    cons = 26,
+    /// A lazy seq: [thunk (nil once realized), seq (nil or a seq once realized)].
+    lazy_seq = 27,
+    /// A seq over a vector from an index: [vector, index].
+    vseq = 28,
+    /// A seq over a string's characters from an index: [string, index].
+    sseq = 29,
+    /// A value wrapped to stop a reduction early: [value].
+    reduced = 30,
+    /// A transducer applied to a collection each time it is reduced or seq'd: [xform, coll,
+    /// seq function of no arguments, reduce function of f and init].
+    eduction = 31,
     _,
 };
 

@@ -761,6 +761,11 @@ Phase 1 details (D-044, D-046):
 - **Calling convention:** every compiled function has one C entry point, `sk_value f(sk_value self, uint32_t argc, const sk_value *argv)`. It picks the arity by `argc`, and `self` is the function object, through which it calls itself and, later, reaches captured values. A function object is a heap object holding the code pointer and the function's name.
 - **Vars** are runtime objects (made at startup, never moved), referenced from a C array of the program's globals; `def` returns the var, as in Phase 0. Reading one checks that it is bound. Calls to `skein.core`'s arithmetic, comparisons and printing compile to inline C (fixnum cases from `runtime/include/skein.h`); other core functions are function objects in the runtime (`runtime/src/core.zig`), which compiled code calls and passes around like any function.
 - **Programs** (M1.8, D-051): a native program includes every namespace it requires, translated in load order (each namespace after the ones it uses), plus `skein.core.native`, skein.core's functions written in Skein. A call to a skein.core function goes to the Zig runtime if it has the function, else to the library's definition.
+- **Seqs** (M1.8, D-052): `runtime/src/seq.zig` gives every collection a seq.
+  - Lists are their own seqs. Vectors and strings get index seqs, and maps and sets a list of their entries or elements, in Phase 0's order.
+  - Cons cells and lazy seqs are runtime objects; a lazy seq runs its thunk once.
+  - `reduce` stops at `reduced`.
+  - The seq functions and transducers are written in Skein (`skein.core.native`), as ports of Phase 0's, with the same laziness.
 - **Data:** symbols and keywords are interned, permanent objects. Collections are ports of Phase 0's (vector trie with tail, array maps up to 8 entries, then a HAMT; sets on maps; edit-token transients), with the same hash functions, so maps and sets iterate in the same order natively and on the host. Strings keep their length in characters, so `count` is O(1).
 
 ### 17.4 Fibers and scheduler

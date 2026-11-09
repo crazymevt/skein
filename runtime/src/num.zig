@@ -34,6 +34,13 @@ pub fn isInteger(v: Value) bool {
     return v.isFixnum() or isBignum(v);
 }
 
+/// True if the integer `v` is odd (the lowest bit of its magnitude).
+pub fn isOdd(v: Value) bool {
+    if (v.isFixnum()) return @mod(v.toFixnum(), 2) != 0;
+    const p = v.toObject().payload();
+    return p[1] & 1 != 0;
+}
+
 /// A big-integer view of the integer `v`; a fixnum uses `buf` for its one limb.
 fn toConst(v: Value, buf: *[1]Limb) big.Const {
     if (v.isFixnum()) {

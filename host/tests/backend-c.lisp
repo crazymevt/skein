@@ -208,7 +208,8 @@
                              ("app/more.skn" "(ns app.more (:require [app.util :as u]))
 (defn shout [s] (str s \"! \" (u/answer)))
 (println \"loading app.more\")")
-                             ("app/main.skn" "(ns app.main (:require [app.util :as u :refer [answer]]
+                             ("app/main.skn" "(ns app.main
+  (:require [app.util :as u :refer [answer]]
                                     [app.more]))
 (u/twice (println u/greeting (answer)))
 (println (app.more/shout \"x\"))
@@ -221,31 +222,125 @@
             (is (string= expected out) "native output differs:~%--- skein run:~%~A--- native:~%~A"
                 expected out))))))
 
-(defmacro library-matches (&rest templates)
-  "Each template, with % replaced by a skein.core function's name, gives the same printed
-value on the host as with % replaced by skein.core.native's version of the function."
-  `(dolist (template (list ,@templates))
-     (flet ((value-of (name)
-              (handler-case
-                  (pr (ev (format nil "(ns lib-test (:require [skein.core.native]))~%~A"
-                                  (substitute-name template name))))
-                (skein.runtime:skein-error (e) (format nil "error: ~A"
-                                                       (skein.runtime:skein-error-message e))))))
-       (let ((core (value-of "skein.core/~A")) (lib (value-of "skein.core.native/~A")))
-         (is (string= core lib) "~A: Phase 0 gives ~A, skein.core.native ~A" template core lib)))))
+(defun library-names ()
+  "The public functions of skein.core.native."
+  (skein.runtime:require-namespace "skein.core.native")
+  (let ((ns (skein.runtime:find-namespace "skein.core.native")))
+    (loop for name being the hash-keys of (skein.runtime::namespace-mappings ns)
+            using (hash-value var)
+          unless (skein.runtime:var-private-p var) collect name)))
 
-(defun substitute-name (template qualified)
-  "TEMPLATE, \"(% args)\" with % naming a function, with % replaced: QUALIFIED is a
-format string for the qualified name, given the name."
-  (let* ((open (position #\( template))
-         (end (position-if (lambda (c) (member c '(#\Space #\)))) template :start open))
-         (name (subseq template (1+ open) end)))
-    (concatenate 'string (subseq template 0 (1+ open)) (format nil qualified name)
-                 (subseq template end))))
+(defun value-with (source library-p)
+  "SOURCE evaluated, printed: with skein.core, or with every skein.core.native function
+referred in place of skein.core's."
+  (handler-case
+      (pr (ev (format nil "(ns lib-test~:[~;~:* ~
+                           (:require [skein.core.native :refer [~{~A~^ ~}]])~])~%~A"
+                      (and library-p (library-names)) source)))
+    (error (e) (format nil "error: ~A" (if (typep e 'skein.runtime:skein-error)
+                                           (skein.runtime:skein-error-message e)
+                                           (princ-to-string e))))))
+
+(defun library-matches (&rest sources)
+  "Each source gives the same printed value with skein.core as with skein.core.native."
+  (dolist (source sources)
+    (let ((core (value-with source nil)) (lib (value-with source t)))
+      (is (string= core lib) "~A: Phase 0 gives ~A, skein.core.native ~A" source core lib))))
 
 (test native-library-matches-phase-0
   (library-matches "(update {:a 1} :a inc)" "(update {:a 1} :b (fnil inc 0))"
                    "(update [1 2] 0 + 10 20)" "(update nil :k (constantly 1))"))
+
+(test native-library-seqs-match-phase-0
+  (library-matches
+   ;; Lazy seq functions, with a collection and as transducers
+   "(map inc [1 2 3])" "(map + [1 2] [10 20 30])" "(map vector \"ab\" (range))"
+   "(map inc nil)" "(map identity {:a 1 :b 2})" "(map inc #{1 2 3})"
+   "(into [] (map inc) [1 2])" "(mapv inc [1 2])" "(mapv + [1 2] [3 4] [5 6])"
+   "(map-indexed vector [:a :b])" "(into [] (map-indexed vector) [:a :b])"
+   "(filter odd? (range 10))" "(into [] (filter odd?) [1 2 3])" "(filterv even? [1 2 3 4])"
+   "(remove odd? [1 2 3])" "(into [] (remove odd?) [1 2 3])"
+   "(keep (fn [x] (when (odd? x) (* x x))) (range 6))" "(into [] (keep identity) [1 nil 2])"
+   "(take 3 (range))" "(take 0 [1])" "(take 5 [1 2])" "(into [] (take 2) [1 2 3])"
+   "(into [] (take 0) [1 2 3])" "(drop 2 [1 2 3])" "(drop 5 [1])" "(into [] (drop 1) [1 2])"
+   "(take-while neg? [-1 -2 3 -4])" "(into [] (take-while odd?) [1 3 4 5])"
+   "(drop-while neg? [-1 -2 3 -4])" "(into [] (drop-while odd?) [1 3 4 5])"
+   "(concat [1] '(2) nil #{3})" "(concat)" "(into [] cat [[1 2] [3]])"
+   "(mapcat reverse [[1 2] [3 4]])" "(into [] (mapcat (fn [x] [x x])) [1 2])"
+   "(range 5)" "(range 2 8 3)" "(range 5 0 -2)" "(take 3 (range 0 1 0))" "(range 3 3)"
+   "(repeat 3 :x)" "(take 2 (repeat :y))" "(repeatedly 2 (constantly 7))"
+   "(take 4 (iterate (fn [x] (* 2 x)) 1))" "(take 5 (cycle [1 2]))" "(cycle [])"
+   "(interleave [1 2 3] [:a :b])" "(interleave)" "(interpose :x [1 2 3])"
+   "(into [] (interpose :x) [1 2])" "(interpose :x [])"
+   "(partition 2 [1 2 3 4 5])" "(partition 2 1 [1 2 3])" "(partition 3 [1 2])"
+   "(partition-all 2 [1 2 3])" "(partition-all 2 3 [1 2 3 4 5])"
+   "(into [] (partition-all 2) [1 2 3])" "(distinct [1 2 1 3 2])"
+   "(into [] (distinct) [1 1 2])" "(dedupe [1 1 2 2 1])" "(into [] (dedupe) [1 1 2])"
+   ;; Eager ones
+   "(reverse [1 2 3])" "(reverse nil)" "(sort [3 1 2])" "(sort > [3 1 2])"
+   "(sort (fn [a b] (- b a)) [1 3 2])" "(sort-by count [\"ccc\" \"a\" \"bb\"])"
+   "(sort-by first [[2 :a] [1 :b] [2 :c] [1 :d]])" "(sort [])"
+   "(flatten [1 [2 [3 (4)]] 5])" "(flatten nil)" "(frequencies [:a :b :a])"
+   "(group-by odd? (range 6))" "(some even? [1 3 4])" "(some even? [1])"
+   "(every? odd? [1 3])" "(every? odd? [])" "(not-every? odd? [1 2])" "(not-any? odd? [2])"
+   "(nthrest [1 2 3] 2)" "(nthnext [1 2 3] 2)" "(nthnext [1] 3)" "(split-at 2 [1 2 3])"
+   "(split-with odd? [1 3 4 5])" "(doall (map inc [1]))" "(dorun (map inc [1]))"
+   "(second [1 2])" "(ffirst [[1]])" "(nnext [1 2 3])" "(last [1 2])" "(last (range 4))"
+   "(last [])" "(butlast [1 2 3])" "(butlast [1])" "(list* 1 2 [3 4])" "(list* nil)"
+   "(set [1 2 2])"
+   ;; Reduction and transducer entry points
+   "(into [] [1 2])" "(into {} [[:a 1]])" "(into #{} [1 1])" "(into '(1) [2 3])"
+   "(into nil [1])" "(into [] (comp (map inc) (filter even?)) (range 10))" "(into)"
+   "(transduce (map inc) + [1 2 3])" "(transduce (map inc) + 10 [1 2 3])"
+   "(transduce (take 2) conj [1 2 3])" "(sequence [1 2])" "(sequence nil)"
+   "(sequence (comp (map inc) (take 2)) [5 6 7])" "(sequence (partition-all 2) [1 2 3])"
+   "(reduce-kv (fn [acc k v] (conj acc [k v])) [] {:a 1})"
+   "(reduce-kv (fn [acc i v] (+ acc i v)) 0 [10 20])" "(reduce-kv + 0 nil)"
+   "((comp inc *) 2 3)" "((comp) 5)" "((partial + 1 2) 3)" "((complement odd?) 2)"
+   "((juxt inc dec) 5)" "((fnil inc 0) nil)" "((completing +) 1 2)"
+   "((completing + str) 3)"
+   "(reduce + (eduction (map inc) (filter odd?) [1 2 3 4]))"
+   "(seq (eduction (map inc) [1 2]))" "(into [] (eduction (map inc) [1]))"
+   "(reduce (fn [acc x] (if (> x 2) (reduced acc) (+ acc x))) 0 (range 10))"
+   ;; How much a lazy seq realizes
+   "(let [log (atom [])] (doall (take 2 (map (fn [x] (swap! log conj x) x) (range 10)))) @log)"
+   "(let [log (atom [])] (first (filter (fn [x] (swap! log conj x) (> x 2)) (range 10))) @log)"
+   "(let [log (atom [])] (sequence (map (fn [x] (swap! log conj x) x)) [1 2 3]) @log)"
+   "(let [s (map inc [1 2])] [(realized? s) (first s) (realized? s)])"
+   ;; Errors
+   "(take 2 5)" "(reduce-kv + 0 #{1})"))
+
+(defun random-vector-text (rs)
+  (format nil "[~{~D~^ ~}]" (loop repeat (random 8 rs) collect (- (random 10 rs) 3))))
+
+(test native-library-seqs-match-phase-0-randomly
+  ;; Random collections through random seq functions and transducer stacks.
+  (let ((rs (sb-ext:seed-random-state 20261111))
+        (seq-fns '("(map inc ~A)" "(filter odd? ~A)" "(remove even? ~A)" "(take 3 ~A)"
+                   "(drop 2 ~A)" "(take-while pos? ~A)" "(drop-while neg? ~A)"
+                   "(partition-all 2 ~A)" "(partition 2 1 ~A)" "(distinct ~A)" "(dedupe ~A)"
+                   "(interpose 0 ~A)" "(reverse ~A)" "(sort ~A)" "(concat ~A [9])"
+                   "(mapcat (fn [x] [x x]) ~A)" "(keep (fn [x] (when (pos? x) x)) ~A)"))
+        (xforms '("(map inc)" "(filter odd?)" "(take 4)" "(drop 1)" "(distinct)" "(dedupe)"
+                  "(partition-all 2)" "(take-while pos?)" "(interpose 0)" "cat")))
+    (dotimes (i 150)
+      (let* ((v (random-vector-text rs))
+             (inner (nth (random (length seq-fns) rs) seq-fns))
+             (outer (nth (random (length seq-fns) rs) seq-fns)))
+        (library-matches (format nil "(vec ~A)" (format nil outer (format nil inner v))))))
+    (dotimes (i 150)
+      (let* ((v (random-vector-text rs))
+             (stack (loop repeat (1+ (random 3 rs))
+                          collect (nth (random (length xforms) rs) xforms)))
+             (xform (format nil "(comp ~{~A~^ ~})" (remove "cat" stack :test #'string=))))
+        (library-matches (format nil "(into [] ~A ~A)" xform v)
+                         (format nil "(sequence ~A ~A)" xform v)
+                         (format nil "(transduce ~A + 0 ~A)" xform v))))))
+
+(test native-seqs
+  ;; The runtime's seqs and the library's seq functions and transducers, compiled.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein" "tests/fixtures/native-seqs.skn"))))
 
 (test native-library-routing
   (native-matches "(ns libroute)
@@ -360,8 +455,8 @@ format string for the qualified name, given the name."
 ;;; What the native backend can't compile yet: errors with locations
 
 (test native-unsupported
-  (build-fails "(ns u3) (println (map inc [1 2]))" "can't use skein.core/map yet")
-  (build-fails "(ns u4) (def f range)" "can't use skein.core/range yet")
+  (build-fails "(ns u3) (println (merge {} {}))" "can't use skein.core/merge yet")
+  (build-fails "(ns u4) (def f zipmap)" "can't use skein.core/zipmap yet")
   (build-fails "(ns u5) (prn (values 1 2))" "multiple values yet (M1.8)")
   (build-fails "(ns u6) (println (inc 1 2))" "wrong number of arguments (2) passed to skein.core/inc"))
 
@@ -376,7 +471,7 @@ format string for the qualified name, given the name."
     (declare (ignore out))
     (is (= skein.cli:+exit-failure+ code))
     (is (search "file not found" err)))
-  (with-program (file "(ns bc) (println (map inc [1]))")
+  (with-program (file "(ns bc) (println (merge {} {}))")
     (multiple-value-bind (code out err) (run-cli "build" (namestring file))
       (declare (ignore out))
       (is (= skein.cli:+exit-failure+ code))

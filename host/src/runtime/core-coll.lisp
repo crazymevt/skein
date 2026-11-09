@@ -387,6 +387,12 @@ REDUCED; returns the unwrapped result."
 (defcore "eduction" (&rest xforms-and-coll)
   (make-eduction (compose (butlast xforms-and-coll)) (car (last xforms-and-coll))))
 
+(defcore "%eduction" (xform coll seq-fn reduce-fn)
+  ;; The native library (lib/skein/core/native.skn) makes eductions with the functions
+  ;; the native runtime calls to seq and reduce them; Phase 0 needs only XFORM and COLL.
+  (declare (ignore seq-fn reduce-fn))
+  (make-eduction xform coll))
+
 (defun eduction-seq (e)
   (transformed-seq (eduction-xform e) (eduction-coll e)))
 

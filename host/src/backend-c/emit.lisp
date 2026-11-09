@@ -246,12 +246,15 @@ yet. The message names the milestone that adds it."))
     "rem" "quot" "compare" "zero?" "pos?" "neg?" "not" "identical?" "identity" "constantly"
     "println" "print" "prn" "pr" "list" "vector" "hash-map" "%map-literal" "hash-set"
     "%set-literal" "vec" "count" "conj" "assoc" "dissoc" "disj" "get" "nth" "contains?"
-    "empty?" "first" "rest" "next" "cons" "peek" "pop" "into" "keys" "vals" "reduce" "apply"
-    "str" "subs" "keyword" "symbol" "name" "namespace" "atom" "deref" "reset!" "swap!"
+    "empty?" "first" "rest" "next" "cons" "peek" "pop" "keys" "vals" "reduce" "apply"
+    "str" "pr-str" "hash-of" "odd?" "even?" "subs" "keyword" "symbol" "name" "namespace" "atom" "deref" "reset!" "swap!"
     "compare-and-set!" "transient" "persistent!" "conj!" "assoc!" "dissoc!" "disj!" "pop!"
     "nil?" "some?" "true?" "false?" "vector?" "map?" "set?" "list?" "seq?" "coll?" "string?"
     "keyword?" "symbol?" "number?" "integer?" "float?" "char?" "boolean?" "fn?" "atom?"
-    "mapv" "%no-matching-case" "int" "char"
+    "%no-matching-case" "int" "char"
+    ;; Seqs (M1.8)
+    "seq" "%lazy-seq" "realized?" "sequential?" "reduced" "reduced?" "unreduced"
+    "ensure-reduced" "%eduction"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

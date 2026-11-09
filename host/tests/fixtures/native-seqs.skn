@@ -1,0 +1,53 @@
+(ns native-seqs)
+
+;; Seqs and transducers natively (M1.8 step 2): the runtime's seq layer and the library
+;; in lib/skein/core/native.skn. The C backend tests check that this prints the same
+;; natively as with `skein run`.
+
+;; seq, first, rest and next over every collection
+(prn (seq [1 2]) (seq []) (seq nil) (seq "ab") (seq {:a 1}) (seq #{1}) (seq '(1)))
+(prn (first "xy") (rest [1 2 3]) (next [1]) (rest nil) (first {:a 1}) (next (seq "abc")))
+(prn (count (map inc [1 2 3])) (count (seq [1 2 3])) (count (rest "abc")) (nth (range 10) 3))
+(prn (cons 0 (map inc [1 2])) (cons 0 [1]) (conj (map inc [1]) 0) (empty? (filter odd? [2])))
+(prn (seq? (map inc [1])) (seq? [1]) (sequential? (range 2)) (coll? (seq [1])) (list? (range 2)))
+
+;; Equality, hashing and printing treat seqs like lists
+(prn (= (map inc [1 2]) [2 3]) (= '(1 2) (range 1 3)) (= (range 3) (range 4)) (= [] (seq [])))
+(prn (get {[0 1] :v} (range 2)) (contains? #{'(1 2)} (map inc [0 1]))
+     (= (hash-of (range 3)) (hash-of [0 1 2])))
+(prn (str (map inc [1 2])) (pr-str (take 2 (repeat "s"))) {:k (range 2)})
+
+;; Lazy seq functions and transducers
+(prn (map + [1 2] [10 20 30]) (mapv inc [1 2]) (map-indexed vector "ab"))
+(prn (filter odd? (range 10)) (remove odd? [1 2 3])
+     (keep (fn [x] (when (odd? x) (* x x))) (range 6)))
+(prn (take 3 (iterate inc 5)) (drop 2 [1 2 3]) (take-while neg? [-1 2 -3])
+     (drop-while neg? [-1 2 -3]))
+(prn (concat [1] '(2) nil #{3}) (mapcat reverse [[1 2] [3 4]]) (interleave [1 2 3] [:a :b]))
+(prn (range 5) (range 2 8 3) (range 5 0 -2) (repeat 2 :x) (take 5 (cycle [1 2]))
+     (interpose 0 [1 2 3]))
+(prn (partition 2 1 [1 2 3]) (partition-all 2 [1 2 3]) (distinct [1 2 1]) (dedupe [1 1 2 1]))
+(prn (sort [3 1 2]) (sort > [3 1 2]) (sort-by count ["ccc" "a" "bb"]) (reverse [1 2 3]))
+(prn (flatten [1 [2 [3 '(4)]]]) (frequencies "abca") (group-by odd? (range 5)))
+(prn (some even? [1 4]) (every? odd? [1 3]) (not-any? odd? [2]) (split-at 1 [1 2]) (last (range 4)))
+(prn (into [] (comp (map inc) (filter even?) (take 3)) (range 100)) (into #{} (map inc) [1 1]))
+(prn (sequence (comp (map inc) (partition-all 2)) [1 2 3]) (transduce (map inc) + 0 [1 2 3]))
+(prn (reduce + (eduction (map inc) (filter odd?) [1 2 3 4])) (seq (eduction (map inc) [1 2])))
+(prn (reduce (fn [acc x] (if (> x 2) (reduced acc) (+ acc x))) 0 (range 10))
+     (reduce-kv assoc {} [:a :b]))
+(prn ((comp inc *) 2 3) ((partial + 1) 2) ((complement odd?) 2) ((juxt inc dec) 5)
+     ((fnil inc 0) nil))
+
+;; How much is realized
+(def log (atom []))
+(def xs (map (fn [x] (swap! log conj x) x) (range 10)))
+(prn (realized? xs) @log)
+(prn (first xs) @log (take 2 xs) (realized? xs))
+(prn (first (filter (fn [x] (swap! log conj [:f x]) (> x 2)) (range 10))) (count @log))
+
+;; Long and infinite seqs under garbage collection
+(prn (reduce + (take 100000 (map inc (range)))))
+(prn (count (filter even? (range 200000))) (nth (iterate inc 0) 50000))
+(prn (last (take 30000 (partition-all 3 (range))))
+     (count (distinct (map (fn [x] (mod x 1000)) (range 50000)))))
+(prn (reduce + (map * (range 1000) (cycle [1 -1]))) (apply + (range 100)))

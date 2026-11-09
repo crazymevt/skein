@@ -13,33 +13,19 @@ const rt = @import("rt.zig");
 const Value = @import("value.zig").Value;
 const Limb = std.math.big.Limb;
 
-fn isSequential(v: Value) bool {
-    return coll.isList(v) or coll.isVector(v);
-}
+const seqs = @import("seq.zig");
 
-/// Calls f(ctx, x) for each element of a list or vector, in order, until f returns false.
+/// Calls f(ctx, x) for each element of a sequential value, in order, until f returns
+/// false.
 pub fn eachElement(v: Value, ctx: anytype, comptime f: fn (@TypeOf(ctx), Value) bool) void {
-    if (coll.isVector(v)) {
-        for (0..coll.vectorCount(v)) |i| if (!f(ctx, coll.vectorNth(v, i).?)) return;
-        return;
-    }
-    var it = v;
-    while (it.isObjectOf(.list)) : (it = coll.get(it, 1)) {
-        if (!f(ctx, coll.get(it, 0))) return;
-    }
+    seqs.each(v, ctx, f);
 }
 
-fn sequentialCount(v: Value) usize {
+fn counted(v: Value) ?usize {
     if (coll.isVector(v)) return coll.vectorCount(v);
-    return if (v.isObjectOf(.list)) coll.ux(coll.get(v, 2)) else 0;
-}
-
-/// The element at position `i` of a list or vector.
-fn sequentialNth(v: Value, i: usize) Value {
-    if (coll.isVector(v)) return coll.vectorNth(v, i).?;
-    var it = v;
-    for (0..i) |_| it = coll.get(it, 1);
-    return coll.get(it, 0);
+    if (v.isObjectOf(.list)) return coll.ux(coll.get(v, 2));
+    if (v.isObjectOf(.empty_list)) return 0;
+    return null;
 }
 
 pub fn equiv(a: Value, b: Value) bool {
@@ -51,31 +37,25 @@ pub fn equiv(a: Value, b: Value) bool {
         // Interned, so equal symbols are identical (checked above).
         return false;
     }
-    if (isSequential(a)) {
-        if (!isSequential(b)) return false;
-        const n = sequentialCount(a);
-        if (n != sequentialCount(b)) return false;
+    if (seqs.isSequential(a)) {
+        if (!seqs.isSequential(b)) return false;
         if (coll.isVector(a) and coll.isVector(b)) {
+            const n = coll.vectorCount(a);
+            if (n != coll.vectorCount(b)) return false;
             for (0..n) |i| if (!equiv(coll.vectorNth(a, i).?, coll.vectorNth(b, i).?)) return false;
             return true;
         }
-        // Walk both; lists are linked, so step them rather than index.
-        var ia = a;
-        var ib = b;
-        for (0..n) |i| {
-            const xa = if (coll.isVector(a)) coll.vectorNth(a, i).? else blk: {
-                const x = coll.get(ia, 0);
-                ia = coll.get(ia, 1);
-                break :blk x;
-            };
-            const xb = if (coll.isVector(b)) coll.vectorNth(b, i).? else blk: {
-                const x = coll.get(ib, 0);
-                ib = coll.get(ib, 1);
-                break :blk x;
-            };
-            if (!equiv(xa, xb)) return false;
+        // As Phase 0: compare counts when both are counted, then walk both seqs.
+        if (counted(a)) |na| if (counted(b)) |nb| if (na != nb) return false;
+        var sa = seqs.seq(a);
+        var sb = seqs.seq(b);
+        while (true) {
+            if (sa == Value.nil and sb == Value.nil) return true;
+            if (sa == Value.nil or sb == Value.nil) return false;
+            if (!equiv(seqs.seqFirst(sa), seqs.seqFirst(sb))) return false;
+            sa = seqs.seqNext(sa);
+            sb = seqs.seqNext(sb);
         }
-        return true;
     }
     if (coll.isMap(a)) {
         if (!coll.isMap(b) or coll.mapCount(a) != coll.mapCount(b)) return false;
@@ -195,6 +175,7 @@ pub fn hashOf(v: Value) u32 {
         .string => hash.hashString(string.bytes(v)),
         .symbol, .keyword => names.nameHash(v),
         .vector => cached(v, 4, orderedHash),
+        .cons, .lazy_seq, .vseq, .sseq => orderedHash(v),
         .list => cached(v, 3, orderedHash),
         .empty_list => hash.mixCollection(1, 0),
         .array_map => cached(v, 1, mapHash),
@@ -264,10 +245,3 @@ fn order(o: std.math.Order) i32 {
     };
 }
 
-pub fn nthSequential(v: Value, i: usize) Value {
-    return sequentialNth(v, i);
-}
-
-pub fn countSequential(v: Value) usize {
-    return sequentialCount(v);
-}

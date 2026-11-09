@@ -60,7 +60,12 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
             put(out, string.bytes(coll.get(v, 0)));
             put(out, ">");
         },
-        .list, .empty_list => writeSequential(v, out, readably, "(", ")"),
+        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq, .eduction => writeSequential(v, out, readably, "(", ")"),
+        .reduced => {
+            put(out, "#<reduced ");
+            write(coll.get(v, 0), out, true);
+            put(out, ">");
+        },
         .vector => writeSequential(v, out, readably, "[", "]"),
         .array_map, .hash_map => {
             put(out, "{");

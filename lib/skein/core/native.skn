@@ -10,3 +10,562 @@ Definitions may use only what the C backend compiles at the current step of M1.8
   "m with the value at k replaced by (f old-value args...)."
   ([m k f] (assoc m k (f (get m k))))
   ([m k f & args] (assoc m k (apply f (get m k) args))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Seqs and transducers (step 2 of M1.8, D-052): ports of Phase 0's core-coll.lisp.
+;;; Called with a collection, the seq functions return lazy seqs realized one element at
+;;; a time (D-032); called without one, most return transducers. A transducer is a
+;;; function of a reducing function, which has arities 0 (init), 1 (complete) and 2 (step).
+
+(defn second "The second element." [coll] (first (next coll)))
+(defn ffirst "The first element of the first element." [coll] (first (first coll)))
+(defn nnext "(next (next coll))." [coll] (next (next coll)))
+
+(defn last
+  "The last element, walking the collection unless it is a vector."
+  [coll]
+  (if (vector? coll)
+    (when (pos? (count coll)) (nth coll (dec (count coll))))
+    (loop [s (seq coll) x nil]
+      (if s (recur (next s) (first s)) x))))
+
+(defn reverse
+  "The elements in reverse order, as a list."
+  [coll]
+  (reduce (fn [acc x] (cons x acc)) '() coll))
+
+(defn butlast
+  "Every element but the last, as a list, or nil."
+  [coll]
+  (let [items (reduce conj [] coll)]
+    (when (> (count items) 1)
+      (loop [i (- (count items) 2) acc '()]
+        (if (neg? i) acc (recur (dec i) (cons (nth items i) acc)))))))
+
+(defn list*
+  "A seq of the arguments, the last of which is a collection of the rest."
+  [& args]
+  (let [items (reduce conj [] args)
+        n (count items)]
+    (loop [i (- n 2) acc (seq (nth items (dec n)))]
+      (if (neg? i) acc (recur (dec i) (cons (nth items i) acc))))))
+
+;;; Functions
+
+(defn comp
+  "The composition of fns: the last is applied to the arguments, then each one before it
+to the result."
+  [& fns]
+  (if (nil? (seq fns))
+    identity
+    (let [fs (reverse fns)]
+      (fn [& args]
+        (loop [r (apply (first fs) args) more (next fs)]
+          (if more (recur ((first more) r) (next more)) r))))))
+
+(defn partial
+  "f with its first arguments fixed."
+  [f & bound]
+  (fn [& args] (apply f (concat bound args))))
+
+(defn complement
+  "A function returning the opposite truth of f's result, as a boolean."
+  [f]
+  (fn [& args] (if (apply f args) false true)))
+
+(defn juxt
+  "A function returning a vector of each fn's result."
+  [& fns]
+  (fn [& args] (reduce (fn [acc f] (conj acc (apply f args))) [] fns)))
+
+(defn fnil
+  "f, with a nil first argument replaced by default."
+  [f default]
+  (fn [x & args] (apply f (if (nil? x) default x) args)))
+
+;;; Reduction, into and transducer entry points
+
+(defn completing
+  "A reducing function from f (steps and init), completing with cf (default: identity)."
+  ([f] (completing f identity))
+  ([f cf] (fn ([] (f)) ([acc] (cf acc)) ([acc x] (f acc x)))))
+
+(defn transduce
+  "Reduce coll with (xform f), then complete the result."
+  ([xform f coll] (transduce xform f (f) coll))
+  ([xform f init coll]
+   (let [xf (xform f)]
+     (xf (reduce xf init coll)))))
+
+(defn reduce-kv
+  "Reduce a map with (f acc key value), or a vector with (f acc index value)."
+  [f init coll]
+  (cond (nil? coll) init
+        (map? coll) (reduce (fn [acc entry] (f acc (nth entry 0) (nth entry 1))) init coll)
+        (vector? coll) (loop [i 0 acc init]
+                         (cond (reduced? acc) (unreduced acc)
+                               (< i (count coll)) (recur (inc i) (f acc i (nth coll i)))
+                               :else acc))
+        :else (error (str "reduce-kv needs a map or vector, not " (pr-str coll)))))
+
+(defn- into-coll [to from xform]
+  (if (or (vector? to) (map? to) (set? to))
+    (let [rf (fn ([] (transient to)) ([acc] acc) ([acc x] (conj! acc x)))]
+      (persistent! (if xform
+                     (transduce xform rf (transient to) from)
+                     (reduce rf (transient to) from))))
+    (let [rf (fn ([] to) ([acc] acc) ([acc x] (conj acc x)))]
+      (if xform (transduce xform rf to from) (reduce rf to from)))))
+
+(defn into
+  "to with the elements of from conj'ed on, passed through xform if given."
+  ([] [])
+  ([to] to)
+  ([to from] (into-coll to from nil))
+  ([to xform from] (into-coll to from xform)))
+
+(defn- cons-all
+  "The elements of the vector items consed onto tail, in order."
+  [items tail]
+  (loop [i (dec (count items)) acc tail]
+    (if (neg? i) acc (recur (dec i) (cons (nth items i) acc)))))
+
+(defn- transformed-seq
+  "A lazy seq of coll's elements passed through the transducer xform."
+  [xform coll]
+  (let [buffer (atom [])
+        xf (xform (fn ([] nil) ([acc] acc) ([acc x] (swap! buffer conj x) acc)))
+        source (atom (seq coll))
+        done (atom false)]
+    (letfn [(next-chunk []
+              (lazy-seq
+               (loop []
+                 (cond (pos? (count @buffer))
+                       (let [items @buffer]
+                         (reset! buffer [])
+                         (cons-all items (next-chunk)))
+                       @done nil
+                       :else (do (if @source
+                                   (let [r (xf nil (first @source))]
+                                     (reset! source (next @source))
+                                     (when (reduced? r) (reset! source nil)))
+                                   (do (reset! done true) (xf nil)))
+                                 (recur))))))]
+      (next-chunk))))
+
+(defn sequence
+  "coll as a seq, or () if it is empty; with xform, a lazy seq of coll through it."
+  ([coll] (or (seq coll) '()))
+  ([xform coll] (transformed-seq xform coll)))
+
+(defn eduction
+  "A collection with the transducers applied each time it is reduced or seq'd."
+  [& xforms-and-coll]
+  (let [xform (apply comp (butlast xforms-and-coll))
+        coll (last xforms-and-coll)]
+    (%eduction xform coll
+               (fn [] (transformed-seq xform coll))
+               (fn [f init]
+                 (transduce xform (fn ([] (f)) ([acc] acc) ([acc x] (f acc x))) init coll)))))
+
+;;; Seq functions
+
+(defn- all-seqs
+  "The seqs of colls (a seq of collections) as a vector, or nil if any is empty."
+  [colls]
+  (loop [cs (seq colls) out []]
+    (if cs
+      (let [s (seq (first cs))]
+        (when s (recur (next cs) (conj out s))))
+      out)))
+
+(defn- map-firsts [seqs] (reduce (fn [acc s] (conj acc (first s))) [] seqs))
+(defn- map-rests [seqs] (reduce (fn [acc s] (conj acc (rest s))) [] seqs))
+
+(defn- lazy-map [f colls]
+  (lazy-seq
+   (let [seqs (all-seqs colls)]
+     (when seqs
+       (cons (apply f (map-firsts seqs)) (lazy-map f (map-rests seqs)))))))
+
+(defn map
+  "A lazy seq of f applied to the elements of the colls in step, or a transducer."
+  ([f] (fn [rf] (fn ([] (rf)) ([acc] (rf acc)) ([acc x] (rf acc (f x))))))
+  ([f & colls] (lazy-map f colls)))
+
+(defn mapv
+  "map, as a vector."
+  [f & colls]
+  (into [] (lazy-map f colls)))
+
+(defn map-indexed
+  "A lazy seq of (f index x), or a transducer."
+  ([f] (fn [rf]
+         (let [i (atom -1)]
+           (fn ([] (rf)) ([acc] (rf acc)) ([acc x] (rf acc (f (swap! i inc) x)))))))
+  ([f coll]
+   (letfn [(walk [i coll]
+             (lazy-seq (let [s (seq coll)]
+                         (when s (cons (f i (first s)) (walk (inc i) (rest s)))))))]
+     (walk 0 coll))))
+
+(defn- lazy-filter [pred coll keep?]
+  (lazy-seq
+   (loop [s (seq coll)]
+     (when s
+       (let [x (first s)]
+         (if (= keep? (if (pred x) true false))
+           (cons x (lazy-filter pred (rest s) keep?))
+           (recur (next s))))))))
+
+(defn filter
+  "A lazy seq of the elements for which pred is true, or a transducer."
+  ([pred] (fn [rf] (fn ([] (rf)) ([acc] (rf acc)) ([acc x] (if (pred x) (rf acc x) acc)))))
+  ([pred coll] (lazy-filter pred coll true)))
+
+(defn filterv "filter, as a vector." [pred coll] (into [] (lazy-filter pred coll true)))
+
+(defn remove
+  "A lazy seq of the elements for which pred is false, or a transducer."
+  ([pred] (fn [rf] (fn ([] (rf)) ([acc] (rf acc)) ([acc x] (if (pred x) acc (rf acc x))))))
+  ([pred coll] (lazy-filter pred coll false)))
+
+(defn keep
+  "A lazy seq of the non-nil results of f, or a transducer."
+  ([f] (fn [rf] (fn ([] (rf)) ([acc] (rf acc))
+                  ([acc x] (let [v (f x)] (if (nil? v) acc (rf acc v)))))))
+  ([f coll]
+   (letfn [(walk [coll]
+             (lazy-seq (loop [s (seq coll)]
+                         (when s
+                           (let [v (f (first s))]
+                             (if (nil? v) (recur (next s)) (cons v (walk (rest s)))))))))]
+     (walk coll))))
+
+(defn take
+  "A lazy seq of the first n elements, or a transducer."
+  ([n] (fn [rf]
+         (let [left (atom n)]
+           (fn ([] (rf)) ([acc] (rf acc))
+             ([acc x] (let [acc (if (pos? @left) (rf acc x) acc)]
+                        (swap! left dec)
+                        (cond (pos? @left) acc
+                              (reduced? acc) acc
+                              :else (reduced acc))))))))
+  ([n coll]
+   (letfn [(walk [n coll]
+             (lazy-seq (when (pos? n)
+                         (let [s (seq coll)]
+                           (when s (cons (first s) (walk (dec n) (rest s))))))))]
+     (walk n coll))))
+
+(defn drop
+  "A lazy seq of all but the first n elements, or a transducer."
+  ([n] (fn [rf]
+         (let [left (atom n)]
+           (fn ([] (rf)) ([acc] (rf acc))
+             ([acc x] (if (pos? @left) (do (swap! left dec) acc) (rf acc x)))))))
+  ([n coll]
+   (lazy-seq (loop [s (seq coll) i 0]
+               (if (and s (< i n)) (recur (next s) (inc i)) s)))))
+
+(defn take-while
+  "A lazy seq of the elements while pred is true, or a transducer."
+  ([pred] (fn [rf] (fn ([] (rf)) ([acc] (rf acc))
+                     ([acc x] (if (pred x) (rf acc x) (reduced acc))))))
+  ([pred coll]
+   (letfn [(walk [coll]
+             (lazy-seq (let [s (seq coll)]
+                         (when (and s (pred (first s)))
+                           (cons (first s) (walk (rest s)))))))]
+     (walk coll))))
+
+(defn drop-while
+  "A lazy seq of the elements from the first one for which pred is false, or a
+transducer."
+  ([pred] (fn [rf]
+            (let [dropping (atom true)]
+              (fn ([] (rf)) ([acc] (rf acc))
+                ([acc x] (if (and @dropping (pred x))
+                           acc
+                           (do (reset! dropping false) (rf acc x))))))))
+  ([pred coll]
+   (lazy-seq (loop [s (seq coll)]
+               (if (and s (pred (first s))) (recur (next s)) s)))))
+
+(defn- lazy-concat [colls]
+  (lazy-seq
+   (loop [colls (seq colls)]
+     (when colls
+       (let [s (seq (first colls))]
+         (if s
+           (cons (first s) (lazy-concat (cons (rest s) (next colls))))
+           (recur (next colls))))))))
+
+(defn concat "A lazy seq of the elements of each coll in turn." [& colls] (lazy-concat colls))
+
+(defn- lazy-concat-seq
+  "Concatenate a (possibly lazy, possibly infinite) seq of collections."
+  [seqs]
+  (letfn [(walk [current more]
+            (lazy-seq
+             (loop [current current more more]
+               (let [s (seq current)]
+                 (if s
+                   (cons (first s) (walk (rest s) more))
+                   (let [m (seq more)]
+                     (when m (recur (first m) (rest m)))))))))]
+    (walk nil seqs)))
+
+(defn cat
+  "A transducer that concatenates the collections passing through it."
+  [rf]
+  (fn ([] (rf)) ([acc] (rf acc))
+    ([acc x] (reduce (fn [a y] (let [r (rf a y)] (if (reduced? r) (reduced r) r))) acc x))))
+
+(defn mapcat
+  "The concatenation of map's results, or a transducer."
+  ([f] (fn [rf] ((map f) (cat rf))))
+  ([f & colls] (lazy-concat-seq (lazy-map f colls))))
+
+(defn- range-from [i end step]
+  (lazy-seq
+   (when (or (nil? end)
+             (cond (pos? step) (< i end) (neg? step) (> i end) :else true))
+     (cons i (range-from (+ i step) end step)))))
+
+(defn range
+  "A lazy seq of numbers: from 0, from 0 below end, or from start below end by step."
+  ([] (range-from 0 nil 1))
+  ([end] (range-from 0 end 1))
+  ([start end] (range-from start end 1))
+  ([start end step] (range-from start end step)))
+
+(defn- repeat-from [n x]
+  (lazy-seq (when (or (nil? n) (pos? n))
+              (cons x (repeat-from (when n (dec n)) x)))))
+
+(defn repeat
+  "An infinite lazy seq of x, or n of them."
+  ([x] (repeat-from nil x))
+  ([n x] (repeat-from n x)))
+
+(defn- repeatedly-from [n f]
+  (lazy-seq (when (or (nil? n) (pos? n))
+              (cons (f) (repeatedly-from (when n (dec n)) f)))))
+
+(defn repeatedly
+  "An infinite lazy seq of calls of f, or n of them."
+  ([f] (repeatedly-from nil f))
+  ([n f] (repeatedly-from n f)))
+
+(defn iterate
+  "x, (f x), (f (f x)), ..."
+  [f x]
+  (lazy-seq (cons x (iterate f (f x)))))
+
+(defn cycle
+  "The elements of coll, repeated forever."
+  [coll]
+  (if (nil? (seq coll))
+    '()
+    (letfn [(walk [s] (lazy-seq (let [s (or (seq s) (seq coll))]
+                                  (cons (first s) (walk (rest s))))))]
+      (walk coll))))
+
+(defn interleave
+  "A lazy seq of the first element of each coll, then the second, ..."
+  [& colls]
+  (letfn [(walk [colls]
+            (lazy-seq
+             (let [seqs (all-seqs colls)]
+               (when (and seqs (pos? (count seqs)))
+                 (cons-all (map-firsts seqs) (walk (map-rests seqs)))))))]
+    (walk colls)))
+
+(defn interpose
+  "A lazy seq of the elements with sep between them, or a transducer."
+  ([sep] (fn [rf]
+           (let [started (atom false)]
+             (fn ([] (rf)) ([acc] (rf acc))
+               ([acc x] (if @started
+                          (let [r (rf acc sep)] (if (reduced? r) r (rf r x)))
+                          (do (reset! started true) (rf acc x))))))))
+  ([sep coll]
+   (lazy-seq (let [s (seq coll)]
+               (when s
+                 (cons (first s)
+                       (lazy-concat-seq (lazy-map (fn [x] (list sep x)) [(rest s)]))))))))
+
+(defn- take-items
+  "Up to n elements of the seq s, as a vector."
+  [n s]
+  (loop [s s items []]
+    (if (and s (< (count items) n)) (recur (next s) (conj items (first s))) items)))
+
+(defn- list-of [items] (apply list items))
+
+(defn partition
+  "A lazy seq of lists of n elements, step apart (default n); a short last one is
+dropped."
+  ([n coll] (partition n n coll))
+  ([n step coll]
+   (letfn [(walk [coll]
+             (lazy-seq (let [items (take-items n (seq coll))]
+                         (when (= (count items) n)
+                           (cons (list-of items) (walk (drop step coll)))))))]
+     (walk coll))))
+
+(defn partition-all
+  "partition, keeping a short last one; or a transducer giving vectors."
+  ([n] (fn [rf]
+         (let [buffer (atom [])]
+           (fn ([] (rf))
+             ([acc] (let [acc (if (pos? (count @buffer))
+                                (let [v @buffer]
+                                  (reset! buffer [])
+                                  (unreduced (rf acc v)))
+                                acc)]
+                      (rf acc)))
+             ([acc x] (swap! buffer conj x)
+              (if (= (count @buffer) n)
+                (let [v @buffer] (reset! buffer []) (rf acc v))
+                acc))))))
+  ([n coll] (partition-all n n coll))
+  ([n step coll]
+   (letfn [(walk [coll]
+             (lazy-seq (let [items (take-items n (seq coll))]
+                         (when (pos? (count items))
+                           (cons (list-of items) (walk (drop step coll)))))))]
+     (walk coll))))
+
+(defn distinct
+  "A lazy seq of the elements without repeats, or a transducer."
+  ([] (fn [rf]
+        (let [seen (atom #{})]
+          (fn ([] (rf)) ([acc] (rf acc))
+            ([acc x] (if (contains? @seen x)
+                       acc
+                       (do (swap! seen conj x) (rf acc x))))))))
+  ([coll]
+   (letfn [(walk [coll seen]
+             (lazy-seq (loop [s (seq coll)]
+                         (when s
+                           (let [x (first s)]
+                             (if (contains? seen x)
+                               (recur (next s))
+                               (cons x (walk (rest s) (conj seen x)))))))))]
+     (walk coll #{}))))
+
+(defn dedupe
+  "A lazy seq without consecutive repeats, or a transducer."
+  ([] (fn [rf]
+        (let [prev (atom ::none)]
+          (fn ([] (rf)) ([acc] (rf acc))
+            ([acc x] (if (and (not= @prev ::none) (= @prev x))
+                       acc
+                       (do (reset! prev x) (rf acc x))))))))
+  ([coll] (transformed-seq (dedupe) coll)))
+
+;;; Sorting: a stable merge sort, as Phase 0's stable-sort.
+
+(defn- comparator-less
+  "A test of a < b from a comparator returning a number or a boolean."
+  [cmp]
+  (fn [a b] (let [r (cmp a b)] (if (number? r) (neg? r) (if r true false)))))
+
+(defn- merge-sorted [a b less? key]
+  (loop [i 0 j 0 out (transient [])]
+    (cond (= i (count a)) (persistent! (reduce conj! out (drop j b)))
+          (= j (count b)) (persistent! (reduce conj! out (drop i a)))
+          ;; Stable: take from b only when it is strictly less.
+          (less? (key (nth b j)) (key (nth a i))) (recur i (inc j) (conj! out (nth b j)))
+          :else (recur (inc i) j (conj! out (nth a i))))))
+
+(defn- subvec* [v start end]
+  (loop [i start out (transient [])]
+    (if (< i end) (recur (inc i) (conj! out (nth v i))) (persistent! out))))
+
+(defn- merge-sort [v less? key]
+  (if (< (count v) 2)
+    v
+    (let [mid (quot (count v) 2)]
+      (merge-sorted (merge-sort (subvec* v 0 mid) less? key)
+                    (merge-sort (subvec* v mid (count v)) less? key)
+                    less? key))))
+
+(defn sort
+  "The elements sorted by compare, or by a comparator, as a list."
+  ([coll] (sort compare coll))
+  ([cmp coll] (list-of (merge-sort (into [] coll) (comparator-less cmp) identity))))
+
+(defn sort-by
+  "The elements sorted by (keyfn x), as a list."
+  ([keyfn coll] (sort-by keyfn compare coll))
+  ([keyfn cmp coll] (list-of (merge-sort (into [] coll) (comparator-less cmp) keyfn))))
+
+;;; Eager seq functions
+
+(defn flatten
+  "The non-sequential elements nested anywhere in coll, as a list."
+  [coll]
+  (letfn [(walk [x acc]
+            (if (sequential? x)
+              (reduce (fn [acc y] (walk y acc)) acc x)
+              (conj! acc x)))]
+    (list-of (persistent! (reduce (fn [acc x] (walk x acc)) (transient []) coll)))))
+
+(defn frequencies
+  "A map from each distinct element to how many times it appears."
+  [coll]
+  (persistent! (reduce (fn [t x] (assoc! t x (inc (get t x 0)))) (transient {}) coll)))
+
+(defn group-by
+  "A map from each (f x) to the vector of elements that gave it."
+  [f coll]
+  (persistent! (reduce (fn [t x] (let [k (f x)] (assoc! t k (conj (get t k []) x))))
+                       (transient {}) coll)))
+
+(defn some
+  "The first true result of pred, or nil."
+  [pred coll]
+  (loop [s (seq coll)]
+    (when s (or (pred (first s)) (recur (next s))))))
+
+(defn every?
+  "True if pred is true for every element."
+  [pred coll]
+  (loop [s (seq coll)]
+    (cond (nil? s) true
+          (pred (first s)) (recur (next s))
+          :else false)))
+
+(defn not-every? "True unless pred is true for every element." [pred coll]
+  (not (every? pred coll)))
+
+(defn not-any? "True if pred is false for every element." [pred coll]
+  (loop [s (seq coll)]
+    (cond (nil? s) true
+          (pred (first s)) false
+          :else (recur (next s)))))
+
+(defn nthrest "coll with its first n elements rest'ed off." [coll n]
+  (loop [s coll n n] (if (pos? n) (recur (rest s) (dec n)) s)))
+
+(defn nthnext "The seq after the first n elements, or nil." [coll n]
+  (loop [s (seq coll) n n] (if (and s (pos? n)) (recur (next s) (dec n)) s)))
+
+(defn split-at "[(take n coll) (drop n coll)]" [n coll] [(take n coll) (drop n coll)])
+
+(defn split-with "[(take-while pred coll) (drop-while pred coll)]" [pred coll]
+  [(take-while pred coll) (drop-while pred coll)])
+
+(defn doall "Realize every element of coll; returns coll." [coll]
+  (loop [s (seq coll)] (when s (recur (next s))))
+  coll)
+
+(defn dorun "Realize every element of coll; returns nil." [coll]
+  (loop [s (seq coll)] (when s (recur (next s))))
+  nil)
+
+(defn set "The elements of coll as a set." [coll] (if (set? coll) coll (into #{} coll)))

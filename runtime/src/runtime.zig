@@ -29,6 +29,7 @@ pub const coll = @import("coll.zig");
 pub const equal = @import("equal.zig");
 pub const core = @import("core.zig");
 pub const cond = @import("cond.zig");
+pub const seq = @import("seq.zig");
 
 pub const Value = value.Value;
 
@@ -57,6 +58,7 @@ test {
     _ = @import("coll_test.zig");
     _ = core;
     _ = cond;
+    _ = seq;
     _ = @import("cond_test.zig");
     _ = @import("platform_test.zig");
 }

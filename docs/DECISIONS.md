@@ -559,3 +559,31 @@ Date: 2026-11-09 · Status: Accepted
   - **M1.8 has six steps** (ROADMAP), starting with programs made of several namespaces.
 - **Alternatives:** porting every remaining function to Zig, as M1.4 did for collections. That gives faster library code but more Zig to keep in step with Phase 0, and it doesn't exercise the compiler.
 - **Consequences:** Native programs carry the compiled library (until a later milestone links it once as a library). The library is written in the subset of Skein the C backend compiles at each step.
+
+## D-052: Native seqs and the seq library
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 2 of M1.8 brings seqs, lazy seqs, the seq functions and transducers to native programs, split as D-051 says: foundations in Zig, the library in Skein.
+- **Decision:**
+  - **`runtime/src/seq.zig`:**
+    - `seq`, `first`, `next` and `rest` over every collection.
+    - New object types:
+      - cons cells, whose rest is any seqable value;
+      - lazy seqs: a thunk, run once, then its seq;
+      - seqs over vectors and strings by index;
+      - `reduced`;
+      - eductions, which carry the functions that seq and reduce them.
+    - Maps and sets are seq'd into a list of entries or elements, in the order Phase 0 uses. That allocates the whole list, unlike Phase 0's node seqs, but gives the same elements.
+    - Printing, equality and hashing treat every seq as a list, as Phase 0 does.
+    - `reduce` stops at a `reduced` value. `nth` walks a seq without counting it, since it may be infinite.
+  - **`skein.core.native`** gains:
+    - the seq functions (`map` to `dedupe`, `sort`, `group-by`, `some`, ...);
+    - `into`, `sequence`, `transduce`, `eduction` and `comp`;
+    - the function helpers.
+    Each is a port of the corresponding function in Phase 0's `core-coll.lisp`, with the same laziness: lazy seqs realize one element at a time, and the transducers have the same state. `sort` is a stable merge sort, as Phase 0's `stable-sort` is.
+  - The Zig versions of `into` and `mapv` gave way to the library's, which handle transducers and several collections.
+  - The runtime gained `pr-str`, `hash-of`, `odd?` and `even?`. Phase 0 gained `%eduction`, so the library also runs on the host.
+- **Testing:**
+  - About 150 hand-written cases and 300 random ones (random collections through random seq functions and transducer stacks) give the same values with the library as with Phase 0's functions, on the host. The cases include errors and how much of a lazy seq gets realized.
+  - A native program (`host/tests/fixtures/native-seqs.skn`) prints exactly what Phase 0 prints. It covers seqs over every collection, equality and hashing of seqs, every library function, laziness, and long and infinite seqs under garbage collection.
+  - Zig tests cover the seq layer.
+- **Consequences:** `examples/macros.skn` now runs natively and matches its `.expected` output. `examples/collections.skn` waits for step 3 (`select-keys`).

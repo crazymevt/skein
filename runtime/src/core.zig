@@ -15,6 +15,7 @@ const print = @import("print.zig");
 const gc = @import("gc.zig");
 const platform = @import("platform");
 const cond = @import("cond.zig");
+const seqs = @import("seq.zig");
 const Value = @import("value.zig").Value;
 
 const Args = []const Value;
@@ -53,12 +54,16 @@ pub fn count(v: Value) usize {
         .hash_set => coll.setCount(v),
         .transient_vector, .transient_map => coll.ux(coll.get(v, 0)),
         .transient_set => coll.ux(coll.get(coll.get(v, 0), 0)),
+        .vseq => coll.vectorCount(coll.get(v, 0)) - coll.ux(coll.get(v, 1)),
+        .sseq => string.count(coll.get(v, 0)) - coll.ux(coll.get(v, 1)),
+        .cons, .lazy_seq, .eduction => seqs.countSeq(v),
         else => badArg("count", v),
     };
 }
 
 fn conj1(c: Value, x: Value) Value {
     if (c == Value.nil or coll.isList(c)) return coll.cons(x, c);
+    if (seqs.isSeq(c)) return seqs.cons(x, c);
     if (coll.isVector(c)) return coll.vectorConj(c, x);
     if (coll.isSet(c)) return coll.setConj(c, x);
     if (coll.isMap(c)) {
@@ -83,31 +88,15 @@ const Into = struct {
     }
 };
 
-/// Call f(ctx, x) for each element of a list, vector, set, map (as [k v] vectors) or nil.
+/// Call f(ctx, x) for each element of a seqable value (maps give [k v] vectors).
 fn each(c: Value, ctx: anytype, comptime f: fn (@TypeOf(ctx), Value) void) void {
     const Wrap = struct {
         fn el(w: @TypeOf(ctx), x: Value) bool {
             f(w, x);
             return true;
         }
-        fn key(w: @TypeOf(ctx), k: Value, _: Value) bool {
-            f(w, k);
-            return true;
-        }
-        fn entry(w: @TypeOf(ctx), k: Value, v: Value) bool {
-            f(w, coll.vectorOf(&.{ k, v }));
-            return true;
-        }
     };
-    if (c == Value.nil) return;
-    if (coll.isList(c) or coll.isVector(c)) return equal.eachElement(c, ctx, Wrap.el);
-    if (coll.isSet(c)) return coll.mapEach(coll.get(c, 0), ctx, Wrap.key);
-    if (coll.isMap(c)) return coll.mapEach(c, ctx, Wrap.entry);
-    if (string.isString(c)) {
-        for (0..string.count(c)) |i| f(ctx, Value.fromChar(string.charAt(c, i)));
-        return;
-    }
-    badArg("this function", c);
+    seqs.each(c, ctx, Wrap.el);
 }
 
 fn get(c: Value, k: Value, not_found: Value) Value {
@@ -135,15 +124,28 @@ fn get(c: Value, k: Value, not_found: Value) Value {
 
 fn nth(c: Value, i_value: Value, not_found: ?Value) Value {
     const i = index("nth", i_value);
-    const n = if (c == Value.nil) 0 else count(c);
-    if (i >= n) {
-        if (not_found) |nf| return nf;
-        coll.indexError(i_value, n);
+    if (c == Value.nil) return not_found orelse Value.nil;
+    if (coll.isMap(c) or coll.isSet(c)) rt.raise(.unsupported_operation_error, "nth is not supported on {s}", .{typeName(c)});
+    if (coll.isVector(c) or string.isString(c)) {
+        const n = count(c);
+        if (i >= n) {
+            if (not_found) |nf| return nf;
+            coll.indexError(i_value, n);
+        }
+        if (coll.isVector(c)) return coll.vectorNth(c, i).?;
+        return Value.fromChar(string.charAt(c, i));
     }
-    if (coll.isVector(c)) return coll.vectorNth(c, i).?;
-    if (coll.isList(c)) return equal.nthSequential(c, i);
-    if (string.isString(c)) return Value.fromChar(string.charAt(c, i));
-    badArg("nth", c);
+    // Walk a seq without counting it first: it may be infinite.
+    var sq = seqs.seq(c);
+    var k: usize = 0;
+    while (sq != Value.nil) : ({
+        sq = seqs.seqNext(sq);
+        k += 1;
+    }) {
+        if (k == i) return seqs.seqFirst(sq);
+    }
+    if (not_found) |nf| return nf;
+    rt.raise(.index_error, "index {d} is out of bounds", .{i});
 }
 
 fn assoc1(c: Value, k: Value, v: Value) Value {
@@ -183,34 +185,13 @@ const Collect = struct {
 };
 
 fn first(c: Value) Value {
-    if (c == Value.nil) return Value.nil;
-    if (c.isObjectOf(.list)) return coll.get(c, 0);
-    if (c.isObjectOf(.empty_list)) return Value.nil;
-    if (coll.isVector(c)) return coll.vectorNth(c, 0) orelse Value.nil;
-    if (string.isString(c)) return if (string.count(c) == 0) Value.nil else Value.fromChar(string.charAt(c, 0));
-    unsupportedSeq("first", c);
+    return seqs.first(c);
 }
 
 fn rest(c: Value) Value {
-    if (c == Value.nil or c.isObjectOf(.empty_list)) return coll.empty_list;
-    if (c.isObjectOf(.list)) return coll.get(c, 1);
-    if (coll.isVector(c)) {
-        const n = coll.vectorCount(c);
-        if (n <= 1) return coll.empty_list;
-        var result = coll.empty_list;
-        var i = n;
-        while (i > 1) {
-            i -= 1;
-            result = coll.cons(coll.vectorNth(c, i).?, result);
-        }
-        return result;
-    }
-    unsupportedSeq("rest", c);
+    return seqs.rest(c);
 }
 
-fn unsupportedSeq(comptime name: []const u8, c: Value) noreturn {
-    rt.raise(.unsupported_operation_error, name ++ " of {s} needs seqs, which the native runtime gets in M1.8", .{typeName(c)});
-}
 
 // ---------------------------------------------------------------------------------------
 // The table
@@ -284,8 +265,17 @@ fn pred(comptime test_fn: fn (Value) bool) fn (Args) Value {
     }.f;
 }
 
+fn parity(comptime odd: bool) fn (Args) Value {
+    return struct {
+        fn f(a: Args) Value {
+            if (!num.isInteger(a[0])) rt.raise(.type_error, (if (odd) "odd?" else "even?") ++ " needs an integer, not {s}", .{typeName(a[0])});
+            return Value.fromBool(num.isOdd(a[0]) == odd);
+        }
+    }.f;
+}
+
 fn isColl(v: Value) bool {
-    return coll.isList(v) or coll.isVector(v) or coll.isMap(v) or coll.isSet(v);
+    return seqs.isSequential(v) or coll.isMap(v) or coll.isSet(v);
 }
 
 fn strFn(a: Args) Value {
@@ -325,29 +315,35 @@ fn makeName(comptime keyword: bool) fn (Args) Value {
     }.f;
 }
 
+/// reduce, stopping early at a reduced value (Phase 0's reduce-coll).
 fn reduceFn(a: Args) Value {
     const f = a[0];
-    const has_init = a.len == 3;
-    const c = if (has_init) a[2] else a[1];
-    var ctx: Reduce = .{ .f = f, .acc = if (has_init) a[1] else Value.nil, .started = has_init };
-    each(c, &ctx, Reduce.step);
-    if (!ctx.started) return func.call(f, 0, &.{});
-    return ctx.acc;
+    if (a.len == 2) {
+        const sq = seqs.seq(a[1]);
+        if (sq == Value.nil) return func.call(f, 0, &.{});
+        return reduceFrom(f, seqs.seqFirst(sq), seqs.seqRest(sq));
+    }
+    return reduceFrom(f, a[1], a[2]);
+}
+
+pub fn reduceFrom(f: Value, init: Value, c: Value) Value {
+    if (c.isObjectOf(.eduction)) {
+        const args = [_]Value{ f, init };
+        return func.call(coll.get(c, 3), 2, &args);
+    }
+    var ctx: Reduce = .{ .f = f, .acc = init };
+    seqs.each(c, &ctx, Reduce.step);
+    return seqs.unreduced(ctx.acc);
 }
 
 const Reduce = struct {
     f: Value,
     acc: Value,
-    started: bool,
 
-    fn step(c: *Reduce, x: Value) void {
-        if (!c.started) {
-            c.acc = x;
-            c.started = true;
-            return;
-        }
+    fn step(c: *Reduce, x: Value) bool {
         const args = [_]Value{ c.acc, x };
         c.acc = func.call(c.f, 2, &args);
+        return !seqs.isReduced(c.acc);
     }
 };
 
@@ -362,28 +358,6 @@ fn applyFn(a: Args) Value {
     each(last, &ctx, Collect.add);
     return func.call(a[0], @intCast(fixed.len + n), &buf);
 }
-
-const MapInto = struct {
-    f: Value,
-    to: Value,
-    fn add(c: *MapInto, x: Value) void {
-        const args = [_]Value{x};
-        c.to = coll.vectorConj(c.to, func.call(c.f, 1, &args));
-    }
-};
-
-fn intoFn(a: Args) Value {
-    var ctx: IntoEach = .{ .to = if (a[0] == Value.nil) coll.empty_list else a[0] };
-    each(a[1], &ctx, IntoEach.add);
-    return ctx.to;
-}
-
-const IntoEach = struct {
-    to: Value,
-    fn add(c: *IntoEach, x: Value) void {
-        c.to = conj1(c.to, x);
-    }
-};
 
 fn vecFn(a: Args) Value {
     if (coll.isVector(a[0])) return a[0];
@@ -700,7 +674,7 @@ const table = [_]Entry{
     }.f),
     e("empty?", 1, 1, struct {
         fn f(a: Args) Value {
-            return Value.fromBool(count(a[0]) == 0);
+            return Value.fromBool(seqs.seq(a[0]) == Value.nil);
         }
     }.f),
     e("first", 1, 1, struct {
@@ -715,16 +689,48 @@ const table = [_]Entry{
     }.f),
     e("next", 1, 1, struct {
         fn f(a: Args) Value {
-            const r = rest(a[0]);
-            return if (r.isObjectOf(.empty_list)) Value.nil else r;
+            return seqs.next(a[0]);
         }
     }.f),
     e("cons", 2, 2, struct {
         fn f(a: Args) Value {
             const c = a[1];
             if (c == Value.nil or coll.isList(c)) return coll.cons(a[0], c);
-            if (coll.isVector(c)) return coll.cons(a[0], listFrom(c));
-            unsupportedSeq("cons", c);
+            return seqs.cons(a[0], c);
+        }
+    }.f),
+    // Seqs (M1.8, D-052)
+    e("seq", 1, 1, struct {
+        fn f(a: Args) Value {
+            return seqs.seq(a[0]);
+        }
+    }.f),
+    e("%lazy-seq", 1, 1, struct {
+        fn f(a: Args) Value {
+            return seqs.lazySeq(a[0]);
+        }
+    }.f),
+    e("realized?", 1, 1, pred(seqs.isRealized)),
+    e("sequential?", 1, 1, pred(seqs.isSequential)),
+    e("reduced", 1, 1, struct {
+        fn f(a: Args) Value {
+            return seqs.reduced(a[0]);
+        }
+    }.f),
+    e("reduced?", 1, 1, pred(seqs.isReduced)),
+    e("unreduced", 1, 1, struct {
+        fn f(a: Args) Value {
+            return seqs.unreduced(a[0]);
+        }
+    }.f),
+    e("ensure-reduced", 1, 1, struct {
+        fn f(a: Args) Value {
+            return if (seqs.isReduced(a[0])) a[0] else seqs.reduced(a[0]);
+        }
+    }.f),
+    e("%eduction", 4, 4, struct {
+        fn f(a: Args) Value {
+            return seqs.eduction(a[0], a[1], a[2], a[3]);
         }
     }.f),
     e("peek", 1, 1, struct {
@@ -746,13 +752,30 @@ const table = [_]Entry{
             badArg("pop", c);
         }
     }.f),
-    e("into", 2, 2, intoFn),
     e("keys", 1, 1, keysOrVals(true)),
     e("vals", 1, 1, keysOrVals(false)),
     e("reduce", 2, 3, reduceFn),
     e("apply", 2, null, applyFn),
     // Strings and names
     e("str", 0, null, strFn),
+    e("hash-of", 1, 1, struct {
+        fn f(a: Args) Value {
+            return Value.fromFixnum(equal.hashOf(a[0]));
+        }
+    }.f),
+    e("odd?", 1, 1, parity(true)),
+    e("even?", 1, 1, parity(false)),
+    e("pr-str", 0, null, struct {
+        fn f(a: Args) Value {
+            var out: std.ArrayList(u8) = .empty;
+            defer out.deinit(rt.scratch);
+            for (a, 0..) |x, i| {
+                if (i > 0) print.put(&out, " ");
+                print.write(x, &out, true);
+            }
+            return string.make(out.items);
+        }
+    }.f),
     e("subs", 2, 3, struct {
         fn f(a: Args) Value {
             const s = a[0];
@@ -871,7 +894,7 @@ const table = [_]Entry{
     e("map?", 1, 1, pred(coll.isMap)),
     e("set?", 1, 1, pred(coll.isSet)),
     e("list?", 1, 1, pred(coll.isList)),
-    e("seq?", 1, 1, pred(coll.isList)),
+    e("seq?", 1, 1, pred(seqs.isSeq)),
     e("coll?", 1, 1, pred(isColl)),
     e("string?", 1, 1, pred(string.isString)),
     e("keyword?", 1, 1, pred(names.isKeyword)),
@@ -932,14 +955,6 @@ const table = [_]Entry{
             return v.isObjectOf(.atom);
         }
     }.t)),
-    e("mapv", 2, null, struct {
-        fn f(a: Args) Value {
-            if (a.len > 2) rt.raise(.unsupported_operation_error, "mapv over more than one collection arrives natively in M1.8", .{});
-            var ctx: MapInto = .{ .f = a[0], .to = coll.vectorOf(&.{}) };
-            each(a[1], &ctx, MapInto.add);
-            return ctx.to;
-        }
-    }.f),
     e("%no-matching-case", 1, 1, struct {
         fn f(a: Args) Value {
             rt.raise(.@"error", "no case clause matches {s}", .{typeName(a[0])});
