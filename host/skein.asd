@@ -5,13 +5,14 @@
   :version "0.0.1"
   :author "Jessie Hughart"
   :license "MIT"
-  :depends-on ("closer-mop")
+  :depends-on ("closer-mop" "cffi")
   :pathname "src/"
   :serial t
   ;; One package per module (src/<module>/package.lisp). Files are listed in load order:
   ;; syntax objects come first because runtime errors report source locations.
   :components ((:file "platform/package")
                (:file "platform/cpu")
+               (:file "platform/os")
                (:file "syntax/package")
                (:file "syntax/syntax")
                (:file "runtime/package")
@@ -51,6 +52,11 @@
                (:file "expander/destructure")
                (:file "expander/expander")
                (:file "expander/macros")
+               (:file "ffi/package")
+               (:file "ffi/ffi")
+               (:file "bindgen/package")
+               (:file "bindgen/json")
+               (:file "bindgen/bindgen")
                (:file "backend-cl/package")
                (:file "backend-cl/compile")
                (:file "backend-cl/driver")
@@ -76,7 +82,9 @@
                (:file "objects")
                (:file "types")
                (:file "concurrency")
-               (:file "cli"))
+               (:file "cli")
+               (:file "ffi")
+               (:file "bindgen"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!
                                        (uiop:find-symbol* :all :skein.tests))

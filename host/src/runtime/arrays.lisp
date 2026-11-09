@@ -73,7 +73,30 @@ a value-struct type, or any."
   (make-array (- end start) :element-type (array-element-type a)
                             :displaced-to a :displaced-index-offset start))
 
+(defun array-element-bytes (a)
+  "The size in bytes of one element of the specialized array A, or NIL if its elements
+are not stored as plain numbers."
+  (let ((et (array-element-type a)))
+    (cond ((subtypep et 'double-float) 8)
+          ((subtypep et 'single-float) 4)
+          ((subtypep et '(unsigned-byte 8)) 1)
+          ((subtypep et '(signed-byte 8)) 1)
+          ((subtypep et '(unsigned-byte 16)) 2)
+          ((subtypep et '(signed-byte 16)) 2)
+          ((subtypep et '(unsigned-byte 32)) 4)
+          ((subtypep et '(signed-byte 32)) 4)
+          ((subtypep et '(unsigned-byte 64)) 8)
+          ((subtypep et '(signed-byte 64)) 8)
+          (t nil))))
+
+(defun as-bytes (a)
+  "A byte view of the primitive array A for passing to C or GPU APIs (DESIGN §9.3)."
+  (unless (and (vectorp a) (not (stringp a)) (array-element-bytes a))
+    (unsupported "as-bytes needs an array of a numeric type, not ~A" (readable-string a)))
+  (make-byte-view a))
+
 (defcore "%make-array" (type n) (make-typed-array type n))
+(defcore "as-bytes" (a) (as-bytes a))
 (defcore "aget" (a i) (skein-aget a i))
 (defcore "aset!" (a i v) (skein-aset a i v))
 (defcore "array?" (x) (bool (array-like-p x)))

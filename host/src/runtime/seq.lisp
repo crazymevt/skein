@@ -180,6 +180,7 @@ list or seq. Signals UNSUPPORTED-OPERATION-ERROR if X is not seqable."
     (tset (count-of (tset-tmap x)))
     (vector (length x))
     (struct-array (struct-array-count x))
+    (byte-view (* (length (byte-view-array x)) (array-element-bytes (byte-view-array x))))
     (t (let ((n 0)) (do-seq (e x) (declare (ignore e)) (incf n)) n))))
 
 (defun coll-cons (x coll)

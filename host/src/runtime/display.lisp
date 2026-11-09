@@ -69,6 +69,8 @@ print does; otherwise as pr does. Values with no readable syntax print as #<...>
          (format stream "#<array ~A [" (skein-element-name (array-element-type x)))
          (print-elements (coerce x 'list) stream readably)
          (write-string "]>" stream))
+        ((byte-view-p x) (format stream "#<bytes ~D>" (count-of x)))
+        ((cffi:pointerp x) (format stream "#<ptr 0x~X>" (cffi:pointer-address x)))
         ((task-p x) (format stream "#<task ~(~A~)>" (task-state x)))
         ((chan-p x) (format stream "#<chan~:[~; closed~]>" (chan-closed x)))
         ((nursery-p x) (write-string "#<nursery>" stream))

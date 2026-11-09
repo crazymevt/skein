@@ -249,6 +249,13 @@ array per primitive field (COLUMNS, in the order of the DEF's leaves)."
       (documentation 'struct-array-p 'function)
       "Return true if the argument is an array of value structs.")
 
+(defstruct (byte-view (:constructor make-byte-view (array)) (:copier nil))
+  "The bytes of a primitive array, for passing to C (as-bytes, DESIGN §9.3)."
+  (array nil :read-only t))
+
+(setf (documentation 'byte-view-p 'function) "Return true if the argument is a byte view."
+      (documentation 'byte-view-array 'function) "Return the array a byte view shows.")
+
 ;;; ------------------------------------------------------------------------------------
 ;;; Concurrency (DESIGN §13; functions in concurrency.lisp and channels.lisp)
 

@@ -38,7 +38,10 @@
                (setf (gethash name *auto-gensyms*)
                      (intern-sym (skein.runtime:gensym-name
                                   (format nil "~A__" (subseq name 0 (1- (length name)))))))))
-          ((and (null ns-name) (or (special-form-p name) (string= name "&"))) s)
+          ;; Special forms, &, and try's catch and finally stay unqualified, as in Clojure.
+          ((and (null ns-name) (or (special-form-p name)
+                                   (member name '("&" "catch" "finally") :test #'string=)))
+           s)
           (ns-name (let ((target (find-alias ns ns-name)))
                      (if target (intern-sym name (namespace-name target)) s)))
           (t (let ((var (resolve-var ns name)))

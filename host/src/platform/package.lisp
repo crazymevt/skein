@@ -3,5 +3,5 @@
 
 (defpackage #:skein.platform
   (:use #:cl)
-  (:export #:cpu-count)
-  (:documentation "Operating-system specific helpers: the number of CPUs."))
+  (:export #:cpu-count #:os-name #:library-directories)
+  (:documentation "Operating-system specific helpers: the number of CPUs, the OS name and where C\nlibraries are installed."))

@@ -111,3 +111,8 @@ original syntax; anything new gets LOCATION."
   (data-macroexpand form (lambda (s env) (values (macroexpand s env)))))
 (skein.runtime:defcore "macroexpand-all" (form)
   (data-macroexpand form #'expand-all))
+
+(skein.runtime:defcore "%syntax-meta" (form)
+  ;; For macros: the metadata (^:blocking, ^type, ...) of a form they received, or nil.
+  (let ((syntax (and *origins* (gethash form *origins*))))
+    (and syntax (syntax-meta syntax) (syntax-value (syntax-meta syntax)))))

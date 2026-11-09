@@ -1,0 +1,114 @@
+(ns skein.ffi
+  "The foreign function interface (DESIGN §14): load C libraries and describe their
+structs, unions, enums and functions. The functions of this namespace (alloc, free, get,
+put!, field, put-field!, sizeof, c-string, handle, ...) are built into the host; the
+macros are here.")
+
+(defn- params-data [params]
+  (when-not (and (vector? params) (even? (count params)))
+    (error "C parameters look like [name type, name type ...]"))
+  (vec (map vec (partition 2 params))))
+
+(defmacro deflibrary
+  "Load a C library, choosing the file by operating system:
+(deflibrary sdl3 {:macos \"libSDL3.dylib\" :linux [\"libSDL3.so.0\"] :windows \"SDL3.dll\"}).
+A vector lists names to try in order. Binds name to the file that loaded."
+  [lib-name spec]
+  `(def ~lib-name (%load-library ~spec)))
+
+(defmacro defcstruct
+  "Describe a C struct: (defcstruct name (field type)...). Field types are foreign types,
+other structs (stored inline) or (array T n)."
+  [struct-name & fields]
+  `(%define-struct '~(symbol (%current-namespace-name) (name struct-name)) :struct
+                   '[~@(map (fn [[f t]] [f t]) fields)]))
+
+(defmacro defcunion
+  "Describe a C union, like defcstruct."
+  [union-name & fields]
+  `(%define-struct '~(symbol (%current-namespace-name) (name union-name)) :union
+                   '[~@(map (fn [[f t]] [f t]) fields)]))
+
+(defmacro defcenum
+  "Describe a C enum: (defcenum name base-type? (:key value)...). The base type defaults
+to i32. As a parameter type, it accepts a key, a collection of keys (ORed together, for
+flags) or an integer."
+  [enum-name & specs]
+  (let [base (if (symbol? (first specs)) (first specs) 'i32)
+        values (if (symbol? (first specs)) (rest specs) specs)]
+    `(%define-enum '~(symbol (%current-namespace-name) (name enum-name)) '~base
+                   [~@(mapcat (fn [[k v]] [k v]) values)])))
+
+(defmacro defcfun
+  "Bind name to a C function: (defcfun name \"c_name\" return-type [param type ...]).
+Mark the name ^:blocking for calls that may wait. Mark the return type ^:owned, as in
+^:owned (ptr T), when C hands over memory that Skein must free; ^:borrowed, the default,
+means it does not."
+  [fn-name c-name return-type params]
+  `(%define-function '~fn-name ~c-name '~return-type '~(params-data params)
+                     ~(boolean (:blocking (%syntax-meta fn-name)))
+                     ~(boolean (:owned (%syntax-meta return-type)))))
+
+(defmacro defcallback
+  "Bind name to a C function pointer that calls the body:
+(defcallback name return-type [param type ...] body...)."
+  [cb-name return-type params & body]
+  (let [data (params-data params)]
+    `(%define-callback '~(symbol (%current-namespace-name) (name cb-name)) '~return-type
+                       '~data
+                       (fn [~@(map first data)] ~@body))))
+
+(defmacro with-foreign
+  "Bind name to C memory (from alloc) for the body, then free it:
+(with-foreign [buf (alloc f32 1024)] ...)."
+  [[ptr-name init] & body]
+  `(let [~ptr-name ~init]
+     (try ~@body (finally (free ~ptr-name)))))
+
+(defmacro pin
+  "Keep a Skein array in place while C may use it, and bind name to its address:
+(pin [p verts] (gl-buffer-data ... p))."
+  [[ptr-name arr] & body]
+  `(%call-pinned ~arr (fn [~ptr-name] ~@body)))
+
+;;; Memory access. These take a type as written, like (alloc f32 1024): primitive types
+;;; and (ptr ...) forms are quoted; struct, union and enum names are evaluated.
+
+(def ^:private primitive-types
+  '#{i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void c-string ptr})
+
+(defn- type-form [type]
+  (if (or (seq? type) (and (symbol? type) (contains? primitive-types type)))
+    `'~type
+    type))
+
+(defmacro alloc
+  "Allocate zeroed C memory for n values of type (default 1): (alloc f32 1024),
+(alloc my-struct). Free it with free, or use with-foreign."
+  ([type] `(%alloc ~(type-form type) 1))
+  ([type n] `(%alloc ~(type-form type) ~n)))
+
+(defmacro sizeof
+  "The size in bytes of a foreign type."
+  [type]
+  `(%sizeof ~(type-form type)))
+
+(defmacro get
+  "Read the value of type at ptr (or its index-th element): (get p f32 3)."
+  ([p type] `(%get ~p ~(type-form type) 0))
+  ([p type index] `(%get ~p ~(type-form type) ~index)))
+
+(defmacro put!
+  "Write value as type at ptr (or its index-th element): (put! p f32 1.5 3)."
+  ([p type value] `(%put! ~p ~(type-form type) ~value 0))
+  ([p type value index] `(%put! ~p ~(type-form type) ~value ~index)))
+
+(defmacro field
+  "Read a field of the struct or union at ptr: (field p sdl-frect :x)."
+  [p type key]
+  `(%field ~p ~(type-form type) ~key))
+
+(defmacro put-field!
+  "Write a field of the struct or union at ptr: (put-field! p sdl-frect :x 1.0f)."
+  [p type key value]
+  `(%put-field! ~p ~(type-form type) ~key ~value))

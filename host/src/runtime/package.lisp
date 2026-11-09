@@ -51,6 +51,7 @@
    #:skein-type-to-cl #:inline-entry-for #:inline-arity-mismatch #:inline-entry-emitter
    #:inline-entry-test-p
    #:var-ftype #:struct-redefinition-warning #:struct-array-p #:find-struct-def
+   #:byte-view-p #:byte-view-array #:array-element-bytes
    ;; Concurrency (DESIGN §13)
    #:cancelled #:task-timeout #:task-cancelled-error #:task-p #:chan-p
    ;; Calling
