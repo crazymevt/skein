@@ -172,7 +172,9 @@
                         (let [updates (atom 0) failed (atom 0)]
                           (handler-bind [error (fn [c] (swap! failed inc)
                                                  (invoke-restart 'retry-frame))]
-                            (game/run-loop {:step 0.001
+                            ;; One update per frame, so the count is exact however
+                            ;; slow the machine is.
+                            (game/run-loop {:step 0.001 :max-steps 1
                                             :update (fn [dt]
                                                       (when (and (= @updates 1) (zero? @failed))
                                                         (error \"once\"))
