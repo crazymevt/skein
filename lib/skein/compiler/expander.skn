@@ -1,0 +1,1121 @@
+(ns skein.compiler.expander
+  "The Skein expander (DESIGN §16), written in Skein (M1.7, D-049): a port of the Phase 0
+expander (host/src/expander/) that turns syntax objects (as skein.compiler.reader makes
+them) into the same Core IR.
+
+Core IR here is plain data (docs/CORE-IR.md):
+- a node is a map {:op op :loc location ...fields}, with op one of :const :local-ref
+  :var-ref :if :do :def :fn :let :letfn :loop :recur :set :call :unwind-protect :block
+  :return-from :values :let-values :the :locally :throw-condition :handler-bind
+  :restart-bind; an arity is {:op :arity ...} inside a :fn node's :arities;
+- a local is {:local/name :local/id :local/mutable? :local/type (an atom)}, and a block
+  tag {:tag/name :tag/id}; ids are unique, so references compare by id;
+- :loop and :arity nodes have an :id, and a :recur node's :target is that id.
+
+Namespaces and vars belong to the image the compiler runs in; the expander reaches them
+through skein.core's % functions (host/src/runtime/compile-env.lisp)."
+  (:require [skein.compiler.reader :as reader]))
+
+;;; ------------------------------------------------------------------------------------
+;;; Compile errors
+
+(defcondition compile-error [error]
+  "A malformed form, or one that refers to something that does not exist, with the
+location of the offending form."
+  (message :reader compile-error-message)
+  (location :reader compile-error-location)
+  (:report (fn [c] (if (compile-error-location c)
+                     (str (compile-error-message c) " at "
+                          (reader/format-location (compile-error-location c)))
+                     (compile-error-message c)))))
+
+(defn- fail
+  "Signal a compile-error about syntax (or nil) with a message made of parts."
+  [syntax & parts]
+  (error compile-error :message (apply str parts) :location (when syntax (:loc syntax))))
+
+(defn- show [syntax] (reader/syntax-to-string syntax))
+
+(defn- plural [n word] (str n " " word (if (= n 1) "" "s")))
+
+;;; ------------------------------------------------------------------------------------
+;;; Ids, locals and block tags
+
+(def ^:private last-id (atom 0))
+
+(defn- next-id [] (swap! last-id inc))
+
+(defn make-local
+  "A fresh local named name."
+  ([name] (make-local name false nil))
+  ([name mutable? type]
+   {:local/name name :local/id (next-id) :local/mutable? (boolean mutable?)
+    :local/type (atom type)}))
+
+(defn- make-block-tag [name] {:tag/name name :tag/id (next-id)})
+
+(defn- node [op loc & fields]
+  (apply assoc {:op op :loc loc} fields))
+
+(defn- const [loc value] (node :const loc :value value))
+
+;;; ------------------------------------------------------------------------------------
+;;; Syntax helpers
+
+(defn- loc [syntax] (:loc syntax))
+(defn- items [syntax] (:datum syntax))
+(defn- atom-syntax? [syntax] (= (:kind syntax) :atom))
+(defn- list-form? [syntax] (= (:kind syntax) :list))
+(defn- vector-form? [syntax] (= (:kind syntax) :vector))
+
+(defn- sym-datum
+  "The symbol of a symbol atom, else nil."
+  [syntax]
+  (when (and (atom-syntax? syntax) (symbol? (:datum syntax))) (:datum syntax)))
+
+(defn- plain-name
+  "The name of an unqualified symbol, else nil."
+  [syntax]
+  (let [s (sym-datum syntax)]
+    (when (and s (nil? (namespace s))) (name s))))
+
+(defn- head-name
+  "The unqualified name at the head of a list form, or nil."
+  [syntax]
+  (when (and (list-form? syntax) (seq (items syntax)))
+    (plain-name (first (items syntax)))))
+
+(defn- binding-name
+  "Check that syntax is an unqualified symbol usable as a binding; return its name."
+  [syntax what]
+  (or (plain-name syntax)
+      (fail syntax what " must be an unqualified symbol, not " (show syntax))))
+
+(defn- meta-entry
+  "The value syntax that syntax's metadata maps the keyword named key to, or nil."
+  [syntax key]
+  (when-let [meta (:meta syntax)]
+    (loop [kvs (items meta)]
+      (when (seq kvs)
+        (let [k (first kvs)]
+          (if (and (atom-syntax? k) (keyword? (:datum k)) (= (name (:datum k)) key))
+            (second kvs)
+            (recur (nnext kvs))))))))
+
+(defn- meta-flag?
+  "True if syntax's metadata maps the keyword key to a true value."
+  [syntax key]
+  (when-let [meta (:meta syntax)]
+    (loop [kvs (items meta)]
+      (when (seq kvs)
+        (let [k (first kvs) v (second kvs)]
+          (if (and (atom-syntax? k) (keyword? (:datum k)) (= (name (:datum k)) key)
+                   (atom-syntax? v) (:datum v))
+            true
+            (recur (nnext kvs))))))))
+
+(defn- meta-string
+  "The string that syntax's metadata maps the keyword key to, or nil."
+  [syntax key]
+  (when-let [meta (:meta syntax)]
+    (loop [kvs (items meta)]
+      (when (seq kvs)
+        (let [k (first kvs) v (second kvs)]
+          (if (and (atom-syntax? k) (keyword? (:datum k)) (= (name (:datum k)) key)
+                   (atom-syntax? v) (string? (:datum v)))
+            (:datum v)
+            (recur (nnext kvs))))))))
+
+(def ^:private syntax-value)
+
+(defn- type-hint
+  "The type a ^type hint on syntax declares (as data), or nil."
+  [syntax]
+  (when-let [tag (meta-entry syntax "tag")] (syntax-value tag)))
+
+(defn- make-binding-local [syntax what]
+  (make-local (binding-name syntax what) (meta-flag? syntax "mutable") (type-hint syntax)))
+
+;;; Building syntax, for macros
+
+(defn- s-sym
+  ([name location] (s-sym name location nil))
+  ([name location ns] {:kind :atom :datum (symbol ns name) :loc location}))
+
+(defn- core-sym
+  "A symbol naming a skein.core var, qualified so user definitions cannot shadow it."
+  [name location]
+  (s-sym name location "skein.core"))
+
+(defn- s-atom [value location] {:kind :atom :datum value :loc location})
+(defn- s-list [location & items] {:kind :list :datum (vec items) :loc location})
+(defn- s-list* [location items] {:kind :list :datum (vec items) :loc location})
+(defn- s-vector [location items] {:kind :vector :datum (vec items) :loc location})
+
+;;; ------------------------------------------------------------------------------------
+;;; The environment: {:ns namespace :locals {name local} :blocks {name tag}
+;;; :recur {:id :count :hit (atom)} or nil}
+
+(defn make-env
+  "An expander environment that resolves names in the namespace ns."
+  [ns]
+  {:ns ns :locals {} :blocks {} :recur nil})
+
+(defn- lookup-local [env name] (get (:locals env) name))
+
+(defn- with-locals
+  "env extended with locals (later ones shadow earlier ones)."
+  [env locals]
+  (assoc env :locals (reduce (fn [m l] (assoc m (:local/name l) l)) (:locals env) locals)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Names and vars
+
+(defn- core-ns [] (%find-namespace "skein.core"))
+(defn- core-var [name] (%find-own-var (core-ns) name))
+
+(def special-forms
+  "Map from special form name to its analyzer, a function of form, env and tail."
+  (atom {}))
+
+(defn special-form?
+  "True if name (a string) names a special form."
+  [name]
+  (contains? @special-forms name))
+
+(defn- resolve-global
+  "The var that the symbol form names in env's namespace. If there is none, a
+compile-error, or nil when error? is false."
+  ([form env] (resolve-global form env true))
+  ([form env error?]
+   (block* resolve
+     (let [s (sym-datum form)
+           ns (:ns env)
+           nm (name s)
+           ns-name (namespace s)
+           bad (fn [& parts]
+                 (if error? (apply fail form parts) (return-from* resolve nil)))]
+       (if (nil? ns-name)
+         (or (%resolve-var ns nm)
+             (bad "unable to resolve symbol `" nm "`"))
+         (let [target (or (%find-alias ns ns-name) (%find-namespace ns-name))]
+           (when-not target
+             (bad "no namespace `" ns-name "` (is it required?)"))
+           (let [var (%find-own-var target nm)]
+             (when-not var
+               (bad "no var `" nm "` in namespace `" ns-name "`"))
+             (when (and (%var-private? var) (not (identical? target ns)))
+               (bad "var " (%var-qualified-name var) " is private"))
+             var)))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Analysis
+
+(def ^:private analyze)
+(def ^:private macroexpand-1*)
+(def ^:private expand-syntax-quote)
+(def ^:private unquote-form?)
+(def ^:private core-head?)
+
+(defn- syntax-value
+  "The runtime value that syntax denotes when quoted. Metadata is dropped."
+  [syntax]
+  (let [d (items syntax)
+        children (fn [] (mapv syntax-value d))]
+    (case (:kind syntax)
+      :atom d
+      :list (apply list (children))
+      :vector (children)
+      :map (apply hash-map (children))
+      :set (apply hash-set (children)))))
+
+(defn- analyze-collection
+  "A vector, map or set literal: built now if every element is a constant, else a call to
+skein.core/vector, %map-literal or %set-literal."
+  [form env]
+  (let [nodes (mapv (fn [x] (analyze x env)) (items form))
+        var (core-var (case (:kind form)
+                        :vector "vector" :map "%map-literal" :set "%set-literal"))]
+    (if (every? (fn [n] (= (:op n) :const)) nodes)
+      (const (loc form)
+             (try (apply (%var-value var) (mapv :value nodes))
+                  (catch error e
+                    (if (%skein-error? e)
+                      (fail form (condition-message e))
+                      (throw-condition e)))))
+      (node :call (loc form) :fn (node :var-ref (loc form) :var var) :args nodes))))
+
+(defn- analyze-symbol [form env]
+  (let [s (sym-datum form)
+        local (when (nil? (namespace s)) (lookup-local env (name s)))]
+    (if local
+      (node :local-ref (loc form) :local local)
+      (node :var-ref (loc form) :var (resolve-global form env)))))
+
+(defn- analyze-atom [form env]
+  (if (sym-datum form)
+    (analyze-symbol form env)
+    (const (loc form) (:datum form))))
+
+(defn- macro-var
+  "If form is a call to a macro, the macro's var."
+  [form env]
+  (when (and (list-form? form) (seq (items form)))
+    (let [head (first (items form))
+          s (sym-datum head)]
+      (when (and s
+                 (not (and (nil? (namespace s)) (special-form? (name s))))
+                 (not (and (nil? (namespace s)) (lookup-local env (name s)))))
+        (let [var (resolve-global head env false)]
+          (when (and var (%var-macro var)) var))))))
+
+(defn- analyze-list [form env tail?]
+  (let [forms (items form)]
+    (if (empty? forms)
+      (const (loc form) '())
+      (let [head (first forms)
+            nm (plain-name head)
+            special (when nm (get @special-forms nm))]
+        (cond special (special form env tail?)
+              (core-head? form "syntax-quote")
+              (analyze (expand-syntax-quote form env) env tail?)
+              (unquote-form? form)
+              (fail form (if (core-head? form "unquote") "~ (unquote)" "~@ (unquote-splicing)")
+                    " is only allowed inside syntax-quote")
+              (macro-var form env) (analyze (macroexpand-1* form env) env tail?)
+              :else (node :call (loc form)
+                          :fn (analyze head env)
+                          :args (mapv (fn [a] (analyze a env)) (rest forms))))))))
+
+(defn- analyze* [form env tail?]
+  (case (:kind form)
+    :atom (analyze-atom form env)
+    :list (analyze-list form env tail?)
+    (analyze-collection form env)))
+
+(defn analyze
+  "The Core IR node for the syntax object form in env. tail? is true when form is in tail
+position of the innermost loop* or fn arity, where recur is allowed."
+  ([form env] (analyze* form env false))
+  ([form env tail?] (analyze* form env tail?)))
+
+(defn analyze-toplevel
+  "The Core IR node for the top-level syntax object form in the namespace ns."
+  [form ns]
+  (analyze form (make-env ns)))
+
+(defn toplevel-do?
+  "True if form is a (do ...) form, whose subforms are treated as top-level forms."
+  [form]
+  (= (head-name form) "do"))
+
+;;; ------------------------------------------------------------------------------------
+;;; Bodies
+
+(defn- declare-form? [form env]
+  (and (= (head-name form) "declare") (nil? (lookup-local env "declare"))))
+
+(defn- analyze-seq
+  "Analyze forms in order; the last one is in tail position if tail? is true."
+  [forms env tail? location]
+  (cond (empty? forms) (const location nil)
+        (empty? (rest forms)) (analyze (first forms) env tail?)
+        :else (node :do location
+                    :forms (loop [fs (seq forms) out []]
+                             (if fs
+                               (recur (next fs)
+                                      (conj out (analyze (first fs) env
+                                                         (and tail? (nil? (next fs))))))
+                               out)))))
+
+(def ^:private policy-qualities #{"speed" "safety" "debug" "space"})
+
+(defn- parse-declaration
+  "Apply one declaration spec from (declare ...). Type declarations set the type of
+locals; optimize declarations are returned as a vector of [quality level]."
+  [spec env]
+  (let [parts (when (list-form? spec) (items spec))
+        head (when (seq parts) (plain-name (first parts)))]
+    (cond (= head "type")
+          (do (when-not (>= (count parts) 3)
+                (fail spec "(type T name...) needs a type and at least one name"))
+              (let [type (syntax-value (second parts))]
+                (doseq [name-form (drop 2 parts)]
+                  (let [nm (binding-name name-form "a declared name")
+                        local (or (lookup-local env nm)
+                                  (fail name-form "no local named " nm " to declare"))]
+                    (reset! (:local/type local) type))))
+              [])
+          (= head "optimize")
+          (mapv (fn [q]
+                  (let [[quality level] (if (list-form? q)
+                                          [(plain-name (first (items q)))
+                                           (:datum (second (items q)))]
+                                          [(plain-name q) 3])]
+                    (when-not (and (contains? policy-qualities quality)
+                                   (integer? level) (<= 0 level 3))
+                      (fail q "optimize takes qualities speed, safety, debug and space with "
+                            "levels 0 to 3, not " (show q)))
+                    [quality level]))
+                (rest parts))
+          :else (fail spec "unknown declaration " (show spec)
+                      "; expected (type ...) or (optimize ...)"))))
+
+(defn- analyze-body
+  "Like analyze-seq, but first apply leading (declare ...) forms (DESIGN §12.2). An
+optimize declaration wraps the body in a :locally node."
+  [forms env tail? location]
+  (loop [forms (seq forms) policy []]
+    (if (and forms (declare-form? (first forms) env))
+      (recur (next forms)
+             (reduce (fn [p spec] (into p (parse-declaration spec env)))
+                     policy (rest (items (first forms)))))
+      (let [body (analyze-seq forms env tail? location)]
+        (if (seq policy)
+          (node :locally location :policy policy :body body)
+          body)))))
+
+(defn- check-arg-count
+  "Check that the special form has between min and max arguments (max nil: no limit)."
+  ([form min] (check-arg-count form min min))
+  ([form min max]
+   (let [n (dec (count (items form)))]
+     (when-not (and (>= n min) (or (nil? max) (<= n max)))
+       (fail form (plain-name (first (items form))) " expects "
+             (cond (nil? max) (str "at least " (plural min "argument"))
+                   (= min max) (plural min "argument")
+                   :else (str min " to " max " arguments"))
+             ", got " n)))))
+
+(defn- binding-pairs
+  "Check that vector is a binding vector with an even number of forms; return its pairs."
+  [vector what]
+  (when-not (vector-form? vector)
+    (fail vector what " needs a binding vector, not " (show vector)))
+  (let [forms (items vector)]
+    (when (odd? (count forms))
+      (fail vector what " binding vector needs an even number of forms"))
+    (mapv vec (partition 2 forms))))
+
+(defn- defspecial [name f] (swap! special-forms assoc name f))
+
+;;; ------------------------------------------------------------------------------------
+;;; Special forms
+
+(defspecial "quote"
+  (fn [form env tail?]
+    (check-arg-count form 1)
+    (const (loc form) (syntax-value (second (items form))))))
+
+(defspecial "if"
+  (fn [form env tail?]
+    (check-arg-count form 2 3)
+    (let [[_ test then else] (items form)]
+      (node :if (loc form)
+            :test (analyze test env)
+            :then (analyze then env tail?)
+            :else (if else (analyze else env tail?) (const (loc form) nil))))))
+
+(defspecial "do"
+  (fn [form env tail?]
+    (analyze-seq (rest (items form)) env tail? (loc form))))
+
+(defspecial "def"
+  (fn [form env tail?]
+    (check-arg-count form 1 3)
+    (let [args (rest (items form))
+          name-form (first args)
+          init? (>= (count args) 2)
+          three? (= (count args) 3)
+          doc (when init? (second args))
+          s (or (sym-datum name-form)
+                (fail name-form "def needs a symbol, not " (show name-form)))
+          ns (:ns env)]
+      (when (and (namespace s) (not= (namespace s) (%namespace-name ns)))
+        (fail name-form "cannot def " (show name-form) " outside its namespace "
+              (%namespace-name ns)))
+      (when three?
+        (when-not (and (atom-syntax? doc) (string? (:datum doc)))
+          (fail doc "def with three arguments needs a docstring second")))
+      (let [var (%intern-var ns (name s))
+            init (cond three? (nth args 2) init? doc :else nil)]
+        (%set-var-flags! var (meta-flag? name-form "dynamic") (meta-flag? name-form "private")
+                         (if three? (:datum doc) (meta-string name-form "doc")))
+        (node :def (loc form) :var var :init (when init (analyze init env)))))))
+
+;;; fn
+
+(defn- parse-params
+  "[param-locals rest-local patterns] for a parameter vector. A parameter that is a
+destructuring pattern gets a fresh local; patterns lists [pattern local] pairs."
+  [vector]
+  (when-not (vector-form? vector)
+    (fail vector "fn parameters must be a vector, not " (show vector)))
+  (let [patterns (atom [])
+        param (fn [p what]
+                (if (or (= (:kind p) :vector) (= (:kind p) :map))
+                  (let [local (make-local (name (gensym "p__")))]
+                    (swap! patterns conj [p local])
+                    local)
+                  (make-binding-local p what)))]
+    (loop [forms (seq (items vector)) params []]
+      (if forms
+        (let [p (first forms)]
+          (if (= (plain-name p) "&")
+            (do (when-not (= (count (rest forms)) 1)
+                  (fail p "& must be followed by exactly one parameter"))
+                [params (param (second forms) "a rest parameter") @patterns])
+            (recur (next forms) (conj params (param p "a parameter")))))
+        [params nil @patterns]))))
+
+(defn- destructuring-body
+  "body wrapped so that each [pattern local] in patterns is destructured with let."
+  [patterns body location]
+  (if (empty? patterns)
+    body
+    [(s-list* location
+              (concat [(core-sym "let" location)
+                       (s-vector location (mapcat (fn [[pattern local]]
+                                                    [pattern (s-sym (:local/name local)
+                                                                    location)])
+                                                  patterns))]
+                      body))]))
+
+(defn- analyze-arity [vector body env location]
+  (let [[params rest-local patterns] (parse-params vector)
+        body (destructuring-body patterns body location)
+        id (next-id)
+        hit (atom false)
+        inner (assoc (with-locals env (if rest-local (conj params rest-local) params))
+                     :recur {:id id :count (+ (count params) (if rest-local 1 0)) :hit hit})
+        body-node (analyze-body body inner true location)]
+    (node :arity location :id id :params params :rest rest-local :body body-node
+          :recur-p @hit :return-type (type-hint vector))))
+
+(defn- check-arities [form arities]
+  (let [variadic (filterv :rest arities)
+        fixed (filterv (fn [a] (nil? (:rest a))) arities)
+        counts (mapv (fn [a] (count (:params a))) fixed)]
+    (when (> (count variadic) 1)
+      (fail form "a fn can have only one variadic arity"))
+    (when-not (= (count counts) (count (distinct counts)))
+      (fail form "a fn cannot have two arities with the same number of parameters"))
+    (when (and (seq variadic) (seq counts)
+               (> (apply max counts) (count (:params (first variadic)))))
+      (fail form "a fixed arity cannot have more parameters than the variadic one"))))
+
+(defn- analyze-fn-tail
+  "The part of a fn form after its name: [params] body... or ([params] body...)+."
+  [form parts env fn-name self]
+  (let [inner (if self (with-locals env [self]) env)
+        arities (cond (empty? parts) (fail form "fn needs a parameter vector")
+                      (vector-form? (first parts))
+                      [(analyze-arity (first parts) (rest parts) inner (loc form))]
+                      :else (mapv (fn [clause]
+                                    (when-not (and (list-form? clause) (seq (items clause)))
+                                      (fail clause "expected an arity like ([params] body...), "
+                                            "not " (show clause)))
+                                    (analyze-arity (first (items clause)) (rest (items clause))
+                                                   inner (loc clause)))
+                                  parts))]
+    (check-arities form arities)
+    (node :fn (loc form) :name fn-name :self self :arities arities)))
+
+(defspecial "fn"
+  (fn [form env tail?]
+    (let [parts (rest (items form))
+          nm (when (seq parts) (plain-name (first parts)))
+          self (when nm (make-local nm))]
+      (analyze-fn-tail form (if nm (rest parts) parts) env (or nm "fn") self))))
+
+;;; let*, letfn*, loop*
+
+(defn- analyze-sequential-bindings
+  "[bindings new-env] for the binding vector of form."
+  [form env what]
+  (reduce (fn [[bindings env] [nm init]]
+            (let [init-node (analyze init env)
+                  local (make-binding-local nm "a binding name")]
+              [(conj bindings [local init-node]) (with-locals env [local])]))
+          [[] env]
+          (binding-pairs (second (items form)) what)))
+
+(defspecial "let*"
+  (fn [form env tail?]
+    (check-arg-count form 1 nil)
+    (let [[bindings inner] (analyze-sequential-bindings form env "let*")]
+      (node :let (loc form) :bindings bindings
+            :body (analyze-body (drop 2 (items form)) inner tail? (loc form))))))
+
+(defspecial "loop*"
+  (fn [form env tail?]
+    (check-arg-count form 1 nil)
+    (let [[bindings inner] (analyze-sequential-bindings form env "loop*")
+          id (next-id)
+          hit (atom false)
+          inner (assoc inner :recur {:id id :count (count bindings) :hit hit})
+          body (analyze-body (drop 2 (items form)) inner true (loc form))]
+      (node :loop (loc form) :id id :bindings bindings :body body :recur-p @hit))))
+
+(defspecial "letfn*"
+  (fn [form env tail?]
+    (check-arg-count form 1 nil)
+    (let [vector (second (items form))]
+      (when-not (vector-form? vector)
+        (fail vector "letfn* needs a vector of function definitions"))
+      (let [clauses (items vector)
+            locals (mapv (fn [c]
+                           (when-not (and (list-form? c) (seq (items c)))
+                             (fail c "letfn* expects (name [params] body...), not " (show c)))
+                           (make-binding-local (first (items c)) "a function name"))
+                         clauses)
+            inner (with-locals env locals)]
+        (node :letfn (loc form)
+              :bindings (mapv (fn [c l]
+                                [l (analyze-fn-tail c (rest (items c)) inner (:local/name l) nil)])
+                              clauses locals)
+              :body (analyze-body (drop 2 (items form)) inner tail? (loc form)))))))
+
+(defspecial "recur"
+  (fn [form env tail?]
+    (let [target (:recur env)
+          args (rest (items form))]
+      (cond (nil? target) (fail form "recur is only allowed inside loop* or fn")
+            (not tail?) (fail form "recur must be in tail position"))
+      (when-not (= (count args) (:count target))
+        (fail form "recur expects " (plural (:count target) "argument") ", got " (count args)))
+      (reset! (:hit target) true)
+      (node :recur (loc form) :target (:id target)
+            :args (mapv (fn [a] (analyze a env)) args)))))
+
+;;; set!
+
+(defspecial "set!"
+  (fn [form env tail?]
+    (check-arg-count form 2)
+    (let [[_ place value] (items form)
+          nm (plain-name place)
+          local (when nm (lookup-local env nm))]
+      (cond local
+            (do (when-not (:local/mutable? local)
+                  (fail place "cannot set! the immutable local " nm "; declare it ^:mutable"))
+                (node :set (loc form) :local local :value (analyze value env)))
+            (sym-datum place)
+            (do (resolve-global place env)
+                (fail place "set! of a var needs a dynamic binding, which is not supported yet"))
+            (and (list-form? place) (= (count (items place)) 2)
+                 (atom-syntax? (first (items place)))
+                 (keyword? (:datum (first (items place)))))
+            ;; (set! (:slot obj) value) sets an :unsynchronized cell slot (DESIGN §8.2).
+            (node :call (loc form)
+                  :fn (node :var-ref (loc form) :var (core-var "%set-slot!"))
+                  :args [(analyze (second (items place)) env)
+                         (analyze (first (items place)) env)
+                         (analyze value env)])
+            :else (fail place "set! needs a ^:mutable local or a slot like (:name obj), not "
+                        (show place))))))
+
+;;; unwind-protect, block*, return-from*
+
+(defspecial "unwind-protect"
+  (fn [form env tail?]
+    (check-arg-count form 1 nil)
+    (node :unwind-protect (loc form)
+          :body (analyze (second (items form)) env)
+          :cleanup (analyze-seq (drop 2 (items form)) env false (loc form)))))
+
+(defspecial "block*"
+  (fn [form env tail?]
+    (check-arg-count form 1 nil)
+    (let [tag (make-block-tag (binding-name (second (items form)) "a block name"))
+          inner (assoc-in env [:blocks (:tag/name tag)] tag)]
+      (node :block (loc form) :tag tag
+            :body (analyze-seq (drop 2 (items form)) inner tail? (loc form))))))
+
+(defspecial "return-from*"
+  (fn [form env tail?]
+    (check-arg-count form 1 2)
+    (let [[_ tag-form value] (items form)
+          nm (binding-name tag-form "a block name")
+          tag (or (get (:blocks env) nm)
+                  (fail tag-form "no enclosing block* named " nm))]
+      (node :return-from (loc form) :tag tag
+            :value (if value (analyze value env) (const (loc form) nil))))))
+
+;;; values, let-values*, the
+
+(defspecial "values"
+  (fn [form env tail?]
+    (node :values (loc form) :args (mapv (fn [a] (analyze a env)) (rest (items form))))))
+
+(defspecial "let-values*"
+  (fn [form env tail?]
+    (check-arg-count form 1 nil)
+    (let [[bindings inner]
+          (reduce (fn [[bindings inner] [names init]]
+                    (when-not (vector-form? names)
+                      (fail names "let-values* binds a vector of names, like [a b]"))
+                    (let [init-node (analyze init inner)
+                          locals (mapv (fn [n] (make-binding-local n "a binding name"))
+                                       (items names))]
+                      [(conj bindings [locals init-node]) (with-locals inner locals)]))
+                  [[] env]
+                  (binding-pairs (second (items form)) "let-values*"))]
+      (node :let-values (loc form) :bindings bindings
+            :body (analyze-body (drop 2 (items form)) inner tail? (loc form))))))
+
+(defspecial "the"
+  (fn [form env tail?]
+    (check-arg-count form 2)
+    (node :the (loc form) :type (syntax-value (second (items form)))
+          :expr (analyze (nth (items form) 2) env tail?))))
+
+(defspecial "declare"
+  (fn [form env tail?]
+    (fail form "declare is only allowed at the start of a body")))
+
+;;; Conditions (DESIGN §10). The macros in lib/skein/core.skn build on these.
+
+(defspecial "throw-condition"
+  (fn [form env tail?]
+    (check-arg-count form 1)
+    (node :throw-condition (loc form) :condition (analyze (second (items form)) env))))
+
+(defspecial "handler-bind*"
+  (fn [form env tail?]
+    (check-arg-count form 1 nil)
+    (node :handler-bind (loc form)
+          :bindings (mapv (fn [[type handler]] [(analyze type env) (analyze handler env)])
+                          (binding-pairs (second (items form)) "handler-bind*"))
+          :body (analyze-seq (drop 2 (items form)) env false (loc form)))))
+
+(defspecial "restart-bind*"
+  (fn [form env tail?]
+    (check-arg-count form 1 nil)
+    (let [vector (second (items form))]
+      (when-not (and (vector-form? vector) (zero? (mod (count (items vector)) 3)))
+        (fail vector "restart-bind* needs a vector of name, function and report triples"))
+      (node :restart-bind (loc form)
+            :bindings (mapv (fn [[nm f report]]
+                              [(or (sym-datum nm) (fail nm "a restart name must be a symbol"))
+                               (analyze f env)
+                               (analyze report env)])
+                            (partition 3 (items vector)))
+            :body (analyze-seq (drop 2 (items form)) env false (loc form))))))
+
+(defspecial "%ffi-call"
+  (fn [form env tail?]
+    (fail form "%ffi-call is not supported until the FFI arrives (M0.10)")))
+
+;;; ------------------------------------------------------------------------------------
+;;; Syntax-quote (DESIGN §11.1): `form builds data at run time, with symbols resolved to
+;;; fully qualified names in the namespace where the syntax-quote appears.
+
+(defn- core-head?*
+  "True if syntax is a list whose head is the symbol skein.core/name."
+  [syntax nm]
+  (and (list-form? syntax) (seq (items syntax))
+       (let [s (sym-datum (first (items syntax)))]
+         (and s (= (namespace s) "skein.core") (= (name s) nm)))))
+
+(def ^:private core-head? core-head?*)
+
+(defn- unquote-form?* [syntax]
+  (or (core-head? syntax "unquote") (core-head? syntax "unquote-splicing")))
+
+(def ^:private unquote-form? unquote-form?*)
+
+(defn- contains-unquote? [syntax]
+  (or (unquote-form? syntax)
+      (core-head? syntax "syntax-quote")
+      (and (not (atom-syntax? syntax)) (boolean (some contains-unquote? (items syntax))))))
+
+(defn- unquoted-arg [syntax]
+  (when-not (= (count (items syntax)) 2)
+    (fail syntax (if (core-head? syntax "unquote") "~" "~@") " takes exactly one form"))
+  (second (items syntax)))
+
+(defn- resolve-quoted-symbol
+  "The symbol that syntax (a symbol) stands for inside syntax-quote."
+  [syntax env gensyms]
+  (let [s (sym-datum syntax)
+        nm (name s)
+        ns-name (namespace s)
+        ns (:ns env)]
+    (cond (and (nil? ns-name) (> (count nm) 1) (= (nth nm (dec (count nm))) \#))
+          (or (get @gensyms nm)
+              (let [g (symbol (name (gensym (str (subs nm 0 (dec (count nm))) "__"))))]
+                (swap! gensyms assoc nm g)
+                g))
+          ;; Special forms, &, and try's catch and finally stay unqualified, as in Clojure.
+          (and (nil? ns-name) (or (special-form? nm) (= nm "&") (= nm "catch") (= nm "finally")))
+          s
+          ns-name (let [target (%find-alias ns ns-name)]
+                    (if target (symbol (%namespace-name target) nm) s))
+          :else (let [var (%resolve-var ns nm)]
+                  (if var
+                    (symbol (%namespace-name (%var-namespace var)) (%var-name var))
+                    (symbol (%namespace-name ns) nm))))))
+
+(defn- resolve-quoted
+  "syntax with every symbol resolved as syntax-quote does."
+  [syntax env gensyms]
+  (if (atom-syntax? syntax)
+    (if (sym-datum syntax)
+      {:kind :atom :datum (resolve-quoted-symbol syntax env gensyms) :loc (loc syntax)}
+      syntax)
+    {:kind (:kind syntax)
+     :datum (mapv (fn [x] (resolve-quoted x env gensyms)) (items syntax))
+     :loc (loc syntax)}))
+
+(def ^:private sq)
+
+(defn- expand-syntax-quote*
+  "The code that form, a (skein.core/syntax-quote x) form, stands for. Each syntax-quote
+has its own x# names."
+  [form env]
+  (when-not (= (count (items form)) 2)
+    (fail form "syntax-quote takes exactly one form"))
+  (sq (second (items form)) env (atom {})))
+
+(def ^:private expand-syntax-quote expand-syntax-quote*)
+
+(defn- sq* [x env gensyms]
+  (let [l (loc x)
+        core (fn [nm] (core-sym nm l))
+        parts (fn []
+                (mapv (fn [item]
+                        (if (core-head? item "unquote-splicing")
+                          (unquoted-arg item)
+                          (s-list l (core-sym "list" l) (sq item env gensyms))))
+                      (items x)))]
+    (cond (core-head? x "unquote") (unquoted-arg x)
+          (core-head? x "unquote-splicing")
+          (fail x "~@ is only allowed directly inside a list, vector, map or set")
+          (core-head? x "syntax-quote") (sq (expand-syntax-quote x env) env gensyms)
+          (not (contains-unquote? x))
+          (s-list l (s-sym "quote" l) (resolve-quoted x env gensyms))
+          :else (let [concat-form (s-list* l (cons (core "concat") (parts)))]
+                  (case (:kind x)
+                    :list (s-list l (core "seq") concat-form)
+                    :vector (s-list l (core "apply") (core "vector") concat-form)
+                    :map (s-list l (core "apply") (core "hash-map") concat-form)
+                    :set (s-list l (core "apply") (core "hash-set") concat-form))))))
+
+(def ^:private sq sq*)
+
+;;; ------------------------------------------------------------------------------------
+;;; Macros written in Skein see plain data (D-033). To keep source locations and
+;;; metadata, each conversion gives symbols and collections fresh identities and records
+;;; where each came from; when a macro passes such an object through, its original syntax
+;;; object is reused.
+
+(defn- syntax-to-data
+  "The plain data for syntax, recording origins in the identity table."
+  [syntax origins]
+  (let [kind (:kind syntax)
+        children (fn [] (mapv (fn [x] (syntax-to-data x origins)) (items syntax)))
+        value (case kind
+                :atom (let [d (items syntax)] (if (symbol? d) (%copy-symbol d) d))
+                :list (apply list (children))
+                :vector (children)
+                :map (apply hash-map (children))
+                :set (apply hash-set (children)))]
+    (when (and (or (symbol? value) (string? value)
+                   (and (not= kind :atom) (not (empty? value))))
+               (nil? (%identity-get origins value)))
+      (%identity-put! origins value syntax))
+    value))
+
+(defn- data-to-syntax
+  "A syntax object for the data x. Objects recorded in origins become their original
+syntax; anything new gets location."
+  [x location origins]
+  (or (when origins (%identity-get origins x))
+      (let [children (fn [xs] (mapv (fn [y] (data-to-syntax y location origins)) xs))]
+        (cond (vector? x) {:kind :vector :datum (children x) :loc location}
+              (map? x) {:kind :map :datum (children (mapcat identity (seq x))) :loc location}
+              (set? x) {:kind :set :datum (children (seq x)) :loc location}
+              (sequential? x) {:kind :list :datum (children (seq x)) :loc location}
+              :else {:kind :atom :datum x :loc location}))))
+
+(defn- env-to-data
+  "&env for a macro: a map from each local's name (a symbol) to true."
+  [env]
+  (reduce (fn [m nm] (assoc m (symbol nm) true)) {} (keys (:locals env))))
+
+(defn- expand-data-macro
+  "Call the Skein macro in var on form, converting to and from data."
+  [var form env]
+  (let [origins (%identity-table)
+        data (syntax-to-data form origins)
+        macro-name (%var-qualified-name var)
+        meta-lookup (fn [x]
+                      (let [s (%identity-get origins x)]
+                        (when (and s (:meta s)) (syntax-value (:meta s)))))
+        result (try (%call-macro var data (env-to-data env) (rest data) (loc form) meta-lookup)
+                    (catch error e
+                      (let [arity (%arity-error-details e)]
+                        (cond (= (condition-type e) compile-error) (throw-condition e)
+                              arity
+                              (if (= (nth arity 0) (%function-name (%var-value var)))
+                                (fail form "wrong number of arguments (" (- (nth arity 1) 2)
+                                      ") passed to macro " macro-name)
+                                (fail form (condition-message e) " (in macro " macro-name ")"))
+                              (%skein-error? e)
+                              (if (%error-has-location? e)
+                                (throw-condition e)
+                                (fail form (condition-message e) " (in macro " macro-name ")"))
+                              :else (fail form "error while expanding macro " macro-name ": "
+                                          (condition-message e))))))]
+    (data-to-syntax result (loc form) origins)))
+
+;;; ------------------------------------------------------------------------------------
+;;; The built-in macros that lib/skein/core.skn needs before it can define the rest: ns,
+;;; defmacro, defn and defn-. In Phase 0 they are written in CL.
+
+(defn- quoted [syntax] (s-list (loc syntax) (s-sym "quote" (loc syntax)) syntax))
+
+(defn- require-calls
+  "The calls that load one :require spec: a.b or [a.b :as c :refer [x y]]. loader is
+\"%require\" or \"%require-for-syntax\"."
+  [spec loader]
+  (let [l (loc spec)]
+    (cond (sym-datum spec)
+          [(s-list l (core-sym loader l) (quoted spec) (s-atom nil l))]
+          (vector-form? spec)
+          (let [[nm & options] (items spec)]
+            (when-not (plain-name nm)
+              (fail nm "expected a namespace name, not " (show nm)))
+            (let [[alias refers]
+                  (loop [options (seq options) alias nil refers []]
+                    (if options
+                      (let [key (first options)
+                            k (when (and (atom-syntax? key) (keyword? (:datum key)))
+                                (name (:datum key)))]
+                        (when-not (next options)
+                          (fail key (show key) " needs a value"))
+                        (let [value (second options)]
+                          (cond (= k "as")
+                                (do (binding-name value "an alias")
+                                    (recur (nnext options) value refers))
+                                (= k "refer")
+                                (do (when-not (vector-form? value)
+                                      (fail value ":refer needs a vector of names"))
+                                    (doseq [r (items value)] (binding-name r "a referred name"))
+                                    (recur (nnext options) alias (into refers (items value))))
+                                :else (fail key "unknown require option " (show key)))))
+                      [alias refers]))]
+              (into [(s-list l (core-sym loader l) (quoted nm)
+                             (if alias (quoted alias) (s-atom nil l)))]
+                    (map (fn [r] (s-list l (core-sym "%refer" l) (quoted nm) (quoted r)))
+                         refers))))
+          :else (fail spec "expected a namespace name or [name :as alias ...], not " (show spec)))))
+
+(defn- ns-macro [form]
+  (let [args (rest (items form))
+        nm (or (first args) (fail form "ns needs a namespace name"))
+        l (loc form)]
+    (binding-name nm "a namespace name")
+    (let [clauses (rest args)
+          clauses (if (and (seq clauses) (atom-syntax? (first clauses))
+                           (string? (:datum (first clauses))))
+                    (rest clauses)
+                    clauses)]
+      (s-list* l (concat
+                  [(s-sym "do" l) (s-list l (core-sym "%in-ns" l) (quoted nm))]
+                  (mapcat (fn [clause]
+                            (let [k (when (and (list-form? clause) (seq (items clause))
+                                               (keyword? (:datum (first (items clause)))))
+                                      (name (:datum (first (items clause)))))]
+                              (when-not (or (= k "require") (= k "require-for-syntax"))
+                                (fail clause "unknown ns clause " (show clause)
+                                      "; expected (:require ...)"))
+                              (mapcat (fn [spec]
+                                        (require-calls spec (if (= k "require")
+                                                              "%require"
+                                                              "%require-for-syntax")))
+                                      (rest (items clause)))))
+                          clauses))))))
+
+(defn- defn-macro [form private?]
+  (let [args (rest (items form))
+        nm (or (first args) (fail form "defn needs a name"))
+        l (loc form)
+        more (rest args)
+        [entries more] (if (and (seq more) (atom-syntax? (first more))
+                                (string? (:datum (first more))))
+                         [[(s-atom (keyword "doc") l) (first more)] (rest more)]
+                         [[] more])
+        [entries more] (if (and (seq more) (= (:kind (first more)) :map))
+                         [(into entries (items (first more))) (rest more)]
+                         [entries more])
+        entries (if private? (conj entries (s-atom (keyword "private") l) (s-atom true l)) entries)]
+    (binding-name nm "a function name")
+    (let [meta (into entries (when (:meta nm) (items (:meta nm))))
+          def-name (if (seq meta)
+                     {:kind :atom :datum (:datum nm) :loc (loc nm)
+                      :meta {:kind :map :datum meta :loc l}}
+                     {:kind :atom :datum (:datum nm) :loc (loc nm)})]
+      (s-list l (s-sym "def" l) def-name
+              (s-list* l (concat [(s-sym "fn" l) (s-sym (plain-name nm) (loc nm))] more))))))
+
+(defn- defmacro-macro [form]
+  (let [args (rest (items form))
+        nm (or (first args) (fail form "defmacro needs a name"))
+        l (loc form)
+        more (rest args)
+        [doc more] (if (and (seq more) (atom-syntax? (first more)) (string? (:datum (first more))))
+                     [(first more) (rest more)]
+                     [nil more])
+        more (if (and (seq more) (= (:kind (first more)) :map)) (rest more) more)
+        with-implicit-params
+        (fn [vector]
+          (when-not (vector-form? vector)
+            (fail vector "defmacro parameters must be a vector, not " (show vector)))
+          (s-vector (loc vector) (concat [(s-sym "&form" (loc vector)) (s-sym "&env" (loc vector))]
+                                         (items vector))))]
+    (binding-name nm "a macro name")
+    (let [arities (cond (empty? more) (fail form "defmacro needs a parameter vector")
+                        (vector-form? (first more))
+                        [(s-list* l (cons (with-implicit-params (first more)) (rest more)))]
+                        :else (mapv (fn [clause]
+                                      (when-not (and (list-form? clause) (seq (items clause)))
+                                        (fail clause "expected an arity like ([params] body...)"))
+                                      (s-list* (loc clause)
+                                               (cons (with-implicit-params (first (items clause)))
+                                                     (rest (items clause)))))
+                                    more))]
+      (s-list l (s-sym "do" l)
+              (s-list* l (concat [(s-sym "def" l) nm]
+                                 (when doc [doc])
+                                 [(s-list* l (concat [(s-sym "fn" l)
+                                                      (s-sym (plain-name nm) (loc nm))]
+                                                     arities))]))
+              (s-list l (core-sym "%set-macro!" l) (quoted nm))))))
+
+(def ^:private builtin-macros
+  {"ns" ns-macro
+   "defmacro" defmacro-macro
+   "defn" (fn [form] (defn-macro form false))
+   "defn-" (fn [form] (defn-macro form true))})
+
+;;; macroexpand
+
+(defn- macroexpand-1**
+  "form expanded once; form itself is a macro call (macro-var is its var)."
+  [form env]
+  (let [var (macro-var form env)]
+    (if (= (%var-macro var) :syntax)
+      (let [builtin (or (get builtin-macros (%var-name var))
+                        (fail form "no expander for the built-in macro " (%var-name var)))]
+        (builtin form))
+      (expand-data-macro var form env))))
+
+(def ^:private macroexpand-1* macroexpand-1**)
+
+(defn macroexpand-1
+  "[expansion true] if form is a macro call, else [form false]."
+  [form env]
+  (if (macro-var form env)
+    [(macroexpand-1* form env) true]
+    [form false]))
+
+(defn macroexpand
+  "form expanded until its head is no longer a macro."
+  [form env]
+  (loop [form form]
+    (if (macro-var form env)
+      (recur (macroexpand-1* form env))
+      form)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Destructuring (DESIGN §5.4), as skein.core's destructure does it for the let, loop,
+;;; doseq and for macros. It works on plain data.
+
+(defn- d-sym [nm] (symbol "skein.core" nm))
+
+(defn- d-error [& parts] (error (apply str parts)))
+
+(defn- keyword-named? [x nm]
+  (and (keyword? x) (nil? (namespace x)) (= (name x) nm)))
+
+(defn- named-key
+  "For an entry s of a :keys, :strs or :syms vector (kind is that keyword, possibly
+namespaced, as in :ns/keys): [local-symbol lookup-key-form]."
+  [kind s]
+  (let [s-ns (cond (symbol? s) (namespace s)
+                   (keyword? s) (namespace s)
+                   :else (d-error (pr-str kind) " needs symbols, not " (pr-str s)))
+        ns (or (namespace kind) s-ns)
+        nm (name s)
+        local (if (and (symbol? s) (nil? s-ns)) s (symbol nm))]
+    [local (case (name kind)
+             "keys" (keyword ns nm)
+             "strs" nm
+             (list 'quote (symbol ns nm)))]))
+
+(defn destructure
+  "A binding vector that may contain destructuring patterns, turned into one that binds
+only symbols."
+  [bindings]
+  (let [out (transient [])
+        bind (fn [nm init] (conj! out nm) (conj! out init))
+        fresh (fn [prefix] (symbol (name (gensym prefix))))]
+    (letfn [(pb [pattern value]
+              (cond (symbol? pattern)
+                    (do (when (= (name pattern) "&")
+                          (d-error "& must be followed by a binding inside a vector pattern"))
+                        (bind pattern value))
+                    (vector? pattern) (pvec pattern value)
+                    (map? pattern) (pmap pattern value)
+                    :else (d-error "unsupported binding form: " (pr-str pattern))))
+            (pvec [pattern value]
+              (let [g (fresh "vec__")]
+                (bind g value)
+                (loop [items (seq pattern) n 0]
+                  (when items
+                    (let [item (first items)]
+                      (cond (and (symbol? item) (= (name item) "&") (nil? (namespace item)))
+                            (do (when-not (next items) (d-error "& must be followed by a binding"))
+                                (pb (second items) (list (d-sym "nthnext") g n))
+                                (recur (nnext items) n))
+                            (keyword-named? item "as")
+                            (do (when-not (and (next items) (symbol? (second items)))
+                                  (d-error ":as must be followed by a symbol"))
+                                (bind (second items) g)
+                                (recur (nnext items) n))
+                            :else (do (pb item (list (d-sym "nth") g n nil))
+                                      (recur (next items) (inc n)))))))))
+            (pmap [pattern value]
+              (let [g (fresh "map__")
+                    entries (seq pattern)
+                    find-key (fn [k] (some (fn [[ek ev]] (when (keyword-named? ek k) ev)) entries))
+                    as (find-key "as")
+                    defaults (find-key "or")]
+                (bind g value)
+                (bind g (list 'if (list (d-sym "seq?") g)
+                              (list (d-sym "apply") (d-sym "hash-map") g)
+                              g))
+                (when as (bind as g))
+                (let [lookup (fn [local key]
+                               (if (and defaults (symbol? local) (contains? defaults local))
+                                 (list (d-sym "get") g key (get defaults local))
+                                 (list (d-sym "get") g key)))]
+                  (doseq [[k v] entries]
+                    (cond (or (keyword-named? k "as") (keyword-named? k "or")) nil
+                          (and (keyword? k) (contains? #{"keys" "strs" "syms"} (name k)))
+                          (do (when-not (vector? v)
+                                (d-error (pr-str k) " needs a vector of names"))
+                              (doseq [s v]
+                                (let [[local key] (named-key k s)]
+                                  (bind local (lookup local key)))))
+                          (symbol? k) (bind k (lookup k v))
+                          :else (pb k (list (d-sym "get") g v)))))))]
+      (when-not (vector? bindings)
+        (d-error "bindings must be a vector, not " (pr-str bindings)))
+      (when (odd? (count bindings))
+        (d-error "a binding vector needs an even number of forms"))
+      (doseq [[pattern init] (partition 2 bindings)]
+        (pb pattern init))
+      (persistent! out))))

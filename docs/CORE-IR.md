@@ -56,6 +56,19 @@ All nodes include `location`. "Body" fields hold one node; a multi-form body bec
 
 The expander reports a compile error with the source location if one of these forms is used before its milestone.
 
+## Core IR as Skein data (M1.7, D-049)
+
+The expander written in Skein (`lib/skein/compiler/expander.skn`) produces the same IR as plain data, because Skein has no structs yet:
+
+- A node is a map `{:op op :loc location ...}`. `op` is the struct's name without `-node`: `:const`, `:local-ref`, `:var-ref`, `:if`, `:do`, `:def`, `:fn`, `:arity`, `:let`, `:letfn`, `:loop`, `:recur`, `:set`, `:call`, `:unwind-protect`, `:block`, `:return-from`, `:values`, `:let-values`, `:the`, `:locally`, `:throw-condition`, `:handler-bind` or `:restart-bind`. The other keys are the struct's fields.
+- A location is the reader's map `{:file :line :column :end-line :end-column}`.
+- A local is `{:local/name :local/id :local/mutable? :local/type}`, where `:local/type` is an atom, since `(declare (type ...))` sets it after the local is made. A block tag is `{:tag/name :tag/id}`. Ids are unique, so locals and tags are compared by id.
+- A loop or arity node has an `:id`, and a recur node's `:target` is that id rather than the node itself.
+- Binding lists are vectors of pairs: `[local init]`, or `[[locals] init]` for `let-values`. Policies are `[quality level]` pairs, and restart bindings are `[name fn report]` triples.
+- Vars are the image's var objects, as in Phase 0.
+
+A test converts this data to the structs and checks that both expanders give the same IR for every `.skn` file in the repository.
+
 ## Rules the expander enforces
 
 - `recur` must be in tail position of the innermost `loop*` or `fn` arity, with exactly as many arguments as that target binds. Tail position does not extend into `unwind-protect`, binding initializers, call arguments or a nested `fn`.

@@ -501,3 +501,30 @@ Date: 2026-11-09 · Status: Accepted
   - The Skein reader matches the CL reader on all 26 `.skn` files and passes the reader tests. A test that shifts one column is caught in every file.
   - `skein run` and `skein build` still use the CL reader until the front end is self-hosted (M1.8).
   - M1.7's expander in Skein consumes these maps.
+
+## D-049: The expander in Skein
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M1.7 ports the expander to Skein: environments, special forms, macro calls, syntax-quote, destructuring, and the built-in `ns`, `defn`, `defn-` and `defmacro` macros. It must produce the same Core IR as Phase 0 for every `.skn` file in the repository. The IR is a set of CL structs that refer to each other, and the expander needs the image's namespaces and vars, and its macros, while it runs.
+- **Decision:**
+  - **`skein.compiler.expander`** in `lib/skein/compiler/expander.skn` ports `host/src/expander/` function by function, with the same messages. It works on the Skein reader's syntax maps (D-048).
+  - **Core IR as data** (`docs/CORE-IR.md`):
+    - Nodes are maps keyed by `:op`. Locals and block tags carry unique ids.
+    - A recur names its loop or arity by id: immutable data can't point at the node that contains it.
+    - A local's declared type is an atom, because `(declare (type ...))` sets it after the local is bound.
+    - Whether a target is recurred to is tracked with an atom while its body is analyzed.
+  - **The compile-time environment:** internal skein.core functions in `host/src/runtime/compile-env.lisp`. They give access to namespaces and vars, mark vars as def does, call macros (with the phase checks of DESIGN §4.4), copy symbols, and provide identity tables. Macros receive data, as in Phase 0 (D-033). The expander tracks where each piece of data came from in an identity table, and passes macros a lookup for `%syntax-meta`.
+  - **`destructure`** is ported too. The core macros still call Phase 0's until the compiler is self-hosted.
+  - **Testing:**
+    - For every `.skn` file, each top-level form is expanded by both expanders on the same image. The expansion and the IR are printed as canonical text (ids and gensym numbers renumbered by order of appearance; every location included) and compared.
+    - As `skein build` does, ns and defmacro forms, defs of functions, and `%define-` calls (structs, classes, condition types) are run after they are compared, so that later forms expand.
+    - A new fixture, `host/tests/fixtures/expander-forms.skn`, exercises every special form.
+    - The 82 `compile-fails` cases of the test suite must give the same message and location from both expanders.
+    - `destructure` is compared on a table of patterns, errors included, and on 300 random ones.
+- **Alternatives:**
+  - Records for nodes. These need the object system natively before self-hosting (M1.9).
+  - Keeping locations in a side table rather than in each node. That loses the IR's rule that every node carries its location.
+  - Comparing IR by walking both trees in parallel instead of as text. That gives worse failure messages and is no stronger.
+- **Consequences:**
+  - The Skein expander matches Phase 0 on all 2,496 top-level forms of the repository's 29 `.skn` files, including the forms their expansions splice in, and on every compile error the tests check. Changing one location, one `recur-p` flag or one message is caught.
+  - `skein run` and `skein build` still use the Phase 0 expander.
+  - Self-hosting (M1.8) has three things to solve: native versions of the compile-time functions, running macros inside a native compiler, and the seq functions the compiler uses (ROADMAP notes).

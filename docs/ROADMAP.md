@@ -24,7 +24,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.4 Core data in the runtime | ✅ |
 | M1.5 Conditions and unwinding | ✅ |
 | M1.6 Reader in Skein | ✅ |
-| M1.7 Expander and Core IR in Skein | ⬜ |
+| M1.7 Expander and Core IR in Skein | ✅ |
 | M1.8 Self-hosting | ⬜ |
 | M1.9 Native `skein.core` | ⬜ |
 | M1.10 Native FFI | ⬜ |
@@ -260,6 +260,10 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - GC (D-045): a nursery segment promoted for one pinned object keeps its whole 256 KiB until the next major collection; consider moving pinned objects' neighbors out, or smaller pinning granularity. Marking is stop-the-world; incremental marking (DESIGN §18.1) and `with-frame-arena` (§18.2) are still to do.
 - FFI callbacks from foreign threads work as SBCL allows; DESIGN §14.3's attach-as-fiber behavior waits for Phase 2.
 - Reader in Skein (D-048): building it natively (M1.8) needs `pr-str`, `parse-long`, `%decimal-to-float` (Zig's `parseFloat` is correctly rounded) and an `apply` that takes more than 256 arguments, or a string builder, since string literals are made with `(apply str chars)`. `skein run` still uses the CL reader until the front end is self-hosted.
+- Expander in Skein (D-049), for self-hosting (M1.8):
+  - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
+  - Macros run at compile time. A native compiler has to run the macros of the code it compiles: `lib/skein/core.skn`'s and the program's own. That needs an evaluator, or compiling and loading macros on the fly.
+  - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native only in M1.9. Either bring them forward or keep the compiler to the native subset.
 - Native conditions (D-047):
   - No top-level `abort`/`continue`/`exit` restarts exist natively; Phase 0's come from `skein run` and SBCL.
   - A condition type named by a symbol at run time (`(error 'foo)`) is found by its unique unqualified name, until namespaces exist at run time (M1.9).

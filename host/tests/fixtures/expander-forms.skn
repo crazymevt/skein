@@ -1,0 +1,66 @@
+(ns expander-forms
+  "Every special form and the corners of the expander, for the test that compares the
+expander written in Skein with Phase 0's (M1.7). It is expanded, not run."
+  (:require [skein.math :as m :refer [vec2]]))
+
+;; recur to a fn arity, a variadic arity, and to loop*
+(defn countdown [n] (if (pos? n) (recur (dec n)) :done))
+(defn sum-rest [acc & more] (if (seq more) (recur (+ acc (first more)) (next more)) acc))
+(defn arities
+  ([] (arities 1))
+  ([a] (arities a 2))
+  ([a b & cs] (loop* [i 0] (if (< i a) (recur (inc i)) [a b cs]))))
+(fn named [x] (if x (named nil) :end))
+
+;; let*, letfn*, let-values*, values, the, declare, set! and ^:mutable
+(let* [x 1 y (+ x 1)] (* x y))
+(letfn* [(ev? [n] (if (zero? n) true (od? (dec n))))
+         (od? [n] (if (zero? n) false (ev? (dec n))))]
+  (ev? 10))
+(let-values* [[q r] (values 7 2) [s] (values q)] [q r s])
+(defn typed ^f64 [^f64 x ^:mutable y]
+  (declare (type f64 y) (optimize speed (safety 1)))
+  (set! y (+ y x))
+  (the f64 (* x y)))
+(let [^:mutable total 0] (set! total 5) total)
+
+;; block*, return-from* (also from a closure), unwind-protect
+(block* outer (unwind-protect (return-from* outer 1) (println "cleanup") :done))
+(block* found (mapv (fn [x] (when (= x 2) (return-from* found x))) [1 2 3]))
+
+;; Conditions: throw-condition, handler-bind*, restart-bind*
+(handler-bind* [(%condition-type 'error "expander-forms") (fn [c] nil)]
+  (restart-bind* [retry (fn [] :retried) "Retry it" skip (fn [& xs] xs) nil]
+    (throw-condition (make-condition 'error))))
+
+;; Destructuring in fn parameters and let
+(defn parts [[a b & rest :as all] {:keys [k] :or {k 0} :as m}] [a b rest all k m])
+(let [[x {:keys [y]}] [1 {:y 2}]] (+ x y))
+
+;; Literals: constant and computed collections, quoted data, metadata
+(def ^:private ^{:doc "constants"} constants [1 2.5 3.0f \c "s" :k ::local :m/k 'sym nil true false])
+(def computed [(inc 1) {:a (inc 2)} #{(inc 3)}])
+(def quoted '(a [b {c #{d}}] ()))
+(def ^:dynamic *dyn* 1)
+(defn- private-fn "With a docstring." [] ())
+(defn with-meta-map {:added "1.0"} [x] x)
+
+;; Syntax-quote: qualification, x#, unquote, unquote-splicing, nested syntax-quote
+(defmacro twice
+  "Evaluate a form twice."
+  [form]
+  `(do ~form ~form))
+(defmacro with-temp
+  ([body] `(let [t# 1] (+ t# ~body)))
+  ([a body] `(let [t# ~a] [t# ~@body m/vec2 vec2 '(try catch finally &)])))
+(defmacro quoting [x] `(list `~'~x ~@[x x] {:k ~x} #{~x}))
+(twice (println :hi))
+(with-temp 2)
+(with-temp 3 [4 5])
+(quoting 6)
+
+;; Calls through aliases, refers and keywords; set! of a slot
+(m/vec2 1.0f 2.0f)
+(vec2 3.0f 4.0f)
+(:k {:k 1})
+(fn [o] (set! (:slot o) 1))

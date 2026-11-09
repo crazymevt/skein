@@ -62,6 +62,7 @@ original syntax; anything new gets LOCATION."
 (defun expand-data-macro (var form env)
   "Call the Skein macro in VAR on FORM, converting to and from data."
   (let* ((*origins* (make-hash-table :test 'eq))
+         (skein.runtime::*syntax-meta-lookup* nil)
          (data (syntax-to-data form))
          (args (skein.runtime:seq-to-cl (skein.runtime:seq-rest (skein.runtime:seq data))))
          (name (var-qualified-name var))
@@ -114,5 +115,10 @@ original syntax; anything new gets LOCATION."
 
 (skein.runtime:defcore "%syntax-meta" (form)
   ;; For macros: the metadata (^:blocking, ^type, ...) of a form they received, or nil.
-  (let ((syntax (and *origins* (gethash form *origins*))))
-    (and syntax (syntax-meta syntax) (syntax-value (syntax-meta syntax)))))
+  ;; The expander written in Skein provides its own lookup (M1.7).
+  (if skein.runtime::*syntax-meta-lookup*
+      ;; The lookup is the compiler's code, not the macro's, so phase rules don't apply.
+      (let ((skein.runtime:*expansion-context* nil))
+        (skein.runtime::scall skein.runtime::*syntax-meta-lookup* form))
+      (let ((syntax (and *origins* (gethash form *origins*))))
+        (and syntax (syntax-meta syntax) (syntax-value (syntax-meta syntax))))))
