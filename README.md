@@ -91,7 +91,8 @@ skein/
 │   └── tools/           ← scripts behind `make` and the `skein` launchers
 ├── lib/                 ← Skein standard library written in Skein (.skn)
 ├── runtime/             ← Phase 1+: native runtime (Zig)
-├── examples/            ← example programs; also run as tests
+├── examples/            ← example programs (those with .expected output run as tests),
+│                          the SDL3 examples and the demo game, Driftrock
 └── tools/               ← CLI, binding generator, editor support
 ```
 
@@ -101,11 +102,18 @@ Requirements: [SBCL](https://www.sbcl.org/) 2.4+ and [Quicklisp](https://www.qui
 
 ```sh
 make test            # run the full test suite
-make repl            # start a Skein REPL on SBCL
+./skein repl         # a Skein REPL
 ./skein run examples/hello.skn
 ```
 
-Editor support in Phase 0 is via SLIME/SLY (Emacs) or Alive (VS Code), since the prototype runs inside SBCL.
+The demo game, Driftrock, needs [SDL3](https://libsdl.org/) (on macOS: `brew install sdl3`):
+
+```sh
+./skein run examples/driftrock/main.skn   # arrows steer and thrust, Space fires
+./skein dev examples/driftrock/main.skn   # the same, reloading code as you edit it
+```
+
+`skein dev` reloads source files when you save them and serves a REPL on the terminal and on `localhost:5555`. [`docs/EDITORS.md`](docs/EDITORS.md) shows how to connect Emacs or VS Code. `make repl` starts SBCL itself with Skein loaded, for working on the host.
 
 ## File extension
 

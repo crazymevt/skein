@@ -17,7 +17,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.9 Concurrency | ✅ |
 | M0.10 FFI and bindgen | ✅ |
 | M0.11 REPL, reload and dev loop | ✅ |
-| M0.12 Demo game | ⬜ |
+| M0.12 Demo game | ✅ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -118,7 +118,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 **Exit:** a recorded manual test: change a function while the demo runs, and the change appears without a restart; cause an error, fix it, choose `retry-frame`, and the game continues.
 
 ### M0.12 Demo game
-- An Asteroids clone using SDL3, `skein.math`, value structs, a job graph per frame and `defclass` entities.
+- A rock-field shooter (Driftrock, `examples/driftrock/`, an original game in the Asteroids genre) using SDL3, `skein.math`, value structs, a job graph per frame and `defclass` entities.
 - `skein.game/run-loop` with a fixed timestep.
 
 **Exit:** playable on macOS, Windows and Linux at 60 fps. Write `docs/PHASE0-RETRO.md` covering what worked, what felt bad, what was slow and proposed design changes, and update DESIGN.md accordingly.
@@ -172,6 +172,8 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form, e.g. by recording the current form in the debugger hook.
 - `skein run` looks for required namespaces next to the main file and in the current directory; use `project.skn` `:paths` once it exists.
 - Consider `#!` shebang lines so `.skn` files can be executable scripts.
+- Phase 0 retrospective follow-ups (`docs/PHASE0-RETRO.md`): inline keyword access to value-struct fields when the type is known; Skein wording for host condition messages; optionally a saved SBCL core with `skein.core` and big bindings precompiled (startup is 0.74 s, plus 0.8 s for `sdl3.raw`); decide DESIGN §22 questions 11–14.
+- `skein.game`: input mapping (DESIGN §21). Driftrock reads SDL's keyboard state directly.
 - First shader-using demo: pick shader cross-compilation tooling for the SDL3 GPU API, e.g. SDL_shadercross (D-020).
 - FFI: passing and returning structs by value is not supported (D-038). The SDL3 headers bound so far don't need it; CFFI's libffi support (`cffi-libffi`, which needs libffi installed) could add it if a library does.
 - bindgen: `long` is assumed to be 64 bits; handle LLP64 (Windows) if a bound library uses `long`. Typedefs of anonymous structs (`typedef struct { ... } X;`) and anonymous members are skipped; add them when a library needs them.
