@@ -209,7 +209,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - The native compiler is a separate executable, `build/skeinc`, made by `make compiler` and run as `skeinc build file.skn [-o out]`; `./skein` is unchanged (D-058).
 - At compile time (phase 1) it runs, in every namespace, only `ns`, `defmacro`, defs whose value is a function, and struct, class and condition definitions (D-058).
 - Steps, in order:
-  1. `skein.io`: `read-file`, `write-file`, `file-exists?` and `run-process`, in Phase 0 and natively.
+  1. ✅ `skein.io`: `read-file`, `write-file`, `file-exists?` and `run-process`, in Phase 0 and natively.
   2. The C backend in Skein, running on the host on the Skein expander's IR: the same C as the Lisp backend for every example and native fixture.
   3. The compile-time environment natively: namespaces and vars at run time, symbol copies, identity tables, calling macros, and skein.core's macros compiled into the compiler.
   4. A Core IR interpreter in Skein for phase-1 code: a program's macros and the functions they call.

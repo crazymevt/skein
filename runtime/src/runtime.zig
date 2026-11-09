@@ -33,6 +33,7 @@ pub const seq = @import("seq.zig");
 pub const objects = @import("objects.zig");
 pub const structs = @import("structs.zig");
 pub const tasks = @import("tasks.zig");
+pub const io = @import("io.zig");
 
 pub const Value = value.Value;
 
@@ -67,6 +68,7 @@ test {
     _ = objects;
     _ = structs;
     _ = tasks;
+    _ = io;
     _ = @import("cond_test.zig");
     _ = @import("platform_test.zig");
 }

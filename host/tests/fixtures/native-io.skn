@@ -1,0 +1,43 @@
+(ns native-io
+  (:require [skein.io :as io]))
+
+;; skein.io (M1.9 step 1). The tests append (check dir sbcl) with a fresh directory and
+;; the command that starts SBCL ([runtime "--core" core]), a program to run on every OS.
+;; The skein.io tests check what Phase 0 prints; the C backend tests check that native
+;; code prints the same.
+
+(defn lisp
+  "Run SBCL on a form; it ignores every init file."
+  [sbcl form & [opts]]
+  (io/run-process (into sbcl ["--noinform" "--non-interactive" "--no-sysinit" "--no-userinit"
+                               "--eval" form])
+                  (or opts {})))
+
+(defn message [thunk] (try (thunk) (catch error e (condition-message e))))
+
+(defn check [dir sbcl]
+  (let [f (str dir "/a.txt")
+        missing (str dir "/missing.txt")]
+    ;; Files
+    (prn (io/write-file f "héllo ☃\nline 2\r\n") (io/file-exists? f) (io/read-file f))
+    (io/write-file f "short")
+    (io/write-file (str dir "/empty.txt") "")
+    (prn (io/read-file f) (io/read-file (str dir "/empty.txt")) (io/file-exists? dir)
+         (io/file-exists? missing))
+    (let [e (try (io/read-file missing) (catch io/io-error e e))]
+      (prn (= (condition-message e) (str "file not found: " missing))
+           (= (io/io-error-path e) missing) (error? e)))
+    (prn (= (message (fn [] (io/read-file dir))) (str "cannot read file " dir))
+         (= (message (fn [] (io/write-file (str dir "/no/such/x") "a")))
+            (str "cannot write file " dir "/no/such/x")))
+    ;; Processes
+    (prn (lisp sbcl "(progn (write-string \"out\") (write-string \"err\" *error-output*)
+                            (finish-output) (sb-ext:exit :code 3))"))
+    (prn (:out (lisp sbcl "(write-string (with-open-file (s \"a.txt\") (read-line s)))"
+                     {:dir dir})))
+    (prn (message (fn [] (io/run-process ["no-such-program-for-skein"]))))
+    ;; Bad arguments
+    (prn (message (fn [] (io/run-process [])))
+         (message (fn [] (io/run-process ["x" 1])))
+         (message (fn [] (io/read-file 5)))
+         (message (fn [] (io/write-file f 5))))))

@@ -929,6 +929,7 @@ Phase 0 status (D-040):
 - **`skein.io`** starts in M1.9 (D-050, D-058) with what the native compiler needs:
   - `(read-file path)` returns the file's contents as a string (UTF-8); `(write-file path string)` writes one, replacing the file; `(file-exists? path)`.
   - `(run-process [program arg ...])` and `(run-process [program arg ...] {:dir path})` run a program directly, without a shell, wait for it, and return `{:exit code :out stdout :err stderr}`.
+  - Failures signal `skein.io/io-error`, whose `path` is the file or program: a missing or unreadable file, one that can't be written, or a program that can't be started. A program that exits with a failure status is not an error.
 - **`skein.math`:**
   - The operations on its types are generic functions: `v+ v- v* vdiv negate dot length length-sq distance normalize lerp` for vectors, and `m* transform transpose determinant inverse` for matrices and quaternions. Functions such as `cross`, `rotate`, `quat-rotate`, `slerp` and `mat3-translation` cover the rest.
   - Matrices are column-major: field `mCR` is column C, row R.

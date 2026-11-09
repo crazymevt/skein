@@ -42,6 +42,7 @@
                (:file "runtime/concurrency")
                (:file "runtime/channels")
                (:file "runtime/compile-env")
+               (:file "runtime/io")
                (:file "syntax/print")
                (:file "reader/package")
                (:file "reader/reader")
@@ -96,6 +97,7 @@
                (:file "bindgen")
                (:file "repl")
                (:file "math")
+               (:file "io")
                (:file "backend-c"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!

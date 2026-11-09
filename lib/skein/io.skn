@@ -1,0 +1,46 @@
+(ns skein.io
+  "Files and processes (DESIGN §21; M1.9, D-050, D-058). Failures signal io-error.
+  (read-file path)              the file's contents, a string (UTF-8)
+  (write-file path string)      write the file, replacing it
+  (file-exists? path)           true if a file or directory exists there
+  (run-process [program args...] {:dir path}?)
+                                run a program without a shell; {:exit :out :err}")
+
+(defcondition io-error [error]
+  "A file that can't be read or written, or a program that can't be started."
+  (message :reader io-error-message)
+  (path :reader io-error-path)
+  (:report (fn [c] (io-error-message c))))
+
+(defn- fail [path & parts]
+  (error io-error :message (apply str parts) :path path))
+
+(defn file-exists?
+  "True if a file or directory exists at path."
+  [path]
+  (%file-exists? path))
+
+(defn read-file
+  "The contents of the file at path, decoded as UTF-8."
+  [path]
+  (or (%read-file path)
+      (if (file-exists? path)
+        (fail path "cannot read file " path)
+        (fail path "file not found: " path))))
+
+(defn write-file
+  "Write string to the file at path (UTF-8), replacing it. Returns nil."
+  [path string]
+  (when-not (%write-file path string)
+    (fail path "cannot write file " path))
+  nil)
+
+(defn run-process
+  "Run a program directly, without a shell: argv is a vector of the program and its
+arguments, and the only option is :dir, the directory to run it in. Waits for it and
+returns {:exit code :out stdout :err stderr}. Signals io-error if the program can't be
+started."
+  ([argv] (run-process argv {}))
+  ([argv opts]
+   (or (%run-process argv (:dir opts))
+       (fail (first argv) "cannot run " (first argv)))))

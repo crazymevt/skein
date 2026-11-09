@@ -386,6 +386,11 @@ referred in place of skein.core's."
                    (asdf:system-relative-pathname "skein"
                                                   "tests/fixtures/native-concurrency.skn"))))
 
+(test native-io
+  ;; Step 1 of M1.9: skein.io natively (runtime/src/io.zig) prints what Phase 0 prints.
+  (with-source-tree (dir ("unused.skn" ""))
+    (native-matches (io-fixture-program dir))))
+
 (test native-library-parallelism-matches-phase-0
   (library-matches "(pmap inc (range 10))" "(pmap inc [])" "(pmap inc nil)"
                    "(pmap (fn [x] (* x x)) (range 100))" "(list? (pmap inc [1]))"

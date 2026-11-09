@@ -717,6 +717,8 @@ Date: 2026-11-09 · Status: Accepted
   - **`skeinc`:** a separate executable, `build/skeinc`, built by `make compiler` and run as `skeinc build file.skn [-o out]`. `./skein` keeps running on SBCL; M1.11 can fold the two together.
   - **One phase-1 rule for every namespace:** the native compiler runs at compile time only `ns`, `defmacro`, `def`s whose value is a function, and struct, class and condition-type definitions. That holds for the program's namespace and the ones it requires; top-level side effects never happen at build time.
   - **`(run-process [program args...] opts?)`** runs a program without a shell and returns `{:exit :out :err}`. The only option for now is `:dir`.
+  - **`skein.io/io-error`** is signaled when a file can't be read or written, or a program can't be started. Its `path` slot names the file or program. A program that starts and exits with a failure status is not an error: `run-process` returns its `:exit`.
+  - **Implementation (internal):** `lib/skein/io.skn` signals the errors and wraps four internal functions, `%read-file`, `%write-file`, `%file-exists?` and `%run-process`, which return nil on failure. Phase 0 has them in `host/src/runtime/io.lisp`. The native runtime has them in `runtime/src/io.zig`, on Zig's `std.Io`, inside `gc.blocking`.
   - **M1.9 has six steps** (ROADMAP): `skein.io`; the C backend in Skein; the compile-time environment natively; the phase-1 interpreter; the driver; bootstrapping.
 - **Alternatives:**
   - `./skein build --native`, with one command that falls back to SBCL.

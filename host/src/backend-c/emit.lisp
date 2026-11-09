@@ -337,6 +337,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%with-nursery" "%spawn" "%future" "%with-timeout" "%on-main-thread" "%spawn-pinned"
     "drain-main-thread!" "check-cancelled" "sleep" "cancel!" "cancelled?" "done?" "task?"
     "cpu-count" "chan" "chan?" ">!" "<!" "close!" "alts!" "timeout-chan"
+    ;; skein.io's primitives (M1.9; runtime/src/io.zig)
+    "%read-file" "%write-file" "%file-exists?" "%run-process"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

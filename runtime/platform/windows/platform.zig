@@ -180,3 +180,8 @@ fn writeAll(handle: ?*anyopaque, bytes: []const u8) void {
         rest = rest[written..];
     }
 }
+
+/// The process's environment, for spawning programs (std.process wants it passed in).
+pub fn processEnviron() std.process.Environ {
+    return .{ .block = .global };
+}

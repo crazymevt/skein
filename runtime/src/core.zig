@@ -19,6 +19,7 @@ const seqs = @import("seq.zig");
 const objs = @import("objects.zig");
 const structs = @import("structs.zig");
 const tasks = @import("tasks.zig");
+const io = @import("io.zig");
 const Value = @import("value.zig").Value;
 
 const Args = []const Value;
@@ -1313,12 +1314,15 @@ const base_table = [_]Entry{
     }.f),
 };
 
-/// The core table: the entries above and the concurrency functions (tasks.zig).
-const table = base_table ++ blk: {
-    var t: [tasks.entries.len]Entry = undefined;
-    for (tasks.entries, 0..) |x, i| t[i] = .{ .name = x.name, .min = x.min, .max = x.max, .impl = x.impl };
-    break :blk t;
-};
+/// The core table: the entries above, the concurrency functions (tasks.zig) and
+/// skein.io's primitives (io.zig).
+const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(io.entries);
+
+fn entriesOf(comptime from: anytype) [from.len]Entry {
+    var t: [from.len]Entry = undefined;
+    for (from, 0..) |x, i| t[i] = .{ .name = x.name, .min = x.min, .max = x.max, .impl = x.impl };
+    return t;
+}
 
 /// The code pointer that runs table entry `i`, checking the argument count.
 fn entryCode(comptime i: usize) func.Code {

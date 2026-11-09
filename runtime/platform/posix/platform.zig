@@ -162,3 +162,9 @@ fn writeAll(fd: c.fd_t, bytes: []const u8) void {
         rest = rest[@intCast(n)..];
     }
 }
+
+/// The process's environment, for spawning programs (std.process wants it passed in).
+pub fn processEnviron() std.process.Environ {
+    const env: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
+    return .{ .block = .{ .slice = std.mem.span(env) } };
+}
