@@ -22,4 +22,5 @@
 (def enemies [{:name "slime" :hp 3} {:name "bat" :hp 1} {:name "ogre" :hp 9}])
 (println "names:" (mapv :name enemies))
 (println "tough:" (map :name (filter #(> (:hp %) 2) enemies)))
-(println "grouped:" (group-by #(if (> (:hp %) 2) :tough :weak) (map #(select-keys % [:hp]) enemies)))
+(println "grouped:" (group-by #(if (> (:hp %) 2) :tough :weak)
+                             (map #(select-keys % [:hp]) enemies)))

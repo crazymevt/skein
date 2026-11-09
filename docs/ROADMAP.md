@@ -14,7 +14,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M0.6 Conditions and restarts | ✅ |
 | M0.7 Object system | ✅ |
 | M0.8 Declarations, value structs, typed arrays | ✅ |
-| M0.9 Concurrency | ⬜ |
+| M0.9 Concurrency | ✅ |
 | M0.10 FFI and bindgen | ⬜ |
 | M0.11 REPL, reload and dev loop | ⬜ |
 | M0.12 Demo game | ⬜ |
@@ -150,11 +150,12 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Phase 2: decide VS Code support for the native runtime's Swank server (a Swank-speaking extension or an LSP server); check SLY/Slynk compatibility (D-018).
 - Phase 2: decide whether FFI calls run on the fiber stack or the worker thread's native stack (D-024).
 - Phase 1: the seq library is written in CL for Phase 0 speed (D-032); port it to Skein (`lib/skein/core.skn`) with the front end, or reimplement it in the Zig runtime.
-- `volatile` (DESIGN §6.3) has no milestone yet. Atoms arrived with `:cell :atom` slots in M0.7; M0.9 should check them under contention.
+- `volatile` (DESIGN §6.3) has no milestone yet.
 - The HAMT has no Clojure-style ArrayNode for wide nodes; add one if map benchmarks call for it.
 - Sorted maps and sets, and persistent queues, are deferred (DESIGN §6.2).
-- Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031).
-- M0.9: new threads must mask the floating-point invalid-operation trap, as the main thread does (D-036), or NaN comparisons will trap on x86-64.
+- Dynamic vars: `binding`, and `set!` of a dynamic binding (D-031). Tasks must inherit the bindings in effect when they are spawned (DESIGN §4.3).
+- M0.11: an unhandled error in a task should suspend it and open the debugger in development, with restarts (DESIGN §10); Phase 0 fails the task and reports to its nursery.
+- Concurrency in Phase 0 (D-037) is simple rather than fast: all channels share one lock, blocked operations poll every 20 ms for cancellation, the worker pool has no upper bound, and an `alts!` put on an unbuffered channel is only ready when a `<!` taker is already waiting. Real fibers and a work-stealing scheduler come in Phase 2.
 - Type errors from declarations show CL type names and generated variable names; translate them to Skein terms and add locations.
 - Hot-path gaps: keyword access to value-struct fields (`(:x v)`) and `defsoa` field functions are not inlined; use the `vec2-x` accessors and arrays of primitives in hot code. `(aget structs i)` allocates the struct it returns.
 - Flatten nested value structs inline (DESIGN §9.1), and make `(safety 0)` integer overflow wrap (DESIGN §12.3).

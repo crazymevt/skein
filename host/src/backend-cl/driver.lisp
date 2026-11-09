@@ -48,7 +48,7 @@ namespace to start in; it defaults to the current one."
     (load-stream s :file (if (stringp path) path (namestring path)))))
 
 (defun find-namespace-file (name)
-  (loop for dir in *source-paths*
+  (loop for dir in (append *source-paths* (list (library-directory)))
         for path = (merge-pathnames (namespace-file-name name)
                                     (uiop:ensure-directory-pathname dir))
         when (probe-file path) return path))

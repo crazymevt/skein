@@ -1,0 +1,45 @@
+(ns jobs-example
+  (:require [skein.jobs :as jobs :refer [job]]))
+
+;; One game frame as a job graph: physics and AI run in parallel; animation needs the
+;; physics results, and the render list needs everything.
+
+(def world {:bodies [{:id 1 :x 0.0 :vx 1.0} {:id 2 :x 10.0 :vx -2.0}]
+            :enemies [{:id 3 :mood :idle} {:id 4 :mood :angry}]})
+
+(defn physics-step [bodies dt]
+  (mapv (fn [b] (update b :x + (* dt (:vx b)))) bodies))
+
+(defn ai-step [enemies]
+  (mapv (fn [e] (assoc e :action (if (= :angry (:mood e)) :chase :wander))) enemies))
+
+(defn frame [world dt]
+  (let [results (atom {})]
+    (jobs/graph
+      {:physics (job (swap! results assoc :bodies (physics-step (:bodies world) dt)))
+       :ai      (job (swap! results assoc :enemies (ai-step (:enemies world))))
+       :anim    (job {:after [:physics]}
+                  (swap! results assoc :poses
+                         (mapv (fn [b] [(:id b) (if (pos? (:vx b)) :run-right :run-left)])
+                               (:bodies @results))))
+       :render  (job {:after [:physics :ai :anim]}
+                  (count (:bodies @results)))})
+    @results))
+
+(let [next-world (frame world 0.5)]
+  (println "bodies: " (:bodies next-world))
+  (println "enemies:" (:enemies next-world))
+  (println "poses:  " (:poses next-world)))
+
+;; The results map of the graph itself, and parallel helpers.
+(println "graph:" (jobs/graph {:a (job 1) :b (job {:after [:a]} 2)}))
+(println "pmap:" (pmap #(* % %) (range 8)))
+(println "preduce:" (preduce + 0 (range 101)))
+
+;; A nursery: the first failure cancels the other tasks and is re-signaled here.
+(println "nursery:"
+         (try
+           (with-nursery [n]
+             (spawn n (sleep 10) :never)
+             (spawn n (error "a task failed")))
+           (catch error e (condition-message e))))

@@ -268,3 +268,17 @@ Date: 2026-11-09 · Status: Accepted (record equality, inlining and the deferral
   - defclass slot `:type`s are checked by `make` and `with`.
 - **Alternatives:** A Skein type-inference pass (needed for the C backend, but SBCL already does this well); never inlining core functions (the 2× target would not be met).
 - **Consequences:** The n-body benchmark runs at 1.1× the SBCL reference (`bench/README.md`). The C backend will need its own inference and inlining. Threads created in M0.9 must mask the same floating-point trap.
+
+## D-037: Concurrency on a cached thread pool
+Date: 2026-11-09 · Status: Accepted
+- **Context:** M0.9 implements the DESIGN §13.2 API on OS threads. In Phase 0 a blocking operation blocks its thread, so a fixed-size pool can deadlock when tasks wait for tasks that are still queued.
+- **Decision:**
+  - Tasks run on a cached pool: a new worker starts whenever none is idle, and idle workers exit after 30 seconds. Every worker masks the floating-point invalid trap (D-036). A task inherits the spawner's namespace, source paths and output streams.
+  - Cancellation is cooperative through cancellation scopes: the task itself, enclosing nurseries and `with-timeout` deadlines. Blocking operations wait in 20 ms slices and check them each time. Cancellation is the non-error condition `cancelled`, so ordinary error handlers cannot swallow it; a deadline signals the error `timeout`.
+  - `with-nursery` waits for every child. The first child failure cancels the siblings and the body; after the join, that failure is re-signaled in the nursery's thread. A body error, or a cancellation or timeout that arrives while joining, cancels the children, waits for them, and is then re-signaled.
+  - Channels use one global lock and wake-up queue, which keeps `alts!` simple. The timeout channel is named `timeout-chan`, because `timeout` names the condition `with-timeout` signals.
+  - `on-main-thread` queues work that the main thread runs while it waits on tasks, channels or `sleep`, or when it calls `drain-main-thread!`.
+  - `skein.jobs/graph` is written in Skein: it checks the graph, then spawns each job in dependency order into a nursery; a job first waits for the tasks it comes after.
+  - The CPU count, used to split `pmap`, `preduce` and `pdotimes`, comes from platform code in `host/src/platform/`.
+- **Alternatives:** lparallel's fixed-size kernel (allowed, but it can deadlock on blocking tasks and has its own cancellation model); a thread per task (simpler, but costs a thread creation for every task).
+- **Consequences:** Behavior matches DESIGN §13 apart from performance: each blocked task holds a thread, and cancellation of a blocked task takes up to 20 ms. Stress tests repeat each scenario 100 times. Phase 2's fibers replace the pool without changing the API.

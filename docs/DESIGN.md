@@ -549,6 +549,15 @@ Behavior at each safety level:
 - There is **no `go` macro**. Since fibers are real, `<!` and `>!` work in any fiber.
 - **Main-thread affinity** is required for windowing on macOS and some graphics APIs. The program's entry point runs on the main OS thread, and `on-main-thread` marshals work to it.
 
+Phase 0 details (D-037):
+- Tasks run on a cached pool of OS threads that grows when no worker is idle, so a blocked task never keeps another from running. Each task inherits the current namespace and output streams of the code that started it.
+- Cancellation is cooperative. Channel operations, `sleep`, `deref` of a task, nursery joins and `check-cancelled` are cancellation points, and a blocked one notices cancellation within about 20 ms. Cancellation signals `cancelled`, which is **not** an error, so `(catch error e ...)` does not swallow it; `deref` of a cancelled task signals `task-cancelled-error`. `with-timeout` signals the error `timeout`.
+- `@task` waits; `(deref task seconds timeout-value)` waits at most that long. `cancel!`, `done?`, `cancelled?` and `task?` work on any task. `sleep` takes seconds.
+- Channels: `(chan)` is unbuffered, `(chan n)` buffered; nil cannot be put. `>!` returns false on a closed channel, `<!` returns nil once a closed channel is empty. `alts!` takes channels and `[channel value]` puts, tries them in random order, and returns `[value channel]`. `(timeout-chan seconds)` closes after that long.
+- `pmap` is eager and returns a list. `preduce` reduces chunks from `init` and combines the results with the same function, so the function must be associative and `init` its identity. `pdotimes` splits the range across CPUs.
+- The main thread runs work queued by `on-main-thread` and `(spawn-pinned :main ...)` whenever it waits, and when it calls `drain-main-thread!`.
+- `skein.jobs`: `(job {:after [names]} body...)` and `(graph {name job ...})`, which returns a map of results; a missing dependency or a cycle is an error before anything runs.
+
 ### 13.3 STM (Deferred)
 Clojure-style refs with `dosync`/`alter`/`commute` are planned once the native runtime exists. The `:cell :ref` slot kind and the `ref` name are reserved.
 

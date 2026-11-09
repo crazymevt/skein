@@ -1,0 +1,7 @@
+bodies:  [{:id 1, :x 0.5, :vx 1.0} {:id 2, :x 9.0, :vx -2.0}]
+enemies: [{:id 3, :mood :idle, :action :wander} {:id 4, :mood :angry, :action :chase}]
+poses:   [[1 :run-right] [2 :run-left]]
+graph: {:a 1, :b 2}
+pmap: (0 1 4 9 16 25 36 49)
+preduce: 5050
+nursery: a task failed

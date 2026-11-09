@@ -20,7 +20,14 @@ Returns the new value."
 
 (defcore "atom" (value) (make-skein-atom value))
 (defcore "atom?" (x) (bool (skein-atom-p x)))
-(defcore "deref" (a) (check-atom a "deref (@)") (skein-atom-value a))
+(defcore "deref" (x &optional (timeout nil timeout-p) timeout-value)
+  ;; Atoms give their value; tasks (futures, spawned tasks) wait for theirs. With a
+  ;; timeout in seconds, a task that is not done by then gives TIMEOUT-VALUE.
+  (cond ((skein-atom-p x) (skein-atom-value x))
+        ((task-p x)
+         (let ((v (await-task x :deadline (and timeout-p (seconds-from-now timeout)))))
+           (if (eq v :timeout) timeout-value v)))
+        (t (unsupported "deref (@) needs an atom or a task, not ~A" (readable-string x)))))
 (defcore "reset!" (a value) (check-atom a "reset!") (setf (skein-atom-value a) value))
 (defcore "swap!" (a f &rest args) (check-atom a "swap!") (atom-swap a f args))
 (defcore "compare-and-set!" (a old new)

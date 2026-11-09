@@ -250,6 +250,39 @@ array per primitive field (COLUMNS, in the order of the DEF's leaves)."
       "Return true if the argument is an array of value structs.")
 
 ;;; ------------------------------------------------------------------------------------
+;;; Concurrency (DESIGN §13; functions in concurrency.lisp and channels.lisp)
+
+(defstruct (task (:constructor %make-task (fn scopes nursery context)) (:copier nil))
+  "A unit of work: a fiber in Phase 0. STATE is :pending, :running, :done, :failed or
+:cancelled."
+  (fn nil)
+  (scopes '())
+  (nursery nil)
+  (context '())
+  (state :pending)
+  (result nil)
+  (condition nil)
+  (cancel-requested nil)
+  (lock (sb-thread:make-mutex :name "task") :read-only t)
+  (done (sb-thread:make-waitqueue) :read-only t))
+
+(defstruct (nursery (:constructor make-nursery ()) (:copier nil))
+  "A scope that owns the tasks spawned into it and waits for all of them."
+  (children '())
+  (failure nil)
+  (cancelled nil)
+  (lock (sb-thread:make-mutex :name "nursery") :read-only t))
+
+(defstruct (chan (:constructor %make-chan (capacity)) (:copier nil))
+  "A channel. CAPACITY 0 means unbuffered: a put completes when a taker takes the value."
+  (capacity 0 :type (integer 0) :read-only t)
+  (items '())
+  (closed nil)
+  (puts 0 :type integer)
+  (takes 0 :type integer)
+  (takers-waiting 0 :type integer))
+
+;;; ------------------------------------------------------------------------------------
 ;;; Reductions
 
 (defstruct (reduced (:constructor make-reduced (value)) (:copier nil))

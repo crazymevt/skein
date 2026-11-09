@@ -1,0 +1,42 @@
+(ns skein.jobs
+  "Job graphs (DESIGN §13.2): named jobs with dependencies, run in parallel where they
+allow, typically once per game frame.")
+
+(defmacro job
+  "A job: (job body...) or (job {:after [names]} body...). Its body runs once every job
+named in :after has finished."
+  [& body]
+  (let [opts (when (map? (first body)) (first body))
+        body (if opts (rest body) body)]
+    `{:after ~(vec (:after opts)) :run (fn [] ~@body)}))
+
+(defn- check-graph [jobs]
+  (doseq [[k {:keys [after]}] jobs
+          dep after]
+    (when-not (contains? jobs dep)
+      (error "job" k "depends on" dep "which is not in the graph")))
+  (loop [done #{} order []]
+    (if (= (count done) (count jobs))
+      order
+      (let [ready (sort (for [[k {:keys [after]}] jobs
+                              :when (and (not (done k)) (every? done after))]
+                          k))]
+        (when (empty? ready)
+          (error "the job graph has a cycle among"
+                 (vec (sort (remove done (keys jobs))))))
+        (recur (into done ready) (into order ready))))))
+
+(defn graph
+  "Run a map of name -> job. Each job starts as soon as the jobs it comes after have
+finished; independent jobs run in parallel. Returns a map of name -> result. If a job
+fails, the others are cancelled and the failure is re-signaled."
+  [jobs]
+  (let [order (check-graph jobs)]
+    (with-nursery [n]
+      (let [tasks (reduce (fn [tasks k]
+                            (let [{:keys [after run]} (get jobs k)
+                                  deps (mapv tasks after)]
+                              (assoc tasks k (spawn n (doseq [d deps] @d) (run)))))
+                          {}
+                          order)]
+        (into {} (map (fn [[k t]] [k @t]) tasks))))))

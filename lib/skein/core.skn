@@ -490,3 +490,44 @@ fields in place."
   `(do (%define-soa '~(symbol (%current-namespace-name) (name soa-name))
                     '[~@(map (fn [f] [(first f) (second f)]) fields)])
        nil))
+
+;;; Concurrency (DESIGN §13). Phase 0 runs tasks on a pool of OS threads.
+
+(defmacro with-nursery
+  "Run the body with a nursery bound to name; (spawn name expr) starts a task in it. Waits
+for every task. If one fails, the others and the body are cancelled and the failure is
+re-signaled here."
+  [[name] & body]
+  `(%with-nursery (fn [~name] ~@body)))
+
+(defmacro spawn
+  "Start expr as a task in the nursery. Returns the task; @task waits for its value."
+  [nursery & body]
+  `(%spawn ~nursery (fn [] ~@body)))
+
+(defmacro future
+  "Start the body as a detached task. @f waits for its value (or re-signals its error)."
+  [& body]
+  `(%future (fn [] ~@body)))
+
+(defmacro with-timeout
+  "Run the body; if it is still running after seconds, its next cancellation point (a
+channel operation, sleep, deref, check-cancelled) signals timeout."
+  [seconds & body]
+  `(%with-timeout ~seconds (fn [] ~@body)))
+
+(defmacro on-main-thread
+  "Run the body on the main thread and return its value, waiting if called elsewhere."
+  [& body]
+  `(%on-main-thread (fn [] ~@body)))
+
+(defmacro spawn-pinned
+  "Queue the body as a task that runs on the given thread (only :main is supported)."
+  [where & body]
+  `(%spawn-pinned ~where (fn [] ~@body)))
+
+(defmacro pdotimes
+  "Like dotimes, but the index range is split across worker threads."
+  [bindings & body]
+  (let [[i n] (binding-pair bindings "pdotimes")]
+    `(%pdotimes ~n (fn [~i] ~@body))))

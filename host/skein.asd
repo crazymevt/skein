@@ -10,7 +10,9 @@
   :serial t
   ;; One package per module (src/<module>/package.lisp). Files are listed in load order:
   ;; syntax objects come first because runtime errors report source locations.
-  :components ((:file "syntax/package")
+  :components ((:file "platform/package")
+               (:file "platform/cpu")
+               (:file "syntax/package")
                (:file "syntax/syntax")
                (:file "runtime/package")
                (:file "runtime/data")
@@ -35,6 +37,8 @@
                (:file "runtime/arrays")
                (:file "runtime/structs")
                (:file "runtime/types")
+               (:file "runtime/concurrency")
+               (:file "runtime/channels")
                (:file "syntax/print")
                (:file "reader/package")
                (:file "reader/reader")
@@ -71,6 +75,7 @@
                (:file "conditions")
                (:file "objects")
                (:file "types")
+               (:file "concurrency")
                (:file "cli"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!
