@@ -80,12 +80,19 @@ current directory or the nearest parent with lib/skein/core.skn."
 
 (defn- make-build
   "The state of one translation: the C unit, the namespaces already in it, the source
-paths, and whether lib/skein/core.skn is being translated with its macros (D-060)."
-  [source-paths]
+paths, and whether lib/skein/core.skn is being translated with its macros (D-060). For a
+program built with --eval (D-078): the namespaces it registers with the runtime, and the
+file being translated, and whether skein.compiler.env has been (its %in-ns then runs
+before the code that follows)."
+  [source-paths eval?]
   {:unit (c/make-unit)
    :translated (atom #{"skein.core.native"})
    :paths source-paths
-   :core-macro-mode (atom false)})
+   :core-macro-mode (atom false)
+   :eval eval?
+   :eval-namespaces (atom [])
+   :file (atom nil)
+   :env-translated (atom false)})
 
 (defn- find-namespace-file
   "The source file of namespace nm on the source paths, or nil."
@@ -222,9 +229,11 @@ analyzing its def would clear the var's macro flag."
 
 (defn- translate-requires
   "Translate the namespaces that ns requires and the program doesn't include yet, in the
-order its ns form requires them, each one's own requires first."
+order its ns form requires them, each one's own requires first. A program built with
+--eval also includes the namespaces required for syntax, which its macros use (D-078)."
   [build ns]
-  (doseq [dep (%namespace-requires ns)]
+  (doseq [dep (concat (%namespace-requires ns)
+                      (when (:eval build) (%namespace-syntax-requires ns)))]
     (let [nm (%namespace-name dep)]
       (when-not (or (= nm "skein.core") (contains? @(:translated build) nm))
         (swap! (:translated build) conj nm)
@@ -233,7 +242,9 @@ order its ns form requires them, each one's own requires first."
           ;; The native compiler's environment needs skein.core's macros compiled in.
           (when (= nm "skein.compiler.env")
             (translate-core-macros build))
-          (translate-source build path))))))
+          (translate-source build path)
+          (when (= nm "skein.compiler.env")
+            (reset! (:env-translated build) true)))))))
 
 (defn- translate-compiled
   "Translate form to C, expanding it; a (do ...) expansion's forms are top-level forms."
@@ -247,21 +258,62 @@ order its ns form requires them, each one's own requires first."
           (interp/evaluate ir))
         (c/emit-toplevel (:unit build) ir ns)))))
 
+(defn- syntax-list
+  "A syntax object for the list of syntax objects items, at location loc."
+  [loc & items]
+  {:kind :list :datum (vec items) :loc loc})
+
+(defn- translate-in-ns
+  "For a program built with --eval (D-078): code that makes namespace nm current when it
+runs, as Phase 0's current namespace is while a file loads."
+  [build nm loc]
+  (let [atom-of (fn [x] {:kind :atom :datum x :loc loc})]
+    (translate-compiled build (syntax-list loc (atom-of 'skein.core/%in-ns)
+                                           (syntax-list loc (atom-of 'quote)
+                                                        (atom-of (symbol nm)))))))
+
+(defn- translate-program-macro
+  "For a program built with --eval (D-078): compile the macro that the defmacro form
+defined at phase 1 into the program too, so that code it evaluates can use it."
+  [build form]
+  (let [ns (%current-namespace)
+        expanded (expander/macroexpand form (expander/make-env ns))
+        def-items (:datum (second (:datum expanded)))
+        nm (name (:datum (second def-items)))]
+    (c/emit-program-macro (:unit build) (%find-own-var ns nm)
+                          (expander/analyze-toplevel (last def-items) ns) ns)))
+
 (defn- translate-form*
   "Translate one top-level form. ns and defmacro forms run at phase 1 and make no code;
-everything else becomes C. After an ns form, the namespaces it requires are translated."
+everything else becomes C. After an ns form, the namespaces it requires are translated.
+A program built with --eval also compiles its macros, and records its namespaces and
+makes each current while its code runs (D-078)."
   [build form]
   (let [head (form-head form)]
     (cond (and @(:core-macro-mode build) (= head "defmacro")) (translate-core-macro build form)
-          (contains? #{"ns" "defmacro"} head)
+          (= head "ns")
+          (let [_ (run-phase-1 form)
+                ns (%current-namespace)]
+            (translate-requires build ns)
+            (when (:eval build)
+              (swap! ns assoc :file @(:file build))
+              (swap! (:eval-namespaces build) conj ns)
+              ;; Namespaces translated before skein.compiler.env (the library, the reader)
+              ;; don't need to be current while their code runs.
+              (when @(:env-translated build)
+                (translate-in-ns build (%namespace-name ns) (:loc form)))))
+          (= head "defmacro")
           (do (run-phase-1 form)
-              (when (= head "ns") (translate-requires build (%current-namespace))))
+              (when (:eval build) (translate-program-macro build form)))
           :else (translate-compiled build form))))
 
 (def ^:private translate-form translate-form*)
 
 (defn- translate-source* [build path]
-  (read-file-forms path (fn [form] (translate-form build form))))
+  (let [saved @(:file build)]
+    (reset! (:file build) path)
+    (try (read-file-forms path (fn [form] (translate-form build form)))
+         (finally (reset! (:file build) saved)))))
 
 (def ^:private translate-source translate-source*)
 
@@ -271,17 +323,27 @@ skein.core's library in Skein; source-paths are the directories searched for nam
 Its -main, if any, is called with the command-line arguments. Given main-name (a
 project's :main), that function of the program's namespace must exist, and is called
 instead."
-  ([path source-paths] (translate-file path source-paths nil))
-  ([path source-paths main-name]
-   (let [build (make-build source-paths)
+  ([path source-paths] (translate-file path source-paths nil false))
+  ([path source-paths main-name eval?]
+   (let [build (make-build source-paths eval?)
          library (or (find-namespace-file build "skein.core.native")
                      (fail "cannot find skein.core.native"))]
      (reset! env/namespace-loader (fn [nm] (load-for-syntax build nm)))
      (translate-source build library)
+     ;; --eval (D-078): the front end and the evaluator, before the program.
+     (when eval?
+       (c/note-eval! (:unit build))
+       (swap! (:translated build) conj "skein.compiler.eval")
+       (translate-source build (or (find-namespace-file build "skein.compiler.eval")
+                                   (fail "cannot find skein.compiler.eval"))))
      (let [ns (translate-source build path)
            main (%find-own-var ns (or main-name "-main"))]
        (when (and main-name (nil? main))
          (fail path " doesn't define " main-name ", the project's :main"))
+       (when eval?
+         ;; As in Phase 0, -main runs in user.
+         (translate-in-ns build "user" nil)
+         (c/emit-eval-registry! (:unit build) @(:eval-namespaces build)))
        (c/program-text (:unit build) (file-name path) main)))))
 
 ;;; ------------------------------------------------------------------------------------
@@ -380,13 +442,16 @@ install prefix, relative to the current directory."
   "Compile the Skein program at path to an executable at output (default: :name, else the
 file's name, in the current directory). Options: :output; :target, a triple of `targets`
 (nil: this machine); :profile, \"dev\" (the default) or \"release\"; :keep-c (leave the
-C file next to the executable); and for a project, :name, :source-paths (where its
-namespaces are) and :main-name (the function to call). Returns the executable's path."
+C file next to the executable); :eval (include the evaluator, D-078; dev profile only);
+and for a project, :name, :source-paths (where its namespaces are) and :main-name (the
+function to call). Returns the executable's path."
   [path {:keys [output target profile keep-c source-paths main-name] :as opts}]
   (let [home (find-home)
         profile (or profile "dev")
         _ (when-not (contains? profiles profile)
             (fail "unknown profile " profile "; use dev or release"))
+        _ (when (and (:eval opts) (not= profile "dev"))
+            (fail "--eval needs the dev profile"))
         _ (when (and target (not (some #{target} targets)))
             (fail "unknown target " target "; use one of " (apply str (interpose ", " targets))))
         windows (if target (= (target-os target) :windows) (windows?))
@@ -397,7 +462,7 @@ namespaces are) and :main-name (the function to call). Returns the executable's 
                                                 (remove nil? [(namespace-root path)
                                                              (directory-of path) ""]))
                                             [(str home "lib/")])))
-        c-source (translate-file path source-paths main-name)
+        c-source (translate-file path source-paths main-name (boolean (:eval opts)))
         prefix (build-runtime home target profile)
         ;; The cached C is named after the file and its path, so programs that share a file
         ;; name (every main.skn) keep their own (D-073).
@@ -551,7 +616,7 @@ earlier package there is replaced. Returns the package's path."
 
 (def ^:private usage
   (str "Usage: skeinc build [file.skn] [-o output] [--target T] [--profile dev|release]"
-       " [--release] [--keep-c]\n"
+       " [--release] [--keep-c] [--eval]\n"
        "       skeinc package [--target T] [--profile dev|release]\n"
        "With no file, build builds the project that ./project.skn describes; package puts it"
        " in dist/."))
@@ -561,6 +626,7 @@ earlier package there is replaced. Returns the package's path."
     (if-let [arg (first args)]
       (cond (= arg "--release") (recur (next args) (assoc opts :profile "release"))
             (= arg "--keep-c") (recur (next args) (assoc opts :keep-c true))
+            (= arg "--eval") (recur (next args) (assoc opts :eval true))
             (contains? {"-o" :output "--target" :target "--profile" :profile} arg)
             (if (next args)
               (recur (nnext args)
@@ -574,15 +640,16 @@ earlier package there is replaced. Returns the package's path."
       opts)))
 
 (defn -main
-  "skeinc build [file.skn] [-o output] [--target T] [--profile dev|release] [--keep-c]:
-with no file, the project in the current directory."
+  "skeinc build [file.skn] [-o output] [--target T] [--profile dev|release] [--keep-c]
+[--eval]: with no file, the project in the current directory. --eval includes the
+evaluator (D-078)."
   [& args]
   (let [[command & more] args]
     (when-not (contains? #{"build" "package"} command) (fail usage))
     (let [opts (parse-build-args more)
           file (:file opts)]
       (cond (= command "package")
-            (do (when (or file (:output opts) (:keep-c opts))
+            (do (when (or file (:output opts) (:keep-c opts) (:eval opts))
                   (fail "skeinc package: takes only --target and --profile; it packages the "
                         "project in the current directory"))
                 (when-not (io/file-exists? "project.skn")

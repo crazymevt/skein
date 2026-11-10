@@ -108,12 +108,15 @@ test_compiler() {
     fi
     echo "skeinc: package for $target ok"
   done
-  # Every native fixture, built by skeinc, prints what
-  # `skein run` prints, and every line a ";; stderr: " comment gives on standard error.
+  # Every native fixture, built by skeinc (with the options of its ";; build: " comment, if
+  # it has one), prints what `skein run` prints, and every line a ";; stderr: " comment
+  # gives on standard error.
   for program in host/tests/fixtures/native-*.skn; do
     name=$(basename "$program" .skn)
     ./skein run "$program" > "build/examples/$name.expected"
-    "$skeinc" build "$program" -o "build/examples/$name$exe" > /dev/null
+    options=$(sed -n 's/^;; build: //p' "$program" | tr -d '\r')
+    # shellcheck disable=SC2086 # the options are words
+    "$skeinc" build "$program" $options -o "build/examples/$name$exe" > /dev/null
     "build/examples/$name$exe" > "build/examples/$name.out" 2> "build/examples/$name.err"
     while IFS= read -r line; do
       if ! grep -qF -- "$line" "build/examples/$name.err"; then
@@ -139,6 +142,16 @@ test_compiler() {
     exit 1
   fi
   echo "skeinc: ring-fibers ok"
+  # Without --eval, eval and its relatives are errors (D-078).
+  "$skeinc" build host/tests/fixtures/native-eval.skn -o "build/examples/no-eval$exe" > /dev/null
+  if "build/examples/no-eval$exe" > /dev/null 2> build/examples/no-eval.err \
+     || ! grep -qF "macroexpand-1 needs a native build made with --eval" \
+          build/examples/no-eval.err; then
+    echo "skeinc: a build without --eval didn't refuse macroexpand-1"
+    cat build/examples/no-eval.err
+    exit 1
+  fi
+  echo "skeinc: no eval without --eval"
   # Every example and fixture again with SKEIN_GC_VERIFY=1 (D-073): each collection is
   # major and is followed by a check that nothing points at an object that's gone.
   for expected in examples/*.expected build/examples/native-*.expected; do

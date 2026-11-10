@@ -360,6 +360,9 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%make-struct-def" "%struct-constructor"
     "%struct-predicate" "%struct-accessor" "%make-soa-def" "%soa-maker" "%soa-field"
     "%ctype-info"
+    ;; Evaluating code (M2.5, D-078; runtime/src/evaluate.zig)
+    "eval" "load-file" "reload" "macroexpand-1" "macroexpand" "macroexpand-all"
+    "%install-evaluator!" "%eval-registry" "%runtime-var-value" "%set-runtime-var-value!"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

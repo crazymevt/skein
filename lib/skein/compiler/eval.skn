@@ -1,0 +1,12 @@
+(ns skein.compiler.eval
+  "Evaluating code in a running native program (M2.5, D-078). A program built with --eval
+includes this namespace and the front end it needs; when the program starts, it installs
+the functions behind skein.core's eval, load-file, reload and macroexpand, which the
+runtime calls (runtime/src/evaluate.zig). In other builds nothing installs them, and they
+are errors. Phase 0 has its own (host/src/backend-cl/driver.lisp)."
+  (:require [skein.compiler.expander :as expander]))
+
+(%install-evaluator!
+ {"macroexpand-1" expander/macroexpand-data-1
+  "macroexpand" expander/macroexpand-data
+  "macroexpand-all" expander/macroexpand-all-data})

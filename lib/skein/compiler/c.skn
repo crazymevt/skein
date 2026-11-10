@@ -144,7 +144,11 @@ digits, so a following digit can't extend them, unlike \\x."
          ;; its macros' vars, in order; and whether the program includes the environment.
          :core-defined #{}
          :core-macros []
-         :env false}))
+         :env false
+         ;; For a program built with --eval (D-078): the start-up statements that
+         ;; register its namespaces and vars with the runtime.
+         :eval false
+         :eval-registrations []}))
 
 (defn- fresh [st prefix]
   (str prefix (:counter (swap! (:unit st) update :counter inc))))
@@ -675,6 +679,9 @@ is the Lisp backend's list."
     "%make-struct-def" "%struct-constructor"
     "%struct-predicate" "%struct-accessor" "%make-soa-def" "%soa-maker" "%soa-field"
     "%ctype-info"
+    ;; Evaluating code (M2.5, D-078; runtime/src/evaluate.zig)
+    "eval" "load-file" "reload" "macroexpand-1" "macroexpand" "macroexpand-all"
+    "%install-evaluator!" "%eval-registry" "%runtime-var-value" "%set-runtime-var-value!"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -1793,6 +1800,46 @@ register it with the runtime as a macro, for skein.compiler.env."
   (let [st {:unit unit}]
     (swap! unit update :core-macros conj (var-c-name st var))))
 
+(defn note-eval!
+  "Make unit a program built with --eval (D-078)."
+  [unit]
+  (swap! unit assoc :eval true))
+
+(defn emit-program-macro
+  "For a program built with --eval: compile a macro of the program into unit, setting var
+to fn-node's function, so that code it evaluates can call it (D-078)."
+  [unit var fn-node ns]
+  (emit-toplevel unit {:op :def :loc (:loc fn-node) :var var :init fn-node} ns))
+
+(defn emit-eval-registry!
+  "For a program built with --eval: the start-up statements that register namespaces
+(models, in the order the program translated them) and their vars with the runtime, which
+skein.compiler.env builds its model of the program from (D-078)."
+  [unit namespaces]
+  (let [st {:unit unit}
+        names (fn [nss] (mapv %namespace-name nss))
+        lines (atom [])]
+    (doseq [ns namespaces]
+      (let [m @ns
+            info {:name (:name m)
+                  :file (:file m)
+                  :requires (names (:requires m))
+                  :syntax-requires (names (:syntax-requires m))
+                  :aliases (reduce-kv (fn [acc alias target]
+                                        (assoc acc alias (%namespace-name target)))
+                                      {} (:aliases m))
+                  :refers (reduce-kv (fn [acc nm var] (assoc acc nm (var-ns-name var)))
+                                     {} (:refers m))}]
+        (swap! lines conj (str "sk_eval_register_ns(&" (constant-expr st info nil) ");"))
+        (doseq [nm (sort (keys (:mappings m)))]
+          (let [var (get (:mappings m) nm)
+                flags (+ (if (= true (%var-macro var)) 1 0) (if (%var-private? var) 2 0)
+                         (if (%var-dynamic? var) 4 0))]
+            (swap! lines conj (str "sk_eval_register_var(" (c-string-literal (:name m)) ", "
+                                   (c-string-literal nm) ", "
+                                   (or (get (:vars @unit) var) "SK_NIL") ", " flags ");"))))))
+    (swap! unit assoc :eval-registrations @lines)))
+
 (defn- registered-library-var?
   "True if the program registers ns-name/var-name as a skein.core function for
 skein.compiler.env: a public var of skein.core.native, or a public % function of
@@ -1853,6 +1900,7 @@ compiled and the skein.core functions written in Skein."
     (doseq [[fobj code display] (:fn-objects u)]
       (put "  " fobj " = sk_fn(" code ", " (c-string-literal display) ");\n"))
     (doseq [r (core-registrations u)] (put "  " r "\n"))
+    (doseq [r (:eval-registrations u)] (put "  " r "\n"))
     (put "}\n\nstatic void sk_program_body(void) {\n" (concat-strings @(:body u)) "}\n\n")
     (put "int main(int argc, char **argv) {\n  (void)argc;\n  (void)argv;\n  "
          "sk_init();\n  sk_program_init();\n  sk_program_body();\n")

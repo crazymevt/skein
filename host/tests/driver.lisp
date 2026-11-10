@@ -44,6 +44,10 @@
                              (catch error e (condition-message e))))")))
     (is (search "unknown profile fast; use dev or release"
                 (out "(prn (try (m/build-program \"x.skn\" {:profile \"fast\"})
+                             (catch error e (condition-message e))))")))
+    ;; The evaluator comes only in dev builds (D-078).
+    (is (search "--eval needs the dev profile"
+                (out "(prn (try (m/build-program \"x.skn\" {:profile \"release\" :eval true})
                              (catch error e (condition-message e))))")))))
 
 (defun replace-all (text old new)

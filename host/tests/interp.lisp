@@ -50,7 +50,9 @@ interpreter; the forms of a (do ...) expansion are top-level forms."
             (let ((form (skein.reader:read-form reader :eof-value :eof)))
               (when (eq form :eof) (return))
               (interpret-toplevel (to-skein-syntax form))))))
-      (let ((main (skein.runtime:find-own-var skein.runtime:*current-namespace* "-main")))
+      (let ((main (skein.runtime:find-own-var skein.runtime:*current-namespace* "-main"))
+            ;; As in skein run, -main runs in user.
+            (skein.runtime:*current-namespace* (skein.runtime:ensure-namespace "user")))
         (when (and main (skein.runtime:var-bound-p main))
           (skein.runtime::scall (skein.runtime:var-value main)))))))
 

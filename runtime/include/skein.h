@@ -52,6 +52,11 @@ sk_value sk_arity_error(sk_value self, uint32_t argc, const char *defined_at);
 /* For a program that includes the native compiler's environment (D-060): register a var
  * of skein.core compiled from lib/skein/core.skn (macro = 1) or of skein.core.native. */
 void sk_register_core_var(sk_value var, int macro);
+/* For a program built with --eval (M2.5, D-078): register a namespace (the address of a
+ * constant map {:name :file :requires :syntax-requires :aliases :refers}) and a var (nil
+ * for one with no code; flags 1 macro, 2 private, 4 dynamic) for skein.compiler.env. */
+void sk_eval_register_ns(const sk_value *info);
+void sk_eval_register_var(const char *ns, const char *name, sk_value var, uint32_t flags);
 
 /* Compiled C calls (defcfun, M1.10, D-066): converting arguments and results. */
 uintptr_t sk_ffi_symbol(const char *name);

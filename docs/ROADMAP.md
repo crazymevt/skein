@@ -322,7 +322,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Redefinition follows DESIGN §15: `defn`/`def` rebind vars, `defclass` updates instances, `defmethod` clears dispatch caches, `defonce` keeps state.
 - Steps, in order (D-078):
   1. ✅ Phase 0: `eval`, `load-file` and `reload` in skein.core; host tests.
-  2. Runtime namespaces: namespaces, vars by name, refers, aliases and var flags in the runtime, with the expander's `%` functions over them. Dev builds include the reader, the expander and skein.core's macros, compile the program's own macros in, and register the program's namespaces and vars at start-up; release builds' `eval` is an error.
+  2. ✅ The program's namespaces: `skeinc build --eval` (dev profile) includes the reader, the expander and skein.core's macros, compiles the program's own macros in, and registers the program's namespaces and vars, from which `skein.compiler.env` builds its model; `macroexpand` and its relatives natively; without `--eval`, `eval` and its relatives are errors.
   3. The closure compiler (`runtime/src/eval/`): every Core IR node (functions and closures, loops, `letfn`, `def`, `set!`, blocks, `unwind-protect`, handlers and restarts, multiple values, dynamic vars, the FFI's definitions); `eval`, `load-file` and `reload` natively; a fixture that evaluates code prints what `skein run` prints.
   4. Redefinition (DESIGN §15): `defclass` updates existing instances natively, `defmethod` clears dispatch caches, `defonce` keeps state; a native program reloads a changed namespace and runs the new code.
   5. Typed closures: unboxed `f64` and integer paths for declared types; `make bench` compares n-body interpreted and compiled in the same dev build.

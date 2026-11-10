@@ -1,0 +1,27 @@
+(ns native-eval)
+
+;; build: --eval
+;; Evaluating code natively (M2.5, D-078). The bootstrap check builds this with skeinc's
+;; --eval, which includes the front end and the program's own macros, and compares it
+;; with `skein run`.
+
+(defn- twice-form [x] (list '* 2 x))
+(defmacro twice [x] (twice-form x))
+(defmacro unless [test & body] `(if ~test nil (do ~@body)))
+
+;; macroexpand-1, macroexpand and macroexpand-all, in the current namespace
+(prn (macroexpand-1 '(twice 5)))
+(prn (macroexpand '(unless false 1 2)))
+(prn (macroexpand-1 '(when x 1)))
+(prn (macroexpand '(-> a (b c) d)))
+(prn (macroexpand-all '(when (twice 3) (unless x '(twice 4)))))
+(prn (macroexpand-1 '(not-a-macro 1)) (macroexpand-1 'just-a-symbol) (macroexpand-1 5))
+(prn (macroexpand '(native-eval/twice 7)))
+(let [x 1]
+  (prn (macroexpand-1 (list 'twice x))))
+
+(defn -main []
+  ;; -main runs in user, as in Phase 0: the program's macros by their full names only.
+  (prn (macroexpand '(native-eval/twice 8)))
+  (prn (macroexpand '(twice 9)))
+  (prn (macroexpand '(->> 1 (+ 2) inc))))

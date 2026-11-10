@@ -116,6 +116,21 @@ received to that form's metadata (as data), for %syntax-meta.")
 (defcore "%core-function" (name) (declare (ignore name)) nil)
 (defcore "%registered-core-vars" () (vector-from-list '()))
 
+(defcore "%eval-registry" ()
+  ;; Natively, a program built with --eval registers its namespaces and vars for
+  ;; skein.compiler.env (D-078); Phase 0's are the image's own.
+  nil)
+(defcore "%runtime-var-value" (var not-found)
+  (let ((v (var-value var))) (if (eq v +unbound+) not-found v)))
+(defcore "%set-runtime-var-value!" (var value) (setf (var-value var) value))
+(defcore "%install-evaluator!" (hooks)
+  ;; Phase 0 evaluates code itself (backend-cl/driver.lisp).
+  (declare (ignore hooks))
+  nil)
+
+(defcore "%namespace-syntax-requires" (ns)
+  (vector-from-list (reverse (namespace-syntax-requires ns))))
+
 (defcore "%namespace-requires" (ns)
   ;; The namespaces NS requires at run time, in the order its ns form requires them.
   (vector-from-list (reverse (namespace-requires ns))))

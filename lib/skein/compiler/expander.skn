@@ -1043,3 +1043,37 @@ syntax; anything new gets location."
     (if (macro-var form env)
       (recur (macroexpand-1* form env))
       form)))
+
+;;; ------------------------------------------------------------------------------------
+;;; macroexpand-1, macroexpand and macroexpand-all on data (DESIGN §11.1), as Phase 0's
+;;; (host/src/expander/data.lisp); a native program built with --eval uses them (D-078).
+
+(defn- expand-all
+  "form with every macro call in it expanded, except inside quote."
+  [form env]
+  (let [expanded (macroexpand form env)]
+    (if (or (atom-syntax? expanded) (= (head-name expanded) "quote"))
+      expanded
+      (assoc expanded :datum (mapv (fn [x] (expand-all x env)) (items expanded))))))
+
+(defn- data-macroexpand
+  "form, as data, expanded by expand (a function of a syntax object and an environment)
+in the current namespace, as data."
+  [form expand]
+  (syntax-to-data (expand (data-to-syntax form nil nil) (make-env (%current-namespace)))
+                  (%identity-table)))
+
+(defn macroexpand-data-1
+  "form (data) expanded once if it's a macro call, as skein.core/macroexpand-1."
+  [form]
+  (data-macroexpand form (fn [s env] (first (macroexpand-1 s env)))))
+
+(defn macroexpand-data
+  "form (data) expanded until its head isn't a macro, as skein.core/macroexpand."
+  [form]
+  (data-macroexpand form macroexpand))
+
+(defn macroexpand-all-data
+  "form (data) with every macro call expanded, as skein.core/macroexpand-all."
+  [form]
+  (data-macroexpand form expand-all))
