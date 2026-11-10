@@ -830,3 +830,18 @@ Date: 2026-11-09 · Status: Accepted
   - `skeinc`, built by Phase 0, builds every example natively, and each prints its `.expected` output. It builds itself in about 13 seconds.
   - **Bootstrapping:** the compiler that Phase 0 builds and the ones `skeinc` builds differ in one way. `core.skn`'s macros are compiled into each compiler, and the `x#` names in their syntax-quotes are numbered from the gensym counter of the process that compiled them: Phase 0's for the first, `skeinc`'s for the rest. So the first compiler's C output differs from later ones only in those local names. From `skeinc` on, rebuilding is a fixed point: the C of the second rebuild equals the first's. Step 6 bootstraps that way.
 
+## D-063: Bootstrapping the native compiler
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 6 of M1.9, its exit: the native compiler rebuilds itself, and the second build's output is identical to the first. D-062 found that the compiler Phase 0 builds differs from the ones `skeinc` builds in the gensym numbers baked into skein.core's macros.
+- **Decision:**
+  - **`make compiler`** builds `build/skeinc`: `./skein build` (Phase 0) makes `build/skeinc-stage1`, which builds `build/skeinc` from `lib/skein/compiler/main.skn`. It rebuilds when the libraries or the runtime change.
+  - **`make test-compiler`**, part of `make test`:
+    - `skeinc` builds itself to `skeinc-a`, which builds itself to `skeinc-b`, both keeping their C. The two C files must be byte-identical.
+    - `skeinc` then builds every example with an `.expected` file, and each must print exactly that.
+    - CI runs it on all three platforms with the rest of `make test`.
+  - **What is compared:** the generated C, not the executables. Each executable embeds the name of its own C file, so `skeinc-a` and `skeinc-b` differ by that name.
+- **Alternatives:**
+  - Comparing the stage-1 compiler's output with `skeinc`'s. That needs gensym numbering that doesn't depend on the process, which would be a change to syntax-quote's semantics.
+  - A separate CI step instead of `make test`. Keeping it in `make test` means the usual gate covers the native compiler too.
+- **Consequences:** the bootstrap takes about a minute: four compiler builds and eight example builds. The compiler is self-hosting: from `skeinc` on, it compiles its own source to the same C every time.
+

@@ -214,7 +214,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   3. ✅ The compile-time environment natively: namespaces and vars at run time, symbol copies, identity tables, calling macros, and skein.core's macros compiled into the compiler.
   4. ✅ A Core IR interpreter in Skein for phase-1 code: a program's macros and the functions they call.
   5. ✅ The driver in Skein (`skeinc build`): finding namespaces, running phase 1, writing C and running zig. On the host it gives the same C as `skein build`.
-  6. Bootstrapping: Phase 0 builds a first compiler, which builds `skeinc`; `skeinc` rebuilds itself twice and the two builds' C is identical (D-062 explains why the first compiler's output differs), and `skeinc` builds every example to the same output. CI runs it on all three platforms.
+  6. ✅ Bootstrapping: Phase 0 builds a first compiler, which builds `skeinc`; `skeinc` rebuilds itself twice and the two builds' C is identical (D-062 explains why the first compiler's output differs), and `skeinc` builds every example to the same output. CI runs it on all three platforms.
 
 **Exit:** the native compiler rebuilds itself, and the second build's output is identical to the first.
 

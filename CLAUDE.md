@@ -70,11 +70,13 @@ These are defined in M0.1; update this section if they change.
 
 | Command | Purpose |
 |---|---|
-| `make test` | run all tests: the host's (`make test-host`) and the Zig runtime's (`make test-runtime`) |
+| `make test` | run all tests: the host's (`make test-host`), the Zig runtime's (`make test-runtime`) and the native compiler's bootstrap (`make test-compiler`) |
 | `make repl` | SBCL with Skein loaded |
 | `./skein run <file.skn> [args]` | run a Skein program (calls its `-main` with the args) |
 | `./skein repl` | start a Skein REPL |
 | `./skein build <file.skn>` | compile a program natively with the C backend (Phase 1; needs Zig) |
+| `make compiler` | bootstrap the native compiler, `build/skeinc` (Phase 0 builds a first compiler, which builds it) |
+| `build/skeinc build <file.skn> [-o out]` | compile a program natively with the compiler written in Skein |
 | `./skein dev <file.skn> [args]` | run with file reloading and a REPL (terminal and localhost:5555) |
 | `make bench` | run the benchmarks in `bench/` |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |

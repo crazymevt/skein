@@ -101,7 +101,7 @@ skein/
 Requirements: [SBCL](https://www.sbcl.org/) 2.4+ and [Quicklisp](https://www.quicklisp.org/), installed in `~/quicklisp` or wherever `QUICKLISP_HOME` points. The Phase 1 runtime also needs [Zig](https://ziglang.org/) **0.17.1** (`brew install zig` on macOS). On Windows, use `skein.cmd` instead of `./skein`.
 
 ```sh
-make test            # run the full test suite (make test-host / make test-runtime for one half)
+make test            # run the full test suite (make test-host, test-runtime, test-compiler for parts)
 ./skein repl         # a Skein REPL
 ./skein run examples/hello.skn
 ```
@@ -113,7 +113,7 @@ The demo game, Driftrock, needs [SDL3](https://libsdl.org/) (on macOS: `brew ins
 ./skein dev examples/driftrock/main.skn   # the same, reloading code as you edit it
 ```
 
-`./skein build examples/fib.skn` compiles a program to a native executable with the Phase 1 C backend; so far it handles one-file programs using numbers, strings, functions, `if`, `let` and `loop`.
+`./skein build examples/fib.skn` compiles a program to a native executable with the Phase 1 C backend. `make compiler` bootstraps the native compiler, `build/skeinc`, which is written in Skein: `build/skeinc build examples/fib.skn` does the same without SBCL. Neither handles FFI programs yet (M1.10).
 
 `skein dev` reloads source files when you save them and serves a REPL on the terminal and on `localhost:5555`. [`docs/EDITORS.md`](docs/EDITORS.md) shows how to connect Emacs or VS Code. `make repl` starts SBCL itself with Skein loaded, for working on the host.
 
