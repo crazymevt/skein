@@ -962,3 +962,10 @@ Date: 2026-11-10 · Status: Accepted
 - **Consequences:**
   - A fixture (`native-skeinc-math.skn`) built by `skeinc` prints what `skein run` prints for every function. The Lisp-versus-Skein comparison tests skip programs that use these functions or `defonce`, as they skip FFI programs: the Lisp backend is frozen.
   - Driftrock builds natively, and runs at 60 fps with the dummy video driver on macOS.
+
+## D-071: What "starts in under 0.1 s" measures
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M1.12's exit says native Driftrock starts in under 0.1 s. Phase 0 took about 1.5 s before Driftrock's `-main` ran: SBCL's start-up and loading `sdl3.raw`. Natively, on a Mac with a real window, the first frame comes about 150 ms after the program starts, but Skein's part is about 10 ms; `SDL_Init` takes about 80 ms and creating the window about 35 ms, which no Skein change can shorten.
+- **Decision** (Jessie chose): start-up is the time from the program's start until `-main` runs, which includes the runtime's start and every namespace's top-level code. Driftrock prints it and the time to its first frame; `--check-startup` fails if `-main` started more than 0.1 s in. `skein.time/now` counts from the runtime's start, so `(skein.time/now)` at the top of `-main` measures it.
+- **Alternatives:** the time to the first frame with SDL's dummy video driver (about 60 ms; it includes SDL's software renderer), or with a real window and a limit of 0.25 s.
+- **Consequences:** CI runs packaged Driftrock with `--check-60fps --check-startup` on all three platforms. `examples/driftrock/project.skn` packages it with SDL3 from `vendor/`, which CI fills from the installed SDL3.

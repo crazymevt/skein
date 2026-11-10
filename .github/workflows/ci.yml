@@ -169,6 +169,7 @@ jobs:
           Expand-Archive $zip -DestinationPath $dir
           $dll = Get-ChildItem $dir -Recurse -Filter SDL3.dll | Select-Object -First 1
           $dll.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "SDL3_DLL=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Run tests
         run: make test
@@ -199,6 +200,31 @@ jobs:
             xvfb-run -a "build/window$exe"
           else
             "build/window$exe"
+          fi
+
+      # M1.12: Driftrock packaged natively with this platform's SDL3, run from the package
+      # at 60 fps, with Skein's own start-up (until -main runs) under 0.1 s. On Linux
+      # SKEIN_LIBRARY_PATH is unset, so only the bundled SDL3 can be found.
+      - name: Driftrock native, packaged
+        run: |
+          cd examples/driftrock
+          case "$RUNNER_OS" in
+            macOS) mkdir -p vendor/macos
+                   cp "$(brew --prefix sdl3)/lib/libSDL3.dylib" vendor/macos/
+                   app=dist/aarch64-macos/driftrock.app/Contents/MacOS/driftrock ;;
+            Windows) mkdir -p vendor/windows
+                     cp "$(cygpath -u "$SDL3_DLL")" vendor/windows/
+                     app=dist/x86_64-windows-gnu/driftrock/driftrock.exe ;;
+            *) mkdir -p vendor/linux
+               cp -L "$HOME/sdl3/lib/libSDL3.so.0" vendor/linux/
+               app=dist/x86_64-linux-gnu/driftrock/driftrock ;;
+          esac
+          ../../skein package
+          args="--frames 600 --autopilot --check-60fps --check-startup"
+          if [ "$RUNNER_OS" = Linux ]; then
+            env -u SKEIN_LIBRARY_PATH xvfb-run -a "$app" $args
+          else
+            "$app" $args
           fi
 
       # M1.11: from this one machine, package hello for all three P0 targets. The packages

@@ -9,8 +9,9 @@ quits. Run it with
 
 Options: --frames N stops after N frames, --autopilot plays by itself, --no-vsync draws
 as fast as it can, and --screenshot file.bmp saves the last frame. On exit it prints
-frame-time statistics; with --check-60fps it fails if the 99th-percentile frame takes
-more than 16.67 ms of work."
+frame-time statistics and how long start-up took (until -main ran, and until the first
+frame); with --check-60fps it fails if the 99th-percentile frame takes more than 16.67 ms
+of work, and with --check-startup if -main started more than 0.1 s after the program."
   (:require [skein.ffi :as ffi]
             [skein.game :as game]
             [skein.time :as time]
@@ -30,6 +31,7 @@ more than 16.67 ms of work."
           "--no-vsync" (recur (assoc opts :no-vsync true) (next args))
           "--screenshot" (recur (assoc opts :screenshot b) (nnext args))
           "--check-60fps" (recur (assoc opts :check true) (next args))
+          "--check-startup" (recur (assoc opts :check-startup true) (next args))
           (error (str "unknown option " a)))))))
 
 (defn key? [keys scancode] (ffi/get keys bool scancode))
@@ -77,7 +79,9 @@ more than 16.67 ms of work."
     (println "saved" path)))
 
 (defn -main [& args]
-  (let [opts (parse-args args)]
+  ;; skein.time/now counts from the program's start: this is how long loading took.
+  (let [main-start (time/now)
+        opts (parse-args args)]
     (when-not (sdl/init sdl/init-video)
       (error (str "SDL_Init failed: " (sdl/get-error))))
     (try
@@ -90,6 +94,7 @@ more than 16.67 ms of work."
             work-start (atom 0.0)
             work-times (atom [])
             fps (atom nil)
+            first-frame (atom nil)
             start (time/now)]
         (when-not (and window renderer)
           (error (str "could not open a window: " (sdl/get-error))))
@@ -112,12 +117,18 @@ more than 16.67 ms of work."
                       (when (and (:screenshot opts) (= (inc @frames) (:frames opts)))
                         (save-screenshot! renderer (:screenshot opts)))
                       (sdl/render-present renderer)
+                      (when (nil? @first-frame) (reset! first-frame (time/now)))
                       (let [n (swap! frames inc) secs (- (time/now) start)]
                         (when (zero? (mod n 30)) (reset! fps (/ n secs)))))}))
         (let [p99 (report (drop 30 @work-times) @frames (- (time/now) start))]
           (println "score" (:score @g/world) "wave" (:wave @g/world))
+          (let [ms (fn [s] (/ (int (* s 100000.0)) 100.0))]
+            (println (str "start-up: -main after " (ms main-start) " ms, first frame after "
+                          (ms (or @first-frame 0.0)) " ms")))
           (when (and (:check opts) (> p99 budget))
-            (error "the 99th-percentile frame is over the 60 fps budget")))
+            (error "the 99th-percentile frame is over the 60 fps budget"))
+          (when (and (:check-startup opts) (> main-start 0.1))
+            (error "-main started more than 0.1 s after the program")))
         (sdl/destroy-renderer renderer)
         (sdl/destroy-window window))
       (finally (sdl/quit)))))

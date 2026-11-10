@@ -26,3 +26,6 @@ zig-out/
 
 # The C library that host/tests/fixtures/package-app bundles (built by the tests)
 host/tests/fixtures/package-app/native/out/
+
+# SDL3 that examples/driftrock packages (copied there by CI or by hand)
+examples/driftrock/vendor/

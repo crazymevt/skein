@@ -247,11 +247,11 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order:
   1. ✅ `skein.time` and `skein.math`'s host functions natively, with Phase 0's results (the system's libm, as SBCL uses).
   2. Driftrock builds and runs natively; CI runs it with `--check-60fps` on all three platforms.
-  3. Start-up under 0.1 s: Driftrock measures the time from start to its first frame, and CI checks it.
+  3. Start-up under 0.1 s: Driftrock measures the time from the program's start until `-main` runs (D-071), and CI checks it.
   4. Driftrock packaged with its SDL3 on each platform in CI, and the package runs.
-  5. `docs/PHASE1-RETRO.md`, and DESIGN.md brought up to date.
+  5. `docs/PHASE1-RETRO.md` (its proposals wait for Jessie's decision), and DESIGN.md brought up to date.
 
-**Exit:** native Driftrock plays at 60 fps on macOS, Windows and Linux and starts in under 0.1 s. Write `docs/PHASE1-RETRO.md` and update DESIGN.md.
+**Exit:** native Driftrock plays at 60 fps on macOS, Windows and Linux and starts in under 0.1 s (until `-main` runs, D-071). Write `docs/PHASE1-RETRO.md` and update DESIGN.md.
 
 ## Phase 2: Native live development (outline)
 Fibers and a work-stealing scheduler; channels on fibers; a closure-compiling interpreter for REPL redefinitions; a Swank-compatible REPL server (D-018); hot reload of native code via shared libraries; supervisors and the debugger over the REPL protocol; STM.
