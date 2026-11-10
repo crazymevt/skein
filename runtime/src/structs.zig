@@ -285,6 +285,13 @@ pub fn defineStruct(name: Value, value_p: bool, fields_in: Value) Value {
     }
     if (lookup(qualified)) |old| {
         if (sameLayout(old, value_p, fields)) return old;
+        // A reload changed it (DESIGN §15, D-091): what was made with the old layout keeps
+        // it.
+        if (value_p or isValueDef(old)) {
+            var msg: [700]u8 = undefined;
+            const text = std.fmt.bufPrint(&msg, "WARNING: value struct {s} changed its layout: code compiled against the old one, and values and arrays made with it, keep the old layout until they are reloaded or made again\n", .{qualified}) catch "WARNING: a value struct changed its layout\n";
+            platform.writeStderr(text);
+        }
     }
     const n = string.make(qualified);
     const h = gc.allocPermanent(.struct_def, 5);

@@ -550,3 +550,76 @@ executable's native path."
             (when (sb-ext:process-alive-p process)
               (sb-ext:process-kill process 9))
             (sb-ext:process-wait process))))))
+
+;;; M2.9 step 2 (D-091): skein dev evaluates a saved file at once, then compiles it in the
+;;; background and swaps the compiled code in; (reload 'ns) does the same.
+
+(test dev-hot-reload-natively
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("hotdev.skn" "(ns hotdev)
+(defstruct pt :value (x f64))
+(defonce ticks (atom 0))
+(defn speed [] 1)
+(defn -main [& args]
+  (loop [] (swap! ticks + (speed)) (sleep 0.02) (recur)))
+"))
+        (let* ((exe (native-dev-build dir "hotdev.skn"))
+               (file (merge-pathnames "hotdev.skn" dir))
+               (process (sb-ext:run-program exe '() :wait nil :input :stream
+                                                    :output :stream :error :output
+                                                    :directory (uiop:native-namestring dir)
+                                                    :environment
+                                                    (cons "SKEIN_DEV=none"
+                                                          (sb-ext:posix-environ))))
+               (buffer (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+               (lock (sb-thread:make-mutex))
+               (input (sb-ext:process-input process)))
+          (collect-output (sb-ext:process-output process) buffer lock)
+          (unwind-protect
+               (block scenario
+                 (flet ((wait (text &optional (start 0))
+                          (or (wait-for-output buffer lock text :start start)
+                              (progn (fail "timed out waiting for ~S in:~%~A" text buffer)
+                                     (return-from scenario))))
+                        (say (line)
+                          (format input "~A~%" line)
+                          (finish-output input))
+                        (edit (from to)
+                          (let ((text (uiop:read-file-string file)))
+                            (with-open-file (s file :direction :output :if-exists :supersede)
+                              (write-string (concatenate 'string
+                                                         (subseq text 0 (search from text))
+                                                         to
+                                                         (subseq text (+ (search from text)
+                                                                         (length from))))
+                                            s)))))
+                   (let ((pos (wait "; skein dev")))
+                     ;; Saved: evaluated at once, then compiled.
+                     (sleep 1.1)
+                     (edit "(defn speed [] 1)" "(defn speed [] 5)")
+                     (setf pos (wait "; reloaded hotdev.skn" pos))
+                     (setf pos (wait "; compiled hotdev.skn" pos))
+                     (say "[(speed) (%evaluated? speed) (%evaluated? -main)]")
+                     (setf pos (wait "[5 false false]" pos))
+                     ;; reload compiles too.
+                     (say "(reload 'hotdev)")
+                     (setf pos (wait "; compiled hotdev.skn" pos))
+                     ;; A value struct whose layout changes warns.
+                     (sleep 1.1)
+                     (edit "(x f64))" "(x f64) (y f64))")
+                     (setf pos (wait "value struct hotdev/pt changed its layout" pos))
+                     (setf pos (wait "; compiled hotdev.skn" pos))
+                     ;; An error leaves the code that was running.
+                     (sleep 1.1)
+                     (edit "(defn speed [] 5)" "(defn speed [] (no-such-fn))")
+                     (setf pos (wait "; error reloading hotdev.skn" pos))
+                     (say "(speed)")
+                     (setf pos (wait "5" pos))
+                     (say ":quit")
+                     (loop repeat 600 while (sb-ext:process-alive-p process) do (sleep 0.05))
+                     (is (not (sb-ext:process-alive-p process))
+                         "skein dev did not exit after :quit"))))
+            (when (sb-ext:process-alive-p process)
+              (sb-ext:process-kill process 9))
+            (sb-ext:process-wait process))))))

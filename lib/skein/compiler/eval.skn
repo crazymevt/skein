@@ -633,6 +633,16 @@ the program doesn't include)."
                  (error (str "cannot find namespace " nm ": no " nm " on the source paths")))]
     (load-file* path)))
 
+(def ^:private reload-hook
+  "nil, or a function of a path that reload calls after loading the file (skein.dev's,
+which compiles it in the background, D-091)."
+  (atom nil))
+
+(defn set-reload-hook!
+  "Make reload call (f path) after it loads a namespace's file (M2.9, D-091)."
+  [f]
+  (reset! reload-hook f))
+
 (defn- reload*
   "(reload 'ns): load the namespace's source file again, in user. Vars keep their
 identity, so code that calls them sees the new definitions."
@@ -646,6 +656,7 @@ identity, so code that calls them sees the new definitions."
     (%in-ns 'user)
     (try (load-file* path)
          (finally (%in-ns (symbol saved))))
+    (when-let [f @reload-hook] (f path))
     nil))
 
 (reset! env/namespace-loader load-namespace!)

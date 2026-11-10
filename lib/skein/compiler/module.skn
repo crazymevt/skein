@@ -71,12 +71,14 @@ compiled as a program built with --eval compiles one (D-078)."
               (c/emit-toplevel unit (expander/analyze-toplevel expanded ns) ns))))))
 
 (defn translate
-  "The module for the source file at path, which the program has loaded: {:c text :vars
-vars}, the C text and the vars its init function takes. Translates in the current
-namespace, which the file's ns form changes; the caller restores it."
+  "The module for the source file at path, which the program has loaded: {:c :vars :ns
+:source}, the C text, the vars its init function takes, its namespace's name and the text
+it was made from. Translates in the current namespace, which the file's ns form changes;
+the caller restores it."
   [path]
   (let [unit (c/make-unit)
-        r (reader/make-reader (io/read-file path)
+        source (io/read-file path)
+        r (reader/make-reader source
                               {:file path :namespace (%current-namespace-name)
                                :resolve-alias
                                (fn [alias]
@@ -90,6 +92,8 @@ namespace, which the file's ns form changes; the caller restores it."
           (emit-form! unit form)
           (recur))))
     {:c (c/module-text unit path)
+     :ns (%current-namespace-name)
+     :source source
      :vars (mapv (fn [[ns-name nm]]
                    (let [ns (or (%find-namespace ns-name) (fail "no namespace " ns-name))]
                      (%runtime-var (%intern-var ns nm))))
@@ -141,8 +145,7 @@ module and load it: its vars now hold compiled code. The current namespace is re
   [path]
   (let [saved (%current-namespace-name)]
     (try
-      (let [{text :c vars :vars} (translate path)
-            ns-name (%current-namespace-name)]
+      (let [{text :c vars :vars ns-name :ns} (translate path)]
         (%in-ns (symbol saved))
         (%load-module (build! ns-name text) vars)
         ns-name)

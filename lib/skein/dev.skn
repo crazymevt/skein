@@ -519,11 +519,75 @@ fails; its abort restart fails the task, as the error would have without the deb
   []
   (vec (distinct (keep %namespace-file (%all-namespaces)))))
 
+;;; Hot reload of compiled code (M2.9, D-091): a file is evaluated at once, then compiled
+;;; into a module in the background, which replaces the evaluated code.
+
+(def ^:private reload-lock
+  "Held while a file is evaluated or translated, which both change the program's model, or
+while a module is loaded: a channel holding one token when it's taken."
+  (chan 1))
+
+(defn- with-reload-lock [f]
+  (>! reload-lock :held)
+  (try (f) (finally (<! reload-lock))))
+
+(def ^:private compile-requests
+  "The files to compile, in order, which the compiling fiber takes."
+  (chan 256))
+
+(def ^:private compile-pending
+  "The files in compile-requests, which aren't queued twice."
+  (atom #{}))
+
+(defn- compile-now!
+  "Compile the loaded file into a module and load it, unless the file has changed since
+(a newer compile is coming)."
+  [file]
+  (try
+    (let [{text :c vars :vars ns-name :ns source :source}
+          (with-reload-lock
+            (fn []
+              (binding [*namespace-cell* (atom (%find-namespace "user"))]
+                (module/translate file))))
+          lib (module/build! ns-name text)
+          loaded (with-reload-lock
+                   (fn [] (when (= source (%read-file file)) (%load-module lib vars))))]
+      (when loaded (announce (str "; compiled " (file-name file)))))
+    (catch error e
+      (announce (str "; error compiling " (file-name file) ": " (condition-message e))))))
+
+(def ^:private compiler-started (atom false))
+
+(defn- reset-pending!
+  "Add file to compile-pending; [the set before, the set after]."
+  [file]
+  (loop []
+    (let [before @compile-pending
+          after (conj before file)]
+      (if (compare-and-set! compile-pending before after) [before after] (recur)))))
+
+(defn- compile-later!
+  "Compile the loaded file in the background (one at a time), if this program can."
+  [file]
+  (when (module/available?)
+    (when (compare-and-set! compiler-started false true)
+      (service (loop []
+                 (when-let [f (<! compile-requests)]
+                   (swap! compile-pending disj f)
+                   (compile-now! f)
+                   (recur)))))
+    (let [[before] (reset-pending! file)]
+      (when-not (contains? before file)
+        (>! compile-requests file)))))
+
 (defn- reload-changed [file]
-  (try (let [saved (%current-namespace-name)]
-         (%in-ns 'user)
-         (try (load-file file) (finally (%in-ns (symbol saved))))
-         (announce (str "; reloaded " (file-name file))))
+  (try (with-reload-lock
+         (fn []
+           (let [saved (%current-namespace-name)]
+             (%in-ns 'user)
+             (try (load-file file) (finally (%in-ns (symbol saved)))))))
+       (announce (str "; reloaded " (file-name file)))
+       (compile-later! file)
        (catch error e
          (announce (str "; error reloading " (file-name file) ": " (condition-message e))))))
 
@@ -568,6 +632,8 @@ reload changed source files, and keep the REPL running after the program finishe
 Returns 0, or 1 if an error stopped the program."
   [main-fn args ns-name port swank-port]
   (install-debugger!)
+  ;; (reload 'ns) compiles too, as saved files do (D-091).
+  (evaluator/set-reload-hook! compile-later!)
   (doseq [nm ["*1" "*2" "*3" "*e"]] (set-core-var! nm nil))
   (reset! initial-namespace ns-name)
   (let [server (when port
