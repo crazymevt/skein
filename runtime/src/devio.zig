@@ -18,6 +18,8 @@ const Value = @import("value.zig").Value;
 const alloc = std.heap.c_allocator;
 const net = std.Io.net;
 
+extern fn sk_exit(status: c_int) noreturn;
+
 // ---------------------------------------------------------------------------------------
 // File dates
 
@@ -234,6 +236,26 @@ const Args = []const Value;
 const CoreEntry = @import("compiler.zig").Entry;
 
 pub const entries = [_]CoreEntry{
+    // (%set-output-var! var): what's printed goes to the function bound to var, if any.
+    .{ .name = "%set-output-var!", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            if (!a[0].isObjectOf(.@"var")) rt.raise(.type_error, "%set-output-var! needs a var", .{});
+            @import("print.zig").output_var = a[0];
+            return Value.nil;
+        }
+    }.f },
+    // (%exit status): end the program now.
+    .{ .name = "%exit", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            if (!a[0].isFixnum()) rt.raise(.type_error, "%exit needs a status", .{});
+            sk_exit(@intCast(a[0].toFixnum()));
+        }
+    }.f },
+    .{ .name = "%main-thread?", .min = 0, .max = 0, .impl = struct {
+        fn f(_: Args) Value {
+            return Value.fromBool(@import("tasks.zig").onMainThreadNow());
+        }
+    }.f },
     .{ .name = "%file-mtime", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return fileMtime(a[0]);

@@ -150,7 +150,14 @@ received to that form's metadata (as data), for %syntax-meta.")
                                         (skein-error 'skein-error nil "~A is native only"
                                                      ,name))))))
   (native-only "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen"
-               "%tcp-accept" "%tcp-port" "%tcp-close"))
+               "%tcp-accept" "%tcp-port" "%tcp-close" "%exit" "%main-thread?"))
+
+(defcore "%set-output-var!" (var)
+  ;; Phase 0's REPL binds *standard-output* instead.
+  (declare (ignore var))
+  nil)
+
+(defcore "%all-namespaces" () (vector-from-list (all-namespaces)))
 
 (defcore "%install-evaluator!" (hooks)
   ;; Phase 0 evaluates code itself (backend-cl/driver.lisp).

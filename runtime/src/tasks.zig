@@ -525,7 +525,7 @@ const main_queue = 2;
 threadlocal var is_main = false;
 
 /// Whether this is the main thread (where sk_init ran). Not inlined (D-075).
-noinline fn onMainThreadNow() bool {
+pub noinline fn onMainThreadNow() bool {
     return is_main;
 }
 

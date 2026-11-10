@@ -330,12 +330,13 @@ instead."
                      (fail "cannot find skein.core.native"))]
      (reset! env/namespace-loader (fn [nm] (load-for-syntax build nm)))
      (translate-source build library)
-     ;; --eval (D-078): the front end and the evaluator, before the program.
+     ;; --eval (D-078, D-081): the front end, the evaluator and the REPL, before the
+     ;; program.
      (when eval?
        (c/note-eval! (:unit build))
-       (swap! (:translated build) conj "skein.compiler.eval")
-       (translate-source build (or (find-namespace-file build "skein.compiler.eval")
-                                   (fail "cannot find skein.compiler.eval"))))
+       (swap! (:translated build) conj "skein.dev")
+       (translate-source build (or (find-namespace-file build "skein.dev")
+                                   (fail "cannot find skein.dev"))))
      (let [ns (translate-source build path)
            main (%find-own-var ns (or main-name "-main"))]
        (when (and main-name (nil? main))
@@ -344,7 +345,11 @@ instead."
          ;; As in Phase 0, -main runs in user.
          (translate-in-ns build "user" nil)
          (c/emit-eval-registry! (:unit build) @(:eval-namespaces build) source-paths))
-       (c/program-text (:unit build) (file-name path) main)))))
+       (if eval?
+         (c/program-text (:unit build) (file-name path) main
+                         (%find-own-var (%find-namespace "skein.dev") "run-main")
+                         (%namespace-name ns))
+         (c/program-text (:unit build) (file-name path) main))))))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Compiling with zig (build.lisp). The runtime and the C file are kept in the checkout's

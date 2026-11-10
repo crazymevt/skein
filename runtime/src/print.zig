@@ -253,7 +253,13 @@ pub fn writeFloat(comptime T: type, x: T, out: *std.ArrayList(u8)) void {
     if (T == f32) put(out, "f");
 }
 
-/// Print `values` separated by spaces, then a newline if `newline`, to standard output.
+/// The var whose binding, if it's a function, gets what the program prints instead of
+/// standard output (skein.dev/*out*, M2.6, D-081): a REPL client sees the output of the
+/// code it evaluates. Vars are permanent, so this needn't be a root.
+pub var output_var: ?Value = null;
+
+/// Print `values` separated by spaces, then a newline if `newline`, to standard output (or
+/// the function bound to output_var), in one write, so lines don't interleave.
 pub fn printValues(values: []const Value, readably: bool, newline: bool) void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(rt.scratch);
@@ -262,6 +268,15 @@ pub fn printValues(values: []const Value, readably: bool, newline: bool) void {
         write(v, &out, readably);
     }
     if (newline) put(&out, "\n");
+    if (output_var) |ov| {
+        if (@import("dynamic.zig").bound(ov)) |sink| {
+            if (sink != Value.nil) {
+                const text = [_]Value{@import("string.zig").make(out.items)};
+                _ = @import("func.zig").call(sink, 1, &text);
+                return;
+            }
+        }
+    }
     platform.writeStdout(out.items);
 }
 

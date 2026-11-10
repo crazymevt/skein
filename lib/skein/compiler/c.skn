@@ -686,7 +686,7 @@ is the Lisp backend's list."
     "%backtrace"
     ;; The REPL and skein dev (M2.6, D-081; runtime/src/devio.zig)
     "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen" "%tcp-accept" "%tcp-port"
-    "%tcp-close"
+    "%tcp-close" "%set-output-var!" "%exit" "%main-thread?"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -1883,9 +1883,14 @@ compiled and the skein.core functions written in Skein."
 
 (defn program-text
   "The C text of the program in unit, made from the file source-name. If main-var (the
--main var, or nil) was compiled, main calls it with the command-line arguments."
-  [unit source-name main-var]
-  (let [u @unit
+-main var, or nil) was compiled, main calls it with the command-line arguments. In a
+program built with --eval, main instead calls entry-var (skein.dev/run-main) with -main
+(or nil), the arguments and the program's namespace, ns-name (D-081)."
+  ([unit source-name main-var] (program-text unit source-name main-var nil nil))
+  ([unit source-name main-var entry-var ns-name]
+  (let [;; Made first: making a var's C name declares it in the unit.
+        entry-c (when entry-var (var-c-name {:unit unit} entry-var))
+        u @unit
         main-c (when main-var (get (:vars u) main-var))
         decls (into {} (map (fn [[nm ns var-name]] [nm (str ns "/" var-name)]) (:var-decls u)))
         globals (vec (concat (map first (:var-decls u)) (map first (:constants u))
@@ -1925,11 +1930,22 @@ compiled and the skein.core functions written in Skein."
     (put "int main(int argc, char **argv) {\n  (void)argc;\n  (void)argv;\n  "
          "sk_init();\n  sk_program_init();\n  sk_program_body();\n")
     ;; -main gets the command-line arguments, as `skein run` passes them.
-    (when main-c
-      (put "  if (sk_var_value(" main-c ") != SK_UNBOUND) {\n    "
-           "sk_value main_args[64];\n    uint32_t n = 0;\n    "
-           "for (int i = 1; i < argc && n < 64; i++) main_args[n++] = "
-           "sk_string(argv[i], strlen(argv[i]));\n    "
-           "sk_call(sk_var_value(" main-c "), n, main_args);\n  }\n"))
+    (cond entry-c
+          (put "  {\n    sk_value main_args[64];\n    uint32_t n = 0;\n    "
+               "for (int i = 1; i < argc && n < 64; i++) main_args[n++] = "
+               "sk_string(argv[i], strlen(argv[i]));\n    "
+               "sk_value entry_args[3] = {"
+               (if main-c
+                 (str "sk_var_value(" main-c ") != SK_UNBOUND ? sk_var_value(" main-c ") : SK_NIL")
+                 "SK_NIL")
+               ", sk_list_of(n, main_args), sk_string(" (c-string-literal ns-name) ", "
+               "strlen(" (c-string-literal ns-name) "))};\n    "
+               "sk_call(sk_var_value(" entry-c "), 3, entry_args);\n  }\n")
+          main-c
+          (put "  if (sk_var_value(" main-c ") != SK_UNBOUND) {\n    "
+               "sk_value main_args[64];\n    uint32_t n = 0;\n    "
+               "for (int i = 1; i < argc && n < 64; i++) main_args[n++] = "
+               "sk_string(argv[i], strlen(argv[i]));\n    "
+               "sk_call(sk_var_value(" main-c "), n, main_args);\n  }\n"))
     (put "  sk_finish();\n  return 0;\n}\n")
-    (concat-strings @out)))
+    (concat-strings @out))))

@@ -1,30 +1,57 @@
 (ns skein.dev
-  "The REPL and debugger of native programs built with --eval (DESIGN §15, M2.6, D-081),
-with Phase 0's behavior (host/src/repl/repl.lisp, D-039): a `namespace=> ` prompt per
-form, *1 *2 *3 and *e, :quit, and on an error the active restarts, numbered innermost
+  "The REPL, debugger and dev loop of native programs built with --eval (DESIGN §15, M2.6,
+D-081), with Phase 0's behavior (host/src/repl/repl.lisp, D-039): a `namespace=> ` prompt
+per form, *1 *2 *3 and *e, :quit, and on an error the active restarts, numbered innermost
 first, which a number invokes, :bt for a backtrace, and any other form evaluated there,
 in nested debug[N] levels.
 
-A console is a source of text and a place to write: the terminal, or (with skein dev) a
-client of the REPL server. A fiber per console reads its text and sends complete forms
-over a channel to the console's loop."
+A console is a source of text and a place to write: the terminal, or a client of the
+REPL server. A fiber per console reads its text and sends complete forms over a channel to
+the console's loop. An error that no handler handles outside a console (in the program)
+opens a debug session: its fiber waits, a console attaches, and the forms typed there are
+evaluated in that fiber, where its restarts are.
+
+`skein dev` runs a program with SKEIN_DEV set (a port, or none): run-main then serves the
+REPL on the terminal and localhost, reloads source files when they change, and runs -main
+under a \"Stop the program\" restart."
   (:require [skein.compiler.reader :as reader]
             [skein.compiler.eval :as evaluator]))
+
+(def version
+  "Skein's version, as host/skein.asd gives it (keep the two the same)."
+  "0.0.1")
+
+(def ^:dynamic *out*
+  "A function of a string that gets what the code running here prints, or nil for
+standard output: a REPL client sees the output of the code it evaluates, and the tasks
+that code spawns."
+  nil)
+
+(%set-output-var! (%runtime-var (%find-own-var (%find-namespace "skein.dev") "*out*")))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Consoles
 
+(def ^:private consoles
+  "The consoles whose loops are running."
+  (atom []))
+
+(def ^:private initial-namespace
+  "The namespace new consoles start in: the program's in skein dev."
+  (atom "user"))
+
 (defn- make-console
   "A console that reads text with (read-text), nil at its end, and writes it with (write
-text)."
-  [console-name read-text write]
+text). output is the function code evaluated from it prints with, or nil."
+  [console-name read-text write output]
   {:name console-name
    :read-text read-text
    :write write
+   :output output
    :inbox (chan)
    ;; Messages put aside while debugging, handled before new ones.
    :deferred (atom [])
-   :ns (atom "user")
+   :ns (atom @initial-namespace)
    :quit (atom false)
    ;; Whether what the console last wrote ended a line.
    :fresh (atom true)})
@@ -40,24 +67,24 @@ text)."
   [console]
   (when-not @(:fresh console) (write! console "\n")))
 
-(defn- model-namespace?
-  "True for a namespace as skein.compiler.env models it: an atom holding its map."
-  [x]
-  (and (atom? x) (map? @x) (contains? @x :mappings) (string? (:name @x))))
+(defn- announce
+  "Print a line on every console, or on standard output if there are none."
+  [text]
+  (let [cs @consoles]
+    (if (seq cs)
+      (doseq [c cs] (fresh-line! c) (write! c text "\n"))
+      (println text))))
 
-(defn- show
-  "The printed form of a value, as Phase 0's REPL prints it."
-  [x]
-  (if (model-namespace? x) (str "#<namespace " (:name @x) ">") (pr-str x)))
+(defn- has? [s part]
+  (loop [i 0]
+    (cond (> (+ i (count part)) (count s)) false
+          (= part (subs s i (+ i (count part)))) true
+          :else (recur (inc i)))))
 
 (defn- incomplete?
   "True if a read error only says that the input ended inside a form."
   [message]
-  (let [has (fn [s] (loop [i 0]
-                      (cond (> (+ i (count s)) (count message)) false
-                            (= s (subs message i (+ i (count s)))) true
-                            :else (recur (inc i)))))]
-    (or (has "unterminated") (has "end of input"))))
+  (or (has? message "unterminated") (has? message "end of input")))
 
 (defn- line-end
   "The index just after the end of the line containing index i of text."
@@ -78,11 +105,10 @@ text)."
           outcome (try [:form (reader/read-form r false ::none)]
                        (catch reader/read-error e
                          [:error (condition-message e)]))
-          pos @(:pos r)
-          rest-text (subs text pos)]
+          pos @(:pos r)]
       (cond (and (= :form (first outcome)) (not= ::none (second outcome)))
             (do (>! (:inbox console) [:form (second outcome)])
-                (recur rest-text @(:line r) @(:column r) more))
+                (recur (subs text pos) @(:line r) @(:column r) more))
             ;; Only whitespace and comments so far, or a form that isn't finished.
             (and more (or (= :form (first outcome)) (incomplete? (second outcome))))
             (if-let [chunk ((:read-text console))]
@@ -101,6 +127,9 @@ text)."
       (do (reset! (:deferred console) (vec (rest deferred))) (first deferred))
       (<! (:inbox console)))))
 
+(defn- defer! [console message]
+  (swap! (:deferred console) conj message))
+
 (defn- prompt [console prefix]
   (write! console prefix @(:ns console) "=> "))
 
@@ -112,6 +141,16 @@ text)."
 
 (defn- integer-form [syntax]
   (let [d (:datum syntax)] (when (integer? d) d)))
+
+(defn- model-namespace?
+  "True for a namespace as skein.compiler.env models it: an atom holding its map."
+  [x]
+  (and (atom? x) (map? @x) (contains? @x :mappings) (string? (:name @x))))
+
+(defn- show
+  "The printed form of a value, as Phase 0's REPL prints it."
+  [x]
+  (if (model-namespace? x) (str "#<namespace " (:name @x) ">") (pr-str x)))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; History: *1, *2, *3 and *e are skein.core vars, which every namespace sees.
@@ -139,14 +178,16 @@ text)."
   0)
 
 (def ^:private debug)
+(def ^:private remote-debug)
 
 (defn- eval-in
   "Evaluate the syntax form in the console's namespace, which follows the ns and in-ns
-forms it evaluates."
+forms it evaluates; what it prints goes to the console."
   [console form]
   (let [saved (%current-namespace-name)]
     (%in-ns (symbol @(:ns console)))
-    (try (evaluator/evaluate-syntax form)
+    (try (binding [*out* (:output console)]
+           (evaluator/evaluate-syntax form))
          (finally
            (reset! (:ns console) (%current-namespace-name))
            (%in-ns (symbol saved))))))
@@ -165,9 +206,9 @@ for an error no handler in it handles."
 ;;; ------------------------------------------------------------------------------------
 ;;; The debugger
 
-(defn- describe-error [console c restarts]
+(defn- describe-error [console c restarts where]
   (fresh-line! console)
-  (write! console "error: " (condition-message c) "\n")
+  (write! console "error" where ": " (condition-message c) "\n")
   (when (seq restarts)
     (write! console "restarts (type a number to choose one):\n")
     (doseq [[i r] (map-indexed vector restarts)]
@@ -175,13 +216,15 @@ for an error no handler in it handles."
               (if-let [report (restart-report r)] (str "  " report) "") "\n")))
   (write! console "Also: :bt for a backtrace, or any form to evaluate it here.\n"))
 
-(defn- print-backtrace
-  "The Skein functions between the error and the REPL, innermost first."
-  [console frames]
-  (let [shown (take-while (fn [[nm]] (not= nm "evaluate-syntax")) frames)]
+(defn- backtrace-text
+  "The Skein functions between the error and the REPL or the program's start, innermost
+first."
+  [frames]
+  (let [ends #{"evaluate-syntax" "run-main" "run-dev"}
+        shown (take-while (fn [[nm]] (not (contains? ends nm))) frames)]
     (if (seq shown)
-      (doseq [[i [nm]] (map-indexed vector shown)] (write! console "  " i ": " nm "\n"))
-      (write! console "  (no Skein frames)\n"))))
+      (apply str (map-indexed (fn [i [nm]] (str "  " i ": " nm "\n")) shown))
+      "  (no Skein frames)\n")))
 
 (defn- outermost-abort [restarts]
   (last (filter (fn [r] (= "abort" (name (restart-name r)))) restarts)))
@@ -200,18 +243,19 @@ from where it was signaled."
     (set-core-var! "*e" c)
     (let [restarts (vec (compute-restarts c))
           prefix (str "debug[" *level* "] ")]
-      (describe-error console c restarts)
+      (describe-error console c restarts "")
       (loop []
         (prompt console prefix)
         (let [[kind x] (next-message console)]
           (case kind
             :eof (leave! console restarts)
             :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
+            :session (do (defer! console [kind x]) (recur))
             (let [n (integer-form x)
                   k (keyword-name x)]
               (cond (and n (< -1 n (count restarts))) (invoke-restart (nth restarts n))
                     n (do (write! console "no restart " n "\n") (recur))
-                    (= k "bt") (do (print-backtrace console frames) (recur))
+                    (= k "bt") (do (write! console (backtrace-text frames)) (recur))
                     (= k "quit") (leave! console restarts)
                     :else (do (eval-print console x (str "Return to debug level " *level*))
                               (recur))))))))))
@@ -219,36 +263,245 @@ from where it was signaled."
 (def ^:private debug debug*)
 
 ;;; ------------------------------------------------------------------------------------
+;;; Debug sessions: an error in the program, waiting for a console to tell it what to do
+
+(defn- claim!
+  "Make console the one debugging the session, unless another already is."
+  [session console]
+  (and (not @(:finished session)) (compare-and-set! (:console session) nil console)))
+
+(defn- offer-session!
+  "Offer the session to every console; if there are none, tell it to give up."
+  [session]
+  (let [cs @consoles]
+    (if (seq cs)
+      (doseq [c cs] (future (>! (:inbox c) [:session session])))
+      (future (>! (:inbox session) [:no-console])))))
+
+(defn- remote-debug*
+  "Debug the session from console: send it the forms typed here until it resumes."
+  [console session]
+  (let [prefix (str "debug[" (:thread session) "] ")]
+    (describe-error console (:condition session) (:restarts session)
+                    (str " in thread " (:thread session)))
+    (loop []
+      (prompt console prefix)
+      (let [[kind x] (next-message console)]
+        (case kind
+          :eof (do (swap! (:deferred console) (fn [d] (into [[:eof]] d)))
+                   (reset! (:console session) nil)
+                   (future (>! (:inbox session) [:detach])))
+          :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
+          :session (do (defer! console [kind x]) (recur))
+          (let [reply (chan)]
+            (>! (:inbox session) [:form x reply console])
+            (let [[answer text] (<! reply)]
+              (case answer
+                :value (do (write! console text "\n") (recur))
+                :error (do (fresh-line! console) (write! console "error: " text "\n") (recur))
+                :message (do (write! console text) (recur))
+                (do (fresh-line! console) (write! console "; resumed\n"))))))))))
+
+(def ^:private remote-debug remote-debug*)
+
+(defn- session-eval
+  "Handle one form a console sent to this fiber's debug session."
+  [session form reply console]
+  (let [replied (atom false)
+        answer (fn [& x] (reset! replied true) (>! reply (vec x)))
+        restarts (:restarts session)
+        n (integer-form form)
+        k (keyword-name form)]
+    (try
+      (cond (and n (< -1 n (count restarts))) (do (answer :resumed)
+                                                  (invoke-restart (nth restarts n)))
+            n (answer :message (str "no restart " n "\n"))
+            (= k "bt") (answer :message (backtrace-text (:frames session)))
+            (= k "quit") (do (answer :resumed)
+                             (when-let [a (outermost-abort restarts)] (invoke-restart a)))
+            :else (let [result (try (let [v (eval-in console form)]
+                                      (record-value! v)
+                                      [:value (show v)])
+                                    (catch error e [:error (condition-message e)]))]
+                    (apply answer result)))
+      ;; The form invoked a restart (or otherwise left): this fiber resumes.
+      (finally (when-not @replied (>! reply [:resumed]))))))
+
+(defn- program-debug
+  "The debugger for an error that no handler handles outside a console: wait for a
+console to attach, and evaluate what it sends in this fiber, where the restarts are."
+  [c]
+  (let [frames (rest (%backtrace))
+        restarts (vec (compute-restarts c))
+        thread (if (%main-thread?) "main thread" "task")
+        session {:condition c :restarts restarts :frames frames :thread thread
+                 :inbox (chan) :console (atom nil) :finished (atom false)}
+        give-up (fn []
+                  (println (str "error in thread " thread ": " (condition-message c)))
+                  (if-let [a (outermost-abort restarts)] (invoke-restart a) (%exit 1)))]
+    (set-core-var! "*e" c)
+    (when (empty? @consoles) (give-up))
+    (offer-session! session)
+    (try
+      (loop []
+        (let [[msg] (alts! [(:inbox session) (timeout-chan 0.1)])
+              kind (first msg)]
+          (cond (nil? kind)
+                (when (and (nil? @(:console session)) (empty? @consoles)) (give-up))
+                (= kind :no-console) (give-up)
+                (= kind :detach) (offer-session! session)
+                (= kind :form)
+                (let [[_ form reply console] msg] (session-eval session form reply console)))
+          (recur)))
+      (finally (reset! (:finished session) true)))))
+
+;;; ------------------------------------------------------------------------------------
 ;;; The console loop and skein repl
 
 (defn console-loop
   "Run the console's read-eval-print loop in this fiber until its input ends or :quit."
   [console]
+  (swap! consoles conj console)
   (future (read-forms console))
-  (loop []
-    (prompt console "")
-    (let [[kind x] (next-message console)]
-      (case kind
-        :eof nil
-        :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
-        (if (= (keyword-name x) "quit")
-          (reset! (:quit console) true)
-          (do (eval-print console x "Return to the REPL") (recur)))))))
+  (try
+    (loop []
+      (prompt console "")
+      (let [[kind x] (next-message console)]
+        (case kind
+          :eof nil
+          :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
+          :session (do (when (claim! x console) (remote-debug console x)) (recur))
+          (if (= (keyword-name x) "quit")
+            (reset! (:quit console) true)
+            (do (eval-print console x "Return to the REPL") (recur))))))
+    (finally
+      (swap! consoles (fn [cs] (vec (remove (fn [c] (identical? c console)) cs))))
+      ;; Any session this console was offered goes to the others.
+      (doseq [[kind x] @(:deferred console)]
+        (when (= kind :session) (offer-session! x))))))
 
 (defn terminal-console
   "The console on the terminal: standard input and output."
   []
   (let [in (%stdin)]
-    (make-console "terminal" (fn [] (%read-text in)) (fn [text] (print text)))))
+    (make-console "terminal" (fn [] (%read-text in)) (fn [text] (print text)) nil)))
 
-(def version
-  "Skein's version, as host/skein.asd gives it (keep the two the same)."
-  "0.0.1")
+(defn- install-debugger! []
+  (%install-debugger! program-debug))
 
 (defn run-repl
   "skein repl: a REPL on the terminal, in user, until the input ends or :quit."
   []
+  (install-debugger!)
   (doseq [nm ["*1" "*2" "*3" "*e"]] (set-core-var! nm nil))
   (println (str "Skein " version " REPL. Type :quit or end the input to leave."))
   (console-loop (terminal-console))
   (println))
+
+;;; ------------------------------------------------------------------------------------
+;;; skein dev: the REPL server, the file watcher and the program
+
+(defn- serve-client [conn n]
+  (let [console (make-console (str "client " n) (fn [] (%read-text conn))
+                              (fn [text] (%write-text conn text)) nil)
+        console (assoc console :output (fn [text] (write! console text)))]
+    (write! console "; Skein " version " REPL\n")
+    (try (console-loop console)
+         (finally (%tcp-close conn)))))
+
+(defn- start-server
+  "Serve the REPL on localhost:port; the server, or nil if it can't listen there."
+  [port]
+  (when-let [server (%tcp-listen port)]
+    (future (loop [n 1]
+              (when-let [conn (%tcp-accept server)]
+                (future (serve-client conn n))
+                (recur (inc n)))))
+    server))
+
+(defn- file-name [path]
+  (loop [i (dec (count path))]
+    (cond (< i 0) path
+          (contains? #{\/ \\} (nth path i)) (subs path (inc i))
+          :else (recur (dec i)))))
+
+(defn- watched-files
+  "The source files of the program's namespaces."
+  []
+  (vec (distinct (keep %namespace-file (%all-namespaces)))))
+
+(defn- reload-changed [file]
+  (try (let [saved (%current-namespace-name)]
+         (%in-ns 'user)
+         (try (load-file file) (finally (%in-ns (symbol saved))))
+         (announce (str "; reloaded " (file-name file))))
+       (catch error e
+         (announce (str "; error reloading " (file-name file) ": " (condition-message e))))))
+
+(defn- start-watcher
+  "Reload the program's source files when they change, checking every 0.25 s. Returns a
+function that stops it."
+  []
+  (let [dates (atom (into {} (map (fn [f] [f (%file-mtime f)]) (watched-files))))
+        stop (atom false)]
+    (future
+      (loop []
+        (when-not @stop
+          (doseq [f (watched-files)]
+            (let [date (%file-mtime f)
+                  old (get @dates f ::unseen)]
+              (swap! dates assoc f date)
+              (when (and (not= old ::unseen) date old (not= date old))
+                (reload-changed f))))
+          (sleep 0.25)
+          (recur))))
+    (fn [] (reset! stop true))))
+
+(defn- run-dev
+  "Run main-fn with args as skein dev does: serve the REPL on the terminal and, unless
+port is nil, on localhost:port, reload changed source files, and keep the REPL running
+after the program finishes. Returns 0, or 1 if an error stopped the program."
+  [main-fn args ns-name port]
+  (install-debugger!)
+  (doseq [nm ["*1" "*2" "*3" "*e"]] (set-core-var! nm nil))
+  (reset! initial-namespace ns-name)
+  (let [server (when port
+                 (or (start-server port)
+                     (do (println (str "; no REPL server: cannot listen on port " port))
+                         nil)))
+        terminal (terminal-console)
+        terminal-done (atom false)
+        program-running (atom true)
+        status (atom 0)]
+    (println (str "; skein dev: reloading changed files"
+                  (if server (str "; REPL on localhost:" (%tcp-port server)) "")))
+    (let [stop-watcher (start-watcher)]
+      (future (console-loop terminal)
+              (reset! terminal-done true)
+              ;; :quit stops a program that is still running.
+              (when (and @(:quit terminal) @program-running) (%exit 0)))
+      (restart-case (when main-fn (apply main-fn args))
+        (abort [] :report "Stop the program"
+          (when-not @(:quit terminal) (reset! status 1))))
+      (reset! program-running false)
+      (when-not @terminal-done
+        (announce (str "; the program has finished; the REPL is still running "
+                       "(type :quit to leave)")))
+      (loop []
+        (when-not @terminal-done
+          (drain-main-thread!)
+          (sleep 0.02)
+          (recur)))
+      (stop-watcher)
+      (when server (%tcp-close server))
+      @status)))
+
+(defn run-main
+  "How a program built with --eval starts (D-081): with SKEIN_DEV set (a port, or none,
+by skein dev), run it as skein dev does; else call main-fn (its -main, or nil) with the
+command-line arguments. ns-name is the program's namespace."
+  [main-fn args ns-name]
+  (if-let [mode (%getenv "SKEIN_DEV")]
+    (let [status (run-dev main-fn args ns-name (when-not (= mode "none") (parse-long mode)))]
+      (when-not (zero? status) (%exit status)))
+    (when main-fn (apply main-fn args))))

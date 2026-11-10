@@ -158,7 +158,8 @@ repl.test.a/x
                    (pr (ev (format nil "(def r (load-file ~S)) [r loaded-b]" forms)))))
       ;; An ns form in the file doesn't change the caller's namespace afterwards.
       (is (string= "[:other-x \"user.after\" :other-x]"
-                   (pr (ev (format nil "(ns user.after) (def r [(load-file ~S) (%current-namespace-name)])
+                   (pr (ev (format nil "(ns user.after) ~
+                                        (def r [(load-file ~S) (%current-namespace-name)])
                                         (conj r load.file.other/x)" other)))))
       (fails "(load-file \"/no/such/file.skn\")" "cannot load-file /no/such/file.skn")
       (fails "(load-file 5)" "load-file needs a path (a string), not 5"))))
@@ -338,3 +339,129 @@ repl.test.a/x
                  (is (eql 0 (uiop:wait-process process)))))))
         (when (uiop:process-alive-p process)
           (uiop:terminate-process process :urgent t))))))
+
+;;; skein dev natively (M2.6, D-081): the same scenario, with the program built by skeinc
+;;; with --eval and run with SKEIN_DEV set, as skein dev runs it.
+
+(defun native-dev-build (dir file)
+  "Build FILE (in DIR) with skeinc --eval, bootstrapping skeinc if needed; return the
+executable's native path."
+  (let* ((exe (uiop:native-namestring
+               (merge-pathnames (format nil "~A~:[~;.exe~]" (pathname-name file)
+                                        (string= (skein.platform:os-name) "windows"))
+                                dir)))
+         (skeinc (skein.cli::bootstrap-compiler *error-output* *error-output*))
+         (code (skein.cli::run-native skeinc (list "build" file "--eval" "-o" exe)
+                                      *error-output* *error-output* :directory dir)))
+    (is (eql 0 code) "skeinc build --eval ~A failed" file)
+    exe))
+
+(test dev-fix-and-retry-frame-natively
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("loop.skn" "(ns devloop (:require [skein.game :as game]))
+(defonce frames (atom 0))
+(defn value-for [n] (if (= n 3) (error \"bad frame\" n) (* n 10)))
+(defn frame [] (let [n (swap! frames inc)] (println \"frame\" n (value-for n)) (sleep 0.05)))
+(defn -main [& args]
+  (println \"args\" args)
+  (game/run-loop {:frame frame :running? (fn [] (< @frames 5))})
+  (println \"finished\"))
+"))
+        (let* ((exe (native-dev-build dir "loop.skn"))
+               (process (sb-ext:run-program exe (list "x") :wait nil :input :stream
+                                                           :output :stream :error :output
+                                                           :directory (uiop:native-namestring dir)
+                                                           :environment
+                                                           (cons "SKEIN_DEV=none"
+                                                                 (sb-ext:posix-environ))))
+               (buffer (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+               (lock (sb-thread:make-mutex))
+               (input (sb-ext:process-input process)))
+          (collect-output (sb-ext:process-output process) buffer lock)
+          (unwind-protect
+               (block scenario
+                 (flet ((wait (text &optional (start 0))
+                          (or (wait-for-output buffer lock text :start start)
+                              (progn (fail "timed out waiting for ~S in:~%~A" text buffer)
+                                     (return-from scenario))))
+                        (say (line)
+                          (format input "~A~%" line)
+                          (finish-output input)))
+                   (let ((pos (wait "error in thread")))
+                     (is (search "args (x)" buffer))
+                     (is (search "frame 2 20" buffer))
+                     (wait "0: retry-frame" pos)
+                     ;; Fix the bug; the watcher reloads the file while the program waits.
+                     (sleep 1.1)
+                     (let ((text (uiop:read-file-string (merge-pathnames "loop.skn" dir))))
+                       (with-open-file (s (merge-pathnames "loop.skn" dir) :direction :output
+                                                                           :if-exists :supersede)
+                         (write-string (let ((bad "(if (= n 3) (error \"bad frame\" n) (* n 10))"))
+                                         (concatenate 'string
+                                                      (subseq text 0 (search bad text))
+                                                      "(* n 100)"
+                                                      (subseq text (+ (search bad text)
+                                                                      (length bad)))))
+                                       s)))
+                     (setf pos (wait "; reloaded loop.skn" pos))
+                     ;; Forms typed now run in the failing fiber, in the program's namespace.
+                     (say "(value-for 3)")
+                     (setf pos (wait "300" pos))
+                     (say "0")
+                     (wait "; resumed" pos)
+                     (setf pos (wait "frame 4 400" pos))
+                     (wait "finished" pos)
+                     (say ":quit")
+                     (loop repeat 600 while (sb-ext:process-alive-p process) do (sleep 0.05))
+                     (is (not (sb-ext:process-alive-p process))
+                         "skein dev did not exit after :quit")
+                     (unless (sb-ext:process-alive-p process)
+                       (is (eql 0 (sb-ext:process-exit-code process)))))))
+            (when (sb-ext:process-alive-p process)
+              (sb-ext:process-kill process 9)))))))
+
+(test repl-server-natively
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("serve.skn" "(ns serve) (defn -main [& args] (sleep 30))"))
+        (let* ((exe (native-dev-build dir "serve.skn"))
+               ;; Port 0: the program listens on a free port, which it prints first.
+               (process (sb-ext:run-program exe '() :wait nil :input :stream :output :stream
+                                                    :error :output
+                                                    :directory (uiop:native-namestring dir)
+                                                    :environment (cons "SKEIN_DEV=0"
+                                                                       (sb-ext:posix-environ)))))
+          (unwind-protect
+               (let* ((line (read-line (sb-ext:process-output process)))
+                      (port (parse-integer line :start (+ (search "localhost:" line) 10)
+                                                :junk-allowed t))
+                      (socket (make-instance 'sb-bsd-sockets:inet-socket :type :stream
+                                                                         :protocol :tcp)))
+                 (sb-bsd-sockets:socket-connect socket #(127 0 0 1) port)
+                 (let ((stream (sb-bsd-sockets:socket-make-stream
+                                socket :input t :output t :element-type 'character
+                                       :external-format :utf-8 :buffering :full)))
+                   (unwind-protect
+                        (progn
+                          (format stream "(+ 20 22)~%(/ 1 0)~%0~%(str \"a\" \"b\")~%~
+                                          (println \"to the client\")~%:quit~%")
+                          (finish-output stream)
+                          (let* ((buffer (make-string-output-stream))
+                                 (reader (sb-thread:make-thread
+                                          (lambda ()
+                                            (loop for l = (ignore-errors (read-line stream nil nil))
+                                                  while l do (write-line l buffer)))
+                                          :name "test socket reader"))
+                                 (done (sb-thread:join-thread reader :timeout 30
+                                                                     :default :timeout))
+                                 (got (get-output-stream-string buffer)))
+                            (is (not (eq done :timeout))
+                                "the server did not close the connection after :quit")
+                            ;; What the client's code prints comes to the client.
+                            (is (repl-has got "Skein" "serve=> 42" "error: " "0: abort"
+                                          "; aborted" "serve=> \"ab\"" "to the client" "nil")
+                                "server transcript:~%~A" got)))
+                     (close stream))))
+            (when (sb-ext:process-alive-p process)
+              (sb-ext:process-kill process 9)))))))
