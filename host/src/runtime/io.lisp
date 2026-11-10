@@ -33,6 +33,38 @@
   ;; True if a file or directory exists at PATH.
   (bool (ignore-errors (probe-file (native-path path)))))
 
+(defcore "%make-directories" (path)
+  ;; Make the directory PATH and any missing parents. True, or false if it can't. (For
+  ;; packaging, M1.11.)
+  (bool (ignore-errors
+         (ensure-directories-exist (uiop:ensure-directory-pathname (native-path path)))
+         t)))
+
+(defcore "%copy-file" (from to)
+  ;; Copy the file FROM to TO, replacing it. True, or false if it can't.
+  (bool (ignore-errors (uiop:copy-file (native-path from) (native-path to)) t)))
+
+(defcore "%delete-tree" (path)
+  ;; Delete the file or directory tree PATH. True, or false if it can't (or isn't there).
+  (let ((p (native-path path)))
+    (bool (ignore-errors
+           (let ((dir (uiop:directory-exists-p p)))
+             (if dir
+                 (uiop:delete-directory-tree dir :validate t)
+                 (delete-file p))
+             t)))))
+
+(defcore "%list-directory" (path)
+  ;; The names in the directory PATH, sorted, each directory's ending with /; nil if it
+  ;; can't be read.
+  (let ((dir (uiop:directory-exists-p (native-path path))))
+    (when dir
+      (vector-from-list
+       (sort (append (mapcar #'file-namestring (uiop:directory-files dir))
+                     (mapcar (lambda (d) (format nil "~A/" (car (last (pathname-directory d)))))
+                             (uiop:subdirectories dir)))
+             #'string<)))))
+
 (defcore "%run-process" (argv dir)
   ;; Run ARGV (a vector of strings: the program, then its arguments) without a shell, in
   ;; DIR (a string, or nil for the current directory). Returns {:exit :out :err}, or nil

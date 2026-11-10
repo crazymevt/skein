@@ -873,7 +873,7 @@ skein build --target x86_64-windows-gnu --profile release
 ### 19.4 Packaging
 `skein package --target ...` produces a distributable folder or archive: the executable, bundled dynamic libraries (with rpath/install names fixed), and assets. It should be Steam-depot friendly.
 
-Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:native` libraries next to it and the `:assets` directories; a macOS target gets `dist/<target>/<Name>.app` (`Contents/MacOS`, `Contents/Frameworks`, `Contents/Resources`, `Info.plist`). Native programs look for C libraries in their own directory first, and in `../Frameworks` on macOS. Signing, notarization and archives come later.
+Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:native` libraries next to it and the `:assets` directories; a macOS target gets `dist/<target>/<name>.app` (`Contents/MacOS`, `Contents/Frameworks`, `Contents/Resources`, and an `Info.plist` whose bundle identifier is `:bundle-id`, default `skein.<name>`). `skein package` builds with the release profile unless `--profile` says otherwise. Native programs look for C libraries in their own directory first, and in `../Frameworks` on macOS. Signing, notarization and archives come later.
 
 ## 20. Tooling
 

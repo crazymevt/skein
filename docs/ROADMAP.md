@@ -237,7 +237,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   1. ✅ `--target` and `--profile` in `skeinc build`: the runtime and the program cross-compiled for each §19.1 target, Linux against glibc 2.28; `dev` and `release` profiles.
   2. ✅ `project.skn`: `skeinc build` with no file builds the project's `:main`, finding namespaces in `:paths`.
   3. ✅ `./skein build` and `./skein package` run `skeinc`, bootstrapping it if needed; the Lisp backend moves behind an internal command.
-  4. `skein package`: a folder with the executable, its `:native` libraries and its `:assets`, or a `.app` for macOS; the runtime finds libraries next to the executable first.
+  4. ✅ `skein package`: a folder with the executable, its `:native` libraries and its `:assets`, or a `.app` for macOS; the runtime finds libraries next to the executable first.
   5. CI packages `hello` for all three targets on Linux and runs each package on its platform.
 
 **Exit:** from one machine, packaged `hello` builds for all three targets run on their platforms in CI.
@@ -323,3 +323,4 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - A condition type named by a symbol at run time (`(error 'foo)`) is found by its unique unqualified name, until namespaces exist at run time (M1.8).
   - Some native messages differ from Phase 0's, where Phase 0 shows CL's wording (index errors, returning to an exited block).
   - Unwinding through foreign C frames: decided in M1.10 (D-068). No non-local exit leaves a callback.
+- Packages (D-069): a packaged program has no way yet to find its assets (its working directory isn't its folder, and a `.app`'s are in `Contents/Resources`); add a function for the program's resource directory when a demo loads files. Code signing, notarization and archives are still to do.

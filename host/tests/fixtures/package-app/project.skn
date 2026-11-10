@@ -1,0 +1,11 @@
+;; A project that skein package is tested with (M1.11): a C library it bundles, which the
+;; packaged program finds beside itself, and assets. host/tools/bootstrap.sh builds the
+;; library into native/out/ first.
+{:name "package-app"
+ :version "1.2.3"
+ :main package-app.main/-main
+ :paths ["src"]
+ :assets ["assets"]
+ :native {:libs {:macos ["native/out/libpkgdemo.dylib"]
+                 :linux ["native/out/libpkgdemo.so"]
+                 :windows ["native/out/pkgdemo.dll"]}}}

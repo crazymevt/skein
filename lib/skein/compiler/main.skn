@@ -412,6 +412,15 @@ like game.main/-main), :paths and :assets."
       (bad ":name must be a string, like \"game\""))
     (when-not (and (symbol? (:main project)) (namespace (:main project)))
       (bad ":main must be a qualified symbol, like game.main/-main"))
+    (let [native (:native project)
+          libs (:libs native)]
+      (when-not (and (or (nil? native) (map? native)) (or (nil? libs) (map? libs))
+                     (every? (fn [[os files]]
+                               (and (contains? #{:macos :windows :linux} os) (vector? files)
+                                    (every? string? files)))
+                             libs))
+        (bad ":native must look like {:libs {:macos [\"vendor/libfoo.dylib\"] :windows "
+             "[\"vendor/foo.dll\"] :linux [\"vendor/libfoo.so\"]}}")))
     (assoc project :paths (dirs :paths ["src"]) :assets (dirs :assets []))))
 
 (defn build-project
@@ -431,12 +440,85 @@ the project's :name, in the current directory."
                                :main-name (name main)))))
 
 ;;; ------------------------------------------------------------------------------------
+;;; Packages (DESIGN §19.4, M1.11, D-069)
+
+(defn- make-directories! [dir]
+  (when-not (%make-directories dir) (fail "cannot make the directory " dir)))
+
+(defn- copy-file! [from to]
+  (when-not (%copy-file from to) (fail "cannot copy " from " to " to)))
+
+(defn- copy-tree!
+  "Copy the directory from into to (both ending with /), making it."
+  [from to]
+  (make-directories! to)
+  (doseq [n (or (%list-directory from) (fail "cannot read the directory " from))]
+    (if (= (last n) \/)
+      (copy-tree! (str from n) (str to n))
+      (copy-file! (str from n) (str to n)))))
+
+(defn- xml-text [s]
+  (apply str (map (fn [c] (case c \& "&amp;" \< "&lt;" \> "&gt;" \" "&quot;" c)) s)))
+
+(defn- info-plist
+  "A macOS app's Info.plist for project, whose executable is named exe."
+  [project exe]
+  (let [entry (fn [k v] (str "  <key>" k "</key>\n  <string>" (xml-text v) "</string>\n"))
+        version (or (:version project) "0.0.0")]
+    (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+         "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+         "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+         "<plist version=\"1.0\">\n<dict>\n"
+         (entry "CFBundleExecutable" exe)
+         (entry "CFBundleIdentifier" (or (:bundle-id project) (str "skein." (:name project))))
+         (entry "CFBundleName" (:name project))
+         (entry "CFBundlePackageType" "APPL")
+         (entry "CFBundleShortVersionString" version)
+         (entry "CFBundleVersion" version)
+         "  <key>NSHighResolutionCapable</key>\n  <true/>\n"
+         "</dict>\n</plist>\n")))
+
+(defn package-project
+  "Package the project whose project.skn is at path for opts' :target (default: this
+machine) and :profile (default release): dist/<target>/<name>/ with the executable, the
+target's :native libraries beside it and the :assets directories, or for macOS
+dist/<target>/<name>.app (Contents/MacOS, Frameworks, Resources and Info.plist). Any
+earlier package there is replaced. Returns the package's path."
+  [path {:keys [target profile] :as opts}]
+  (let [project (read-project path)
+        target (or target (%host-target))
+        os (target-os target)
+        nm (:name project)
+        exe (str nm (if (= os :windows) ".exe" ""))
+        top (str "dist/" target "/" nm (if (= os :macos) ".app/" "/"))
+        [exe-dir lib-dir asset-dir] (if (= os :macos)
+                                      [(str top "Contents/MacOS/") (str top "Contents/Frameworks/")
+                                       (str top "Contents/Resources/")]
+                                      [top top top])]
+    (%delete-tree top)
+    (make-directories! exe-dir)
+    (build-project path (assoc opts :target target :profile (or profile "release")
+                               :output (str exe-dir exe)))
+    ;; zig writes Windows debug information beside the executable; a package leaves it out.
+    (when (= os :windows) (%delete-tree (str exe-dir nm ".pdb")))
+    (doseq [lib (get (:libs (:native project)) os)]
+      (make-directories! lib-dir)
+      (copy-file! (str (directory-of path) lib) (str lib-dir (file-name lib))))
+    (doseq [dir (:assets project)]
+      (copy-tree! dir (str asset-dir (file-name (subs dir 0 (dec (count dir)))) "/")))
+    (when (= os :macos)
+      (io/write-file (str top "Contents/Info.plist") (info-plist project exe)))
+    top))
+
+;;; ------------------------------------------------------------------------------------
 ;;; The command line
 
 (def ^:private usage
   (str "Usage: skeinc build [file.skn] [-o output] [--target T] [--profile dev|release]"
        " [--release] [--keep-c]\n"
-       "With no file, it builds the project that ./project.skn describes."))
+       "       skeinc package [--target T] [--profile dev|release]\n"
+       "With no file, build builds the project that ./project.skn describes; package puts it"
+       " in dist/."))
 
 (defn- parse-build-args [args]
   (loop [args (seq args) opts {}]
@@ -460,10 +542,17 @@ the project's :name, in the current directory."
 with no file, the project in the current directory."
   [& args]
   (let [[command & more] args]
-    (when-not (= command "build") (fail usage))
+    (when-not (contains? #{"build" "package"} command) (fail usage))
     (let [opts (parse-build-args more)
           file (:file opts)]
-      (cond file
+      (cond (= command "package")
+            (do (when (or file (:output opts) (:keep-c opts))
+                  (fail "skeinc package: takes only --target and --profile; it packages the "
+                        "project in the current directory"))
+                (when-not (io/file-exists? "project.skn")
+                  (fail "skeinc package: expected a project.skn in the current directory"))
+                (println "packaged" (package-project "project.skn" opts)))
+            file
             (do (when-not (io/file-exists? file) (fail "skeinc build: file not found: " file))
                 (println "built" (build-program file opts)))
             (io/file-exists? "project.skn")

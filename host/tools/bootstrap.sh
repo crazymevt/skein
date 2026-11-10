@@ -70,6 +70,41 @@ test_compiler() {
     exit 1
   fi
   echo "skeinc: hello-app ok"
+  # Packages (M1.11): the package-app fixture, with the C library it bundles built for
+  # each P0 target, packaged for each. The one for this machine runs from another
+  # directory, so it finds the library only beside itself.
+  local app=host/tests/fixtures/package-app
+  mkdir -p "$app/native/out"
+  for target in aarch64-macos x86_64-windows-gnu x86_64-linux-gnu; do
+    case "$target" in
+      *macos) lib=libpkgdemo.dylib; dir="dist/$target/package-app.app/Contents/"
+              files="MacOS/package-app Frameworks/libpkgdemo.dylib Info.plist"
+              files="$files Resources/assets/data/note.txt"
+              run="${dir}MacOS/package-app" ;;
+      *windows-gnu) lib=pkgdemo.dll; dir="dist/$target/package-app/"
+                    files="package-app.exe pkgdemo.dll assets/data/note.txt"
+                    run="${dir}package-app.exe" ;;
+      *) lib=libpkgdemo.so; dir="dist/$target/package-app/"
+         files="package-app libpkgdemo.so assets/data/note.txt"
+         run="${dir}package-app" ;;
+    esac
+    "${SKEIN_ZIG:-zig}" cc -target "$target" -shared -o "$app/native/out/$lib" "$app/native/pkgdemo.c"
+    (cd "$app" && "$OLDPWD/$skeinc" package --target "$target" > /dev/null)
+    for f in $files; do
+      if [ ! -f "$app/$dir$f" ]; then
+        echo "skeinc: the package for $target has no $f"
+        exit 1
+      fi
+    done
+    if [ "$target" = "$host" ]; then
+      answer=$(cd build && "../$app/$run" | tr -d '\r')
+      if [ "$answer" != "answer: 42" ]; then
+        echo "skeinc: the package for $target didn't find its library: $answer"
+        exit 1
+      fi
+    fi
+    echo "skeinc: package for $target ok"
+  done
   # Programs that only skeinc compiles (the FFI, D-064), built by skeinc, print what
   # `skein run` prints, and every line a ";; stderr: " comment gives on standard error.
   for program in host/tests/fixtures/native-ffi*.skn; do

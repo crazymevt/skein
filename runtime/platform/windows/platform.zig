@@ -198,6 +198,10 @@ pub const path_list_separator = ';';
 /// Directories searched for C libraries before the system's places: none on Windows.
 pub const library_directories: []const []const u8 = &.{};
 
+/// Where a packaged program keeps its C libraries, relative to the executable's directory
+/// (D-069): beside it.
+pub const executable_library_directories: []const []const u8 = &.{""};
+
 extern "kernel32" fn LoadLibraryW(name: [*:0]const u16) callconv(.winapi) ?*anyopaque;
 extern "kernel32" fn GetProcAddress(module: *anyopaque, name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
 extern "kernel32" fn GetLastError() callconv(.winapi) u32;

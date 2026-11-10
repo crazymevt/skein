@@ -23,3 +23,6 @@ zig-out/
 .#*
 .vscode/
 .idea/
+
+# The C library that host/tests/fixtures/package-app bundles (built by the tests)
+host/tests/fixtures/package-app/native/out/

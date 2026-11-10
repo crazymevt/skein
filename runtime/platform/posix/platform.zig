@@ -185,6 +185,13 @@ pub const library_directories: []const []const u8 = if (builtin.os.tag == .macos
 else
     &.{"/usr/local/lib/"};
 
+/// Where a packaged program keeps its C libraries, relative to the executable's directory
+/// (D-069): beside it, and in a macOS app's Contents/Frameworks.
+pub const executable_library_directories: []const []const u8 = if (builtin.os.tag == .macos)
+    &.{ "", "../Frameworks/" }
+else
+    &.{""};
+
 extern "c" fn dlopen(path: ?[*:0]const u8, mode: c_int) ?*anyopaque;
 extern "c" fn dlsym(handle: ?*anyopaque, symbol: [*:0]const u8) ?*anyopaque;
 extern "c" fn dlerror() ?[*:0]const u8;

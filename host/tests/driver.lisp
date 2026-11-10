@@ -107,6 +107,18 @@ the error message."
                     (replace-all expr "DIR" (directory-string dir)))))
       (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
 
+(test driver-package-checks-its-arguments
+  ;; skein package (M1.11) packages the project in the current directory, nothing else.
+  (driver-function "package-project")
+  (flet ((main-error (&rest args)
+           (ev-output (format nil "(ns driver-package (:require [skein.compiler.main :as m]))
+                                   (prn (try (m/-main ~{~S~^ ~})
+                                             (catch error e (condition-message e))))"
+                              args))))
+    (is (search "takes only --target and --profile" (main-error "package" "x.skn")))
+    (is (search "takes only --target and --profile" (main-error "package" "-o" "out")))
+    (is (search "Usage: skeinc build" (main-error "pack")))))
+
 (test driver-projects
   ;; project.skn (M1.11, D-069): read as data and checked; :paths default to ["src"].
   (let ((out (project-outcome
@@ -127,7 +139,11 @@ the error message."
     (fails-with "{:name \"a\" :main a.main/-main :paths \"src\"}"
                 ":paths must be a vector of directories")
     (fails-with "{:name \"a\" :main a.main/-main :assets [:x]}"
-                ":assets must be a vector of directories"))
+                ":assets must be a vector of directories")
+    (dolist (native '("[]" "{:libs []}" "{:libs {:beos [\"x\"]}}" "{:libs {:linux \"x.so\"}}"
+                      "{:libs {:linux [:x]}}"))
+      (fails-with (format nil "{:name \"a\" :main a.main/-main :native ~A}" native)
+                  ":native must look like {:libs {:macos [")))
   ;; The :main namespace must be on the :paths, and define the :main function.
   (let ((out (project-outcome '(("project.skn" "{:name \"a\" :main nope.main/-main}"))
                               "(m/build-project \"DIRproject.skn\" {})")))

@@ -1,0 +1,12 @@
+(ns package-app.main
+  "Calls into a C library that only its package holds, so it runs only if the library is
+found beside the executable."
+  (:require [skein.ffi :as ffi]))
+
+(ffi/deflibrary pkgdemo {:macos "libpkgdemo.dylib" :linux "libpkgdemo.so"
+                         :windows "pkgdemo.dll"})
+
+(ffi/defcfun answer "pkgdemo_answer" i32 [])
+
+(defn -main [& args]
+  (println "answer:" (answer)))

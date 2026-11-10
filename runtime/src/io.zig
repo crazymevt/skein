@@ -27,7 +27,7 @@ var io_ready = false;
 
 /// The std.Io instance, made on first use with the process's environment (to find
 /// programs on PATH).
-fn stdIo() std.Io {
+pub fn stdIo() std.Io {
     io_lock.lock();
     defer io_lock.unlock();
     if (!io_ready) {
@@ -53,7 +53,7 @@ fn copyPath(v: Value) []u8 {
     return copyString(v, "a path must be a string");
 }
 
-/// A Skein string of `bytes`, or null if they aren't UTF-8 (Phase 0 can't decode them).
+/// This machine's zig target triple (DESIGN §19.1).
 const host_target = @tagName(builtin.cpu.arch) ++ switch (builtin.os.tag) {
     .macos => "-macos",
     .linux => "-linux-gnu",
@@ -61,6 +61,7 @@ const host_target = @tagName(builtin.cpu.arch) ++ switch (builtin.os.tag) {
     else => @compileError("the Skein runtime supports macOS, Linux and Windows"),
 };
 
+/// A Skein string of `bytes`, or null if they aren't UTF-8 (Phase 0 can't decode them).
 fn decoded(bytes: []const u8) ?Value {
     if (!std.unicode.utf8ValidateSlice(bytes)) return null;
     return string.make(bytes);
@@ -121,6 +122,80 @@ fn fileExists(path: Value) Value {
     var call: ExistsCall = .{ .path = p };
     gc.blocking(existsBlocking, &call);
     return Value.fromBool(call.exists);
+}
+
+// Directories and copies, for packaging (M1.11, D-069). Each runs as a blocking call.
+
+const PathCall = struct { a: []const u8, b: []const u8 = "", ok: bool = false };
+
+fn makeDirectoriesBlocking(arg: ?*anyopaque) void {
+    const c: *PathCall = @ptrCast(@alignCast(arg));
+    std.Io.Dir.cwd().createDirPath(stdIo(), c.a) catch return;
+    c.ok = true;
+}
+
+fn copyFileBlocking(arg: ?*anyopaque) void {
+    const c: *PathCall = @ptrCast(@alignCast(arg));
+    const cwd = std.Io.Dir.cwd();
+    cwd.copyFile(c.a, cwd, c.b, stdIo(), .{}) catch return;
+    c.ok = true;
+}
+
+fn deleteTreeBlocking(arg: ?*anyopaque) void {
+    const c: *PathCall = @ptrCast(@alignCast(arg));
+    std.Io.Dir.cwd().deleteTree(stdIo(), c.a) catch return;
+    c.ok = true;
+}
+
+/// Run `f` on the path strings `a` and `b` (or "") as a blocking call; true if it worked.
+fn pathCall(f: *const fn (?*anyopaque) void, a: Value, b: ?Value) Value {
+    const pa = copyPath(a);
+    defer alloc.free(pa);
+    const pb = if (b) |v| copyPath(v) else "";
+    defer if (b != null) alloc.free(pb);
+    var call: PathCall = .{ .a = pa, .b = pb };
+    gc.blocking(f, &call);
+    return Value.fromBool(call.ok);
+}
+
+const ListCall = struct { path: []const u8, names: std.ArrayList([]u8) = .empty, ok: bool = false };
+
+fn listBlocking(arg: ?*anyopaque) void {
+    const c: *ListCall = @ptrCast(@alignCast(arg));
+    const io = stdIo();
+    var dir = std.Io.Dir.cwd().openDir(io, c.path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (it.next(io) catch return) |entry| {
+        const slash = entry.kind == .directory;
+        const n = alloc.alloc(u8, entry.name.len + @intFromBool(slash)) catch return;
+        @memcpy(n[0..entry.name.len], entry.name);
+        if (slash) n[entry.name.len] = '/';
+        c.names.append(alloc, n) catch return;
+    }
+    c.ok = true;
+}
+
+fn lessThan(_: void, a: []u8, b: []u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+/// The names in the directory at `path`, sorted, each directory's ending with /; nil if
+/// it can't be read.
+fn listDirectory(path: Value) Value {
+    const p = copyPath(path);
+    defer alloc.free(p);
+    var call: ListCall = .{ .path = p };
+    defer {
+        for (call.names.items) |n| alloc.free(n);
+        call.names.deinit(alloc);
+    }
+    gc.blocking(listBlocking, &call);
+    if (!call.ok) return Value.nil;
+    std.mem.sort([]u8, call.names.items, {}, lessThan);
+    var out = coll.vectorOf(&.{});
+    for (call.names.items) |n| out = coll.vectorConj(out, decoded(n) orelse continue);
+    return out;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -224,6 +299,27 @@ pub const entries = [_]Entry{
     .{ .name = "%file-exists?", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return fileExists(a[0]);
+        }
+    }.f },
+    // For packaging (M1.11): true, or false if it failed.
+    .{ .name = "%make-directories", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return pathCall(makeDirectoriesBlocking, a[0], null);
+        }
+    }.f },
+    .{ .name = "%copy-file", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return pathCall(copyFileBlocking, a[0], a[1]);
+        }
+    }.f },
+    .{ .name = "%delete-tree", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return pathCall(deleteTreeBlocking, a[0], null);
+        }
+    }.f },
+    .{ .name = "%list-directory", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return listDirectory(a[0]);
         }
     }.f },
     .{ .name = "%run-process", .min = 2, .max = 2, .impl = struct {

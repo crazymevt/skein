@@ -78,6 +78,7 @@ These are defined in M0.1; update this section if they change.
 | `./skein package [--target T]` | package the project in the current directory into `dist/` (runs `build/skeinc package`) |
 | `make compiler` | bootstrap the native compiler, `build/skeinc` (`./skein bootstrap`: Phase 0's C backend builds a first compiler, which builds it) |
 | `build/skeinc build [file.skn] [-o out] [--target T] [--profile dev\|release]` | compile a program natively with the compiler written in Skein, for any §19.1 target; with no file, the `project.skn` in the current directory |
+| `build/skeinc package [--target T] [--profile P]` | package the project in the current directory: `dist/<target>/<name>/`, or `<name>.app` for macOS |
 | `./skein dev <file.skn> [args]` | run with file reloading and a REPL (terminal and localhost:5555) |
 | `make bench` | run the benchmarks in `bench/` |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |

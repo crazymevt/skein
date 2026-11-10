@@ -522,10 +522,18 @@ fn tryLoad(path: []const u8, why: []u8) bool {
     return true;
 }
 
-/// Try `name` in SKEIN_LIBRARY_PATH's directories, the usual package-manager directories
-/// for this OS, then the system's search.
+/// Try `name` next to the executable (and where a package keeps libraries, D-069), in
+/// SKEIN_LIBRARY_PATH's directories, the usual package-manager directories for this OS,
+/// then the system's search.
 fn loadOne(name: []const u8, why: []u8) bool {
     var buf: [1024]u8 = undefined;
+    var exe_buf: [1024]u8 = undefined;
+    if (std.process.executableDirPath(@import("io.zig").stdIo(), &exe_buf)) |n| {
+        for (platform.executable_library_directories) |sub| {
+            const path = std.fmt.bufPrint(&buf, "{s}/{s}{s}", .{ exe_buf[0..n], sub, name }) catch continue;
+            if (tryLoad(path, why)) return true;
+        }
+    } else |_| {}
     if (std.c.getenv("SKEIN_LIBRARY_PATH")) |env| {
         var it = std.mem.splitScalar(u8, std.mem.span(env), platform.path_list_separator);
         while (it.next()) |dir| {
