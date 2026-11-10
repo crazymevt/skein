@@ -189,6 +189,18 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a ./skein run examples/sdl/window.skn
 
+      # M1.10: the same example built natively by skeinc, which make test bootstrapped.
+      - name: SDL3 window example, native
+        run: |
+          exe=""
+          if [ "$RUNNER_OS" = Windows ]; then exe=".exe"; fi
+          build/skeinc$exe build examples/sdl/window.skn -o "build/window$exe"
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a "build/window$exe"
+          else
+            "build/window$exe"
+          fi
+
       # M0.12: the demo game plays itself for 600 frames and must keep its 99th-percentile
       # frame within the 60 fps budget.
       - name: Driftrock at 60 fps
