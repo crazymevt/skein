@@ -1181,3 +1181,18 @@ Date: 2026-11-10 · Status: Accepted
 - **Alternatives:** setting `slime-protocol-version` to `ignore`, which would hide the question for every Lisp; a major mode of Skein's own.
 - **Consequences:** SLIME's version is pinned in CI; a new SLIME release is tried by changing `SLIME_VERSION`.
 
+## D-088: Supervisors natively
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.8 (DESIGN §10): an unhandled error in a fiber goes to its supervisor, the enclosing nursery and ultimately the root; in development the root opens the debugger, in release builds a policy applies. Natively today a task's error is caught where the task ends: the task fails, and its nursery cancels the others and re-signals the failure where it joins (Phase 0's behaviour, D-037). Only the main fiber's unhandled errors reach the debugger (D-081). DESIGN named the policies but not how a nursery chooses one, how `:restart-fiber` stops, or where a task's error goes first in development.
+- **Decision** (Jessie chose the first four):
+  - **Syntax:** an option map after the nursery's name, `(with-nursery [n {:on-error :restart-fiber}] ...)`. No map means `:cancel-siblings`. The map leaves room for more keys: `:max-restarts` and `:within`.
+  - **`:restart-fiber`** runs the task's function again from the start in a new fiber, at most 3 times within 5 seconds (`:max-restarts`, `:within`), then fails the task as `:cancel-siblings` does, as Erlang's supervisors escalate.
+  - **In `skein dev`,** an unhandled error in a task opens the debugger in the task's fiber first (SLDB or the text REPL), as the main fiber's do, with an `abort` restart that fails the task; after that the nursery's policy applies. So a task can be fixed and resumed, as DESIGN says.
+  - **`:ignore`** prints one line on stderr (`error in task (ignored): ...`), so failures aren't silent; the task's `deref` still re-signals its error.
+  - **`:crash`** reports the error as an unhandled error in the main fiber does, with the active restarts, and exits with status 1.
+  - **The root:** the main fiber's unhandled error is reported and exits with status 1, as today; a detached `future` keeps its error for `deref`. Without a debugger (`skein run`, release builds) a task's error goes straight to its nursery's policy.
+  - **Phase 0** isn't extended (D-072): it accepts the option map, applies `:cancel-siblings`, and signals an error for the other policies, which native fixtures with expected output test instead of `skein host run`.
+  - **Steps:** the debugger for tasks; the policies; DESIGN, and `skein.jobs` and `skein.game` checked against them.
+- **Alternatives:** a keyword after the nursery's name (no room for limits), or a policy per `spawn` as well; restarting forever, or a fixed count without a time window; applying the policy first in development, so the debugger would only see the failure at the main fiber, after the task's stack was gone; ignoring silently.
+- **Consequences:** `with-nursery` takes an optional map. Task errors in `skein dev` stop in the debugger where they used to cancel the task's siblings at once.
+

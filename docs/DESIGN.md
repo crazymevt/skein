@@ -426,6 +426,7 @@ Details (D-034):
 - An unhandled `error` in a fiber **suspends the fiber** and reports it to the fiber's **supervisor**. By default that's the enclosing nursery, and ultimately the root supervisor.
 - In **development**, the root supervisor opens the debugger at the REPL: inspect the stack, redefine code, then pick a restart. The fiber resumes.
 - In **release builds**, supervisors apply a policy: `:cancel-siblings` (the default for nurseries), `:restart-fiber`, `:ignore` or `:crash`.
+- A nursery's policy is its option map's `:on-error`: `(with-nursery [n {:on-error :restart-fiber}] ...)` (M2.8, D-088). `:cancel-siblings` cancels the other tasks and re-signals the failure where the nursery joins; `:ignore` lets the task fail alone and prints one line on stderr; `:crash` reports the error as an unhandled one and exits with status 1; `:restart-fiber` runs the task's function again in a new fiber, at most `:max-restarts` times (3) within `:within` seconds (5.0), then fails as `:cancel-siblings`. In `skein dev` the debugger comes first, in the failing task's fiber; its `abort` restart fails the task, and then the policy applies. A failed task's `deref` re-signals its error under every policy.
 - The game loop helper (`skein.game/run-loop`) establishes `retry-frame` and `skip-frame` restarts around each frame.
 
 ## 11. Macros
