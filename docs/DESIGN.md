@@ -704,6 +704,10 @@ Phase 0 details (D-039):
 - **Game loop:** `skein.game/run-loop` takes `:frame` (once per frame, e.g. input), `:update` (called with the fixed timestep `:step`, default 1/60 s, as often as the clock requires, at most `:max-steps` times per frame, default 5), `:render` (once per frame, with the fraction of a step left over), and `:running?`. Each call runs inside `(skein.game/with-frame-restarts ...)`, which establishes `retry-frame` (run that call again) and `skip-frame` (give up on it) (D-040).
 - **Source root:** if the main file declares a namespace that matches its path (`src/game/main.skn` declaring `game.main`), `skein run` and `skein dev` also look for namespaces under that root (`src/`) (D-040).
 
+Evaluating code (M2.5, D-078):
+- **`(eval form)`** evaluates a form given as data in the current namespace and returns its value; **`(load-file path)`** evaluates a file's forms in order and returns the last value; **`(reload 'ns)`** loads a namespace's source file again (above). All three are in skein.core.
+- **Native programs** can evaluate code when they are built with the dev profile, which includes the reader, the expander and an evaluator (a closure compiler in the runtime), and registers the program's namespaces and vars at start-up. In a release build the three functions signal an error saying they need a dev build. Reloaded code runs in the evaluator until hot reload of compiled code (M2.9); where it declares types, the evaluator computes them unboxed.
+
 ## 16. Compiler architecture
 
 ```

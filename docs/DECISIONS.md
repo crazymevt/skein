@@ -1055,3 +1055,22 @@ Date: 2026-11-10 · Status: Accepted
   - A read of a dynamic var walks the condition chain: its cost grows with the frames above it. Hot dynamic reads could cache the innermost binding per fiber later.
   - The interpreter of phase-1 code (D-061) doesn't support `binding` yet; M2.5's evaluator needs it.
   - A name that resolves to nothing when compiled is assumed to belong to the namespace being compiled; if a later `:refer` brings in a var of that name, the binding still means the namespace's own var.
+
+## D-078: Evaluating code in native programs
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.5 lets a running native program evaluate code, which the native REPL and `skein dev` (M2.6) build on. Phase 0 has no `eval` in skein.core; its REPL defines `reload`. Native vars have no table by name (D-077), and skeinc's namespaces are a model separate from the running program's vars (D-060). The exit asks for interpreted code within 10× of compiled code on n-body, which an evaluator written in Skein can't reach: it boxes every float.
+- **Decision** (Jessie chose the first three):
+  - **API:** skein.core gets `(eval form)` (a form as data, evaluated in the current namespace; returns its value), `(load-file path)` (evaluates a file's forms in order; returns the last value) and `(reload 'ns)` (loads the namespace's source file again), in Phase 0 too, so native results can be compared with `skein run`.
+  - **Dev builds only:** a program built with the dev profile includes the reader, the expander, skein.core's macros and the evaluator, and registers its namespaces and vars with the runtime at start-up. In a release build `eval`, `load-file` and `reload` signal an error saying they need a dev build.
+  - **A closure compiler in Zig** (`runtime/src/eval/`) turns the Core IR maps that the front end makes into a tree of closures, and runs them. Locals live in frame slots; interpreted functions are runtime function objects, so compiled code calls them like any other. Where code declares types (D-056), the closures compute `f64` and integer values unboxed, as the C backend does.
+  - **Runtime namespaces:** the runtime keeps namespaces with their vars by name, refers, aliases and each var's flags (macro, private, dynamic, docstring). The `%` functions the expander uses (Phase 0's `compile-env.lisp`) are implemented over them, so code evaluated in a program defines and finds the program's own vars. A dev build compiles the program's own macros in, as functions, and registers them.
+  - **Reloading** evaluates the namespace's file again with the closure compiler: its functions then run interpreted, until hot reload of compiled code (M2.9). Redefinition follows DESIGN §15.
+- **Alternatives:**
+  - No public `eval` (only `reload` and `load-file`), or the functions in a `skein.dev` namespace.
+  - The evaluator in every build, or behind a project key.
+  - The closure compiler written in Skein, with the n-body target relaxed to about 50×.
+  - Compiling evaluated code with zig cc and loading it: that is M2.9, too slow for each REPL form.
+- **Consequences:**
+  - Dev builds are bigger and register their vars at start-up; release builds are unchanged.
+  - Two evaluators exist for a while: `interp.skn` runs phase-1 code in skeinc (D-061), the Zig one runs code in programs. The Zig one could replace `interp.skn`, which would also give phase-1 code `binding` (D-077).
+  - A program's current namespace becomes runtime state, as in Phase 0: each namespace's top-level forms run in it, `-main` runs in `user` (as in Clojure), `ns` and `in-ns` change it, `load-file` restores it afterwards, and a task starts in its spawner's.
