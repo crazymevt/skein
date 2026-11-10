@@ -35,7 +35,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.3 Work-stealing scheduler | ✅ |
 | M2.4 Dynamic vars natively | ✅ |
 | M2.5 Evaluating code in native programs | ✅ |
-| M2.6 Native REPL and `skein dev` | ⬜ |
+| M2.6 Native REPL and `skein dev` | ✅ |
 | M2.7 Swank server | ⬜ |
 | M2.8 Supervisors | ⬜ |
 | M2.9 Hot reload of compiled code | ⬜ |
