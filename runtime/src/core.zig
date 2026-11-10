@@ -1364,7 +1364,7 @@ const display_names = blk: {
     break :blk n;
 };
 
-var objects: [table.len]Value = @splat(Value.nil);
+pub var objects: [table.len]Value = @splat(Value.nil);
 var objects_lock: platform.Mutex = .{};
 
 /// The function object for skein.core/`name`, or null if the runtime doesn't have it.

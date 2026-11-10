@@ -59,3 +59,23 @@ name the file, and run-process returns the exit code and both outputs.")
   (evp-is "(ns io3 (:require [skein.io :as io]))
            (try (io/read-file \"no/such/file.txt\") (catch error e (condition-message e)))"
           "\"file not found: no/such/file.txt\""))
+
+(test resource-dir
+  ;; skein.io/resource-dir (D-073) run from source: the directory with project.skn at or
+  ;; above the main file, else the main file's own directory.
+  (flet ((dir-of (dir rel)
+           (substitute #\/ #\\ (uiop:native-namestring
+                                (uiop:pathname-directory-pathname
+                                 (truename (merge-pathnames rel dir))))))
+         (run-main (dir main)
+           (with-output-to-string (*standard-output*)
+             (skein.backend.cl:run-file (merge-pathnames main dir)))))
+    (with-source-tree (dir ("app/project.skn" "{:name \"app\" :main app.main/-main}")
+                           ("app/src/app/main.skn"
+                            "(ns app.main (:require [skein.io :as io]))
+                             (defn -main [] (print (io/resource-dir)))")
+                           ("loose/tool.skn"
+                            "(ns tool (:require [skein.io :as io]))
+                             (defn -main [] (print (io/resource-dir)))"))
+      (is (string= (dir-of dir "app/project.skn") (run-main dir "app/src/app/main.skn")))
+      (is (string= (dir-of dir "loose/tool.skn") (run-main dir "loose/tool.skn"))))))

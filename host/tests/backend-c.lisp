@@ -36,12 +36,22 @@
        (let ((,file (merge-pathnames "prog.skn" ,dir)))
          ,@body))))
 
+(defun native-programs ()
+  "The programs the native tests build: examples with expected output, fixtures, n-body."
+  (append (mapcar (lambda (name)
+                    (asdf:system-relative-pathname "skein" (format nil "../examples/~A.skn" name)))
+                  '("hello" "fib" "conditions" "collections" "macros" "objects" "particles"
+                    "jobs"))
+          ;; merge-pathnames parses the wildcard; system-relative-pathname would escape it.
+          (directory (merge-pathnames "native-*.skn"
+                                      (asdf:system-relative-pathname "skein" "tests/fixtures/")))
+          (list (asdf:system-relative-pathname "skein" "../bench/nbody/main.skn"))))
+
 (defmacro native-matches (source)
   "SOURCE, built natively, prints exactly what skein run prints."
   `(if (not (zig-available-p))
        (skip "zig is not installed")
        (with-program (file ,source)
-         (backends-match-p file)
          (let ((expected (phase0-output file)))
            (multiple-value-bind (out err code) (native-run file)
              (is (eql 0 code) "native exit code ~A, stderr: ~A" code err)
@@ -53,7 +63,6 @@
   `(if (not (zig-available-p))
        (skip "zig is not installed")
        (with-program (file ,source)
-         (backends-match-p file)
          (multiple-value-bind (out err code) (native-run file)
            (declare (ignore out))
            (is (eql 1 code) "expected exit code 1, got ~A" code)
@@ -63,7 +72,6 @@
 (defmacro build-fails (source message)
   "Building SOURCE natively signals a C-BACKEND-ERROR with MESSAGE."
   `(with-program (file ,source)
-     (backends-match-p file)
      (let ((e (handler-case (progn (skein.backend.c:translate-file file) nil)
                 (skein.backend.c:c-backend-error (e) e))))
        (is (not (null e)) "building should fail with ~S" ,message)

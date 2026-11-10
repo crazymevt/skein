@@ -155,6 +155,7 @@ if given, is called with the file's namespace between loading and calling -main.
 Namespaces it requires are looked up next to it, in the current directory and in lib/.
 Returns the value of -main, or of the file's last form."
   (let* ((*source-paths* (program-source-paths path))
+         (*program-file* (truename path))
          (*current-namespace* (ensure-namespace "user")))
     (skein.runtime:ensure-float-modes)
     (multiple-value-bind (value namespace) (load-file path)

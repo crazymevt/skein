@@ -328,6 +328,12 @@ skein.backend.cl:namespace-root.)"
                  (or (zero? root-length) (= \/ (nth path (dec root-length)))))
         (subs path 0 root-length)))))
 
+(defn- path-hash
+  "A number from the characters of path, to tell apart cache files of programs that share
+a file name."
+  [path]
+  (reduce (fn [h c] (mod (+ (* h 31) (int c)) 4294967296)) 7 path))
+
 (def targets
   "The zig target triples skeinc builds for (DESIGN §19.1); the first three are P0."
   ["aarch64-macos" "x86_64-windows-gnu" "x86_64-linux-gnu" "x86_64-macos" "aarch64-linux-gnu"
@@ -393,9 +399,11 @@ namespaces are) and :main-name (the function to call). Returns the executable's 
                                             [(str home "lib/")])))
         c-source (translate-file path source-paths main-name)
         prefix (build-runtime home target profile)
+        ;; The cached C is named after the file and its path, so programs that share a file
+        ;; name (every main.skn) keep their own (D-073).
         c-file (if keep-c
                  (str (directory-of output) (stem output) ".c")
-                 (str home ".skein-cache/" (stem path) ".c"))]
+                 (str home ".skein-cache/" (stem path) "-" (path-hash path) ".c"))]
     (io/write-file c-file c-source)
     ;; No fused multiply-adds: floating-point results must be exactly Phase 0's.
     (run-tool (vec (concat [(zig) "cc" "-std=c11" "-ffp-contract=off"

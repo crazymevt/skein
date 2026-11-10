@@ -198,6 +198,13 @@ pub const path_list_separator = ';';
 /// Directories searched for C libraries before the system's places: none on Windows.
 pub const library_directories: []const []const u8 = &.{};
 
+/// Where a program's assets are, relative to the directory of its executable
+/// (skein.io/resource-dir, D-073): the executable's own directory.
+pub fn resourceSubdirectory(exe_dir: []const u8) []const u8 {
+    _ = exe_dir;
+    return "";
+}
+
 /// Where a packaged program keeps its C libraries, relative to the executable's directory
 /// (D-069): beside it.
 pub const executable_library_directories: []const []const u8 = &.{""};

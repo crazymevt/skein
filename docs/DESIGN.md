@@ -827,7 +827,7 @@ Phase 1 details (D-045, `runtime/src/gc.zig`):
 - **Threads:**
   - Threads stop at safepoints: when taking a new nursery segment, when compiled code sees `sk_gc_pending` (polled at function entry and loop back-edges), and around blocking calls, which run with their registers spilled.
   - A program registers its globals as roots.
-  - `SKEIN_GC_STATS=1` prints collection statistics at exit.
+  - `SKEIN_GC_STATS=1` prints collection statistics at exit. `SKEIN_GC_VERIFY=1` makes every collection major and the nursery one segment, and after each collection checks every root, heap object and runtime table for pointers to objects that are gone (D-073).
 
 ### 18.2 Game-oriented controls
 
@@ -875,7 +875,7 @@ skein build --target x86_64-windows-gnu --profile release
 ### 19.4 Packaging
 `skein package --target ...` produces a distributable folder or archive: the executable, bundled dynamic libraries (with rpath/install names fixed), and assets. It should be Steam-depot friendly.
 
-Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:native` libraries next to it and the `:assets` directories; a macOS target gets `dist/<target>/<name>.app` (`Contents/MacOS`, `Contents/Frameworks`, `Contents/Resources`, and an `Info.plist` whose bundle identifier is `:bundle-id`, default `skein.<name>`). `skein package` builds with the release profile unless `--profile` says otherwise. Native programs look for C libraries in their own directory first, and in `../Frameworks` on macOS. Signing, notarization and archives come later.
+Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:native` libraries next to it and the `:assets` directories; a macOS target gets `dist/<target>/<name>.app` (`Contents/MacOS`, `Contents/Frameworks`, `Contents/Resources`, and an `Info.plist` whose bundle identifier is `:bundle-id`, default `skein.<name>`). `skein package` builds with the release profile unless `--profile` says otherwise. Native programs look for C libraries in their own directory first, and in `../Frameworks` on macOS, and find their assets with `skein.io/resource-dir`. Signing, notarization and archives come later.
 
 ## 20. Tooling
 
@@ -942,6 +942,7 @@ Phase 0 status (D-040):
   - `(read-file path)` returns the file's contents as a string (UTF-8); `(write-file path string)` writes one, replacing the file; `(file-exists? path)`.
   - `(run-process [program arg ...])` and `(run-process [program arg ...] {:dir path})` run a program directly, without a shell, wait for it, and return `{:exit code :out stdout :err stderr}`.
   - Failures signal `skein.io/io-error`, whose `path` is the file or program: a missing or unreadable file, one that can't be written, or a program that can't be started. A program that exits with a failure status is not an error.
+  - `(resource-dir)` returns the directory holding the program's assets (`project.skn`'s `:assets`), ending with `/`: natively the executable's directory, or a macOS app's `Contents/Resources`; run from source, the nearest directory at or above the main file with a `project.skn`, else the main file's directory (D-073). Read an asset with `(read-file (str (resource-dir) "assets/level1.txt"))`.
 - **`skein.math`:**
   - The operations on its types are generic functions: `v+ v- v* vdiv negate dot length length-sq distance normalize lerp` for vectors, and `m* transform transpose determinant inverse` for matrices and quaternions. Functions such as `cross`, `rotate`, `quat-rotate`, `slerp` and `mat3-translation` cover the rest.
   - Matrices are column-major: field `mCR` is column C, row R.

@@ -185,6 +185,15 @@ pub const library_directories: []const []const u8 = if (builtin.os.tag == .macos
 else
     &.{"/usr/local/lib/"};
 
+/// Where a program's assets are, relative to the directory of its executable `exe_dir`
+/// (skein.io/resource-dir, D-073): a macOS app's Contents/Resources when it runs in one,
+/// else the executable's own directory.
+pub fn resourceSubdirectory(exe_dir: []const u8) []const u8 {
+    if (builtin.os.tag == .macos and std.mem.endsWith(u8, exe_dir, ".app/Contents/MacOS"))
+        return "../Resources/";
+    return "";
+}
+
 /// Where a packaged program keeps its C libraries, relative to the executable's directory
 /// (D-069): beside it, and in a macOS app's Contents/Frameworks.
 pub const executable_library_directories: []const []const u8 = if (builtin.os.tag == .macos)

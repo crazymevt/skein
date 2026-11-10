@@ -188,10 +188,10 @@ const builtin_names = blk: {
     break :blk result;
 };
 
-var builtin_types: [std.enums.values(Builtin).len]Value = @splat(Value.nil);
+pub var builtin_types: [std.enums.values(Builtin).len]Value = @splat(Value.nil);
 
 var types_lock: platform.Mutex = .{};
-var registry: std.StringHashMapUnmanaged(Value) = .empty;
+pub var registry: std.StringHashMapUnmanaged(Value) = .empty;
 const table_alloc = std.heap.page_allocator;
 
 // A type's slots.

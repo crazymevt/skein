@@ -198,6 +198,22 @@ fn listDirectory(path: Value) Value {
     return out;
 }
 
+/// The directory holding the program's assets, ending with / (skein.io/resource-dir,
+/// D-073): the executable's directory, or a macOS app's Contents/Resources. Separators
+/// are /, which every OS accepts.
+fn resourceDir() Value {
+    var buf: [2048]u8 = undefined;
+    const n = std.process.executableDirPath(stdIo(), buf[0..1024]) catch
+        rt.raise(.@"error", "cannot find the program's executable", .{});
+    for (buf[0..n]) |*c| if (c.* == '\\') {
+        c.* = '/';
+    };
+    const sub = platform.resourceSubdirectory(buf[0..n]);
+    const text = std.fmt.bufPrint(buf[n..], "/{s}", .{sub}) catch unreachable;
+    return decoded(buf[0 .. n + text.len]) orelse
+        rt.raise(.@"error", "the program's directory isn't UTF-8", .{});
+}
+
 // ---------------------------------------------------------------------------------------
 // Processes
 
@@ -320,6 +336,12 @@ pub const entries = [_]Entry{
     .{ .name = "%list-directory", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return listDirectory(a[0]);
+        }
+    }.f },
+    .{ .name = "%resource-dir", .min = 0, .max = 0, .impl = struct {
+        fn f(a: Args) Value {
+            _ = a;
+            return resourceDir();
         }
     }.f },
     .{ .name = "%run-process", .min = 2, .max = 2, .impl = struct {

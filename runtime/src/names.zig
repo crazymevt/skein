@@ -13,9 +13,9 @@ const Value = @import("value.zig").Value;
 const table_alloc = std.heap.page_allocator;
 
 var lock: platform.Mutex = .{};
-var symbols: std.StringHashMapUnmanaged(Value) = .empty;
-var keywords: std.StringHashMapUnmanaged(Value) = .empty;
-var namespaces: std.StringHashMapUnmanaged(Value) = .empty;
+pub var symbols: std.StringHashMapUnmanaged(Value) = .empty;
+pub var keywords: std.StringHashMapUnmanaged(Value) = .empty;
+pub var namespaces: std.StringHashMapUnmanaged(Value) = .empty;
 
 fn permanentString(text: []const u8) Value {
     const words = 2 + (text.len + 7) / 8;

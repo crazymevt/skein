@@ -350,7 +350,7 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "cpu-count" "chan" "chan?" ">!" "<!" "close!" "alts!" "timeout-chan"
     ;; skein.io's primitives (M1.9; runtime/src/io.zig)
     "%read-file" "%write-file" "%file-exists?" "%run-process" "%make-directories"
-    "%copy-file" "%delete-tree" "%list-directory"
+    "%copy-file" "%delete-tree" "%list-directory" "%resource-dir"
     ;; For the compiler written in Skein (M1.9; runtime/src/compiler.zig)
     "%copy-symbol" "%identity-table" "%identity-get" "%identity-put!" "%f64-bits" "%f32-bits"
     "%decimal-to-float" "%generic?" "%arity-error-details" "%function-name" "%skein-error?"

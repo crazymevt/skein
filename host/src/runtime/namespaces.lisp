@@ -101,6 +101,10 @@ of a syntax object and an expander environment, returning a syntax object."
 (defvar *source-paths* '()
   "Directories searched, in order, for a namespace's source file.")
 
+(defvar *program-file* nil
+  "The main file of the program that skein run or skein dev is running (a pathname), or
+NIL. skein.io/resource-dir starts from it.")
+
 (defvar *loading-file* nil
   "The file being loaded (a native namestring), or NIL. A namespace declared while it
 loads records it as its file.")

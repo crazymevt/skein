@@ -2,4 +2,5 @@
 {:name "hello"
  :version "0.1.0"
  :main hello.main/-main
- :paths ["src"]}
+ :paths ["src"]
+ :assets ["assets"]}

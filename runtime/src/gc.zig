@@ -167,6 +167,14 @@ pub export var sk_gc_pending: u8 = 0;
 /// keyed by object addresses is valid while this stays the same (compiler.zig).
 pub var epoch = std.atomic.Value(u64).init(0);
 
+/// SKEIN_GC_VERIFY=1 (D-073): every collection is major, the nursery is one segment, and
+/// after each collection every root, permanent object, live heap object and runtime
+/// table (`verify_tables`) is checked for pointers to objects that are gone.
+var verify_mode = false;
+
+/// Checks the runtime's own tables and globals with the function it's given (verify.zig).
+pub var verify_tables: ?*const fn (*const fn (Value, []const u8) void) void = null;
+
 threadlocal var current: ?*Mutator = null;
 
 fn fatal(comptime msg: []const u8) noreturn {
@@ -189,6 +197,12 @@ fn ensureInit() void {
     @memset(state.segments, .{});
     state.free_map = meta_alloc.alloc(u64, (max_segments + 63) / 64) catch fatal("out of memory");
     @memset(state.free_map, 0);
+    if (std.c.getenv("SKEIN_GC_VERIFY")) |text| {
+        if (!std.mem.eql(u8, std.mem.span(text), "0")) {
+            verify_mode = true;
+            state.nursery_limit = 1;
+        }
+    }
     if (std.c.getenv("SKEIN_NURSERY_SEGMENTS")) |text| {
         state.nursery_limit = std.fmt.parseInt(usize, std.mem.span(text), 10) catch state.nursery_limit;
     }
@@ -406,7 +420,8 @@ fn parkOrCollect(arg: ?*anyopaque) callconv(.c) void {
     // Wait until every other thread is parked or in a blocking call.
     while (!allStopped(m)) world_cond.wait(&world);
     const started = platform.monotonicNanos();
-    if (req.kind.? == .major) major() else minor();
+    if (req.kind.? == .major or verify_mode) major() else minor();
+    if (verify_mode) verify();
     const pause = platform.monotonicNanos() - started;
     state.stats.pause_ns_total += pause;
     state.stats.pause_ns_max = @max(state.stats.pause_ns_max, pause);
@@ -901,6 +916,60 @@ fn sweep() void {
     for (&state.block_cursor) |*c| c.* = 0;
     state.stats.old_bytes = live;
     state.next_major = @max(min_major_bytes, live * 2);
+}
+
+// ---------------------------------------------------------------------------------------
+// Verification (SKEIN_GC_VERIFY=1)
+
+/// Stop the program if `v` points at something that isn't a live object: a freed cell or
+/// segment, or the middle of an object. After a major collection nothing is young.
+fn verifyValue(v: Value, where: []const u8) void {
+    if (!v.isObject()) return;
+    const a = @intFromPtr(v.toObject());
+    const ok = if (findObject(a)) |h| @intFromPtr(h) == a and h.type_id != .invalid and !isYoung(h) else false;
+    if (ok) return;
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "error: SKEIN_GC_VERIFY: {s} holds 0x{x}, which isn't a live object\n", .{ where, a }) catch "error: SKEIN_GC_VERIFY failed\n";
+    platform.writeStderr(msg);
+    std.process.exit(70);
+}
+
+fn verifyObject(h: *Header, where: []const u8) void {
+    for (h.valueSlots()) |v| verifyValue(v, where);
+}
+
+/// Check every root, permanent object, live heap object and runtime table, with the world
+/// stopped after a major collection.
+fn verify() void {
+    for (state.roots.items) |slots| {
+        for (slots) |v| verifyValue(v, "a root");
+    }
+    for (state.permanent.items) |h| verifyObject(h, "a permanent object");
+    var i: usize = 0;
+    while (i < state.high_water) : (i += 1) {
+        const seg = &state.segments[i];
+        switch (seg.kind) {
+            .small => {
+                const cell_words: usize = size_classes[seg.class];
+                for (0..seg.bump) |c| {
+                    const h: *Header = @ptrFromInt(segmentStart(i) + c * cell_words * 8);
+                    if (h.type_id != .invalid) verifyObject(h, "a heap object");
+                }
+            },
+            .pinned => {
+                for (seg.bits.?, 0..) |w, k| {
+                    var set = w;
+                    while (set != 0) : (set &= set - 1) {
+                        const bit: usize = @ctz(set);
+                        verifyObject(@ptrFromInt(segmentStart(i) + (k * 64 + bit) * 8), "a heap object");
+                    }
+                }
+            },
+            .large_head => verifyObject(@ptrFromInt(segmentStart(i)), "a large object"),
+            else => {},
+        }
+    }
+    if (verify_tables) |f| f(verifyValue);
 }
 
 fn removeBlock(class: u8, i: u32) void {

@@ -65,6 +65,19 @@
                              (uiop:subdirectories dir)))
              #'string<)))))
 
+(defcore "%resource-dir" ()
+  ;; The directory holding the program's assets (skein.io/resource-dir, D-073), ending
+  ;; with /. Run from source: the nearest directory at or above the main file that has a
+  ;; project.skn, else the main file's directory; with no main file, the current one.
+  (let* ((start (if *program-file*
+                    (uiop:pathname-directory-pathname *program-file*)
+                    (uiop:getcwd)))
+         (dir (loop for d = start then parent
+                    for parent = (uiop:pathname-parent-directory-pathname d)
+                    when (probe-file (merge-pathnames "project.skn" d)) return d
+                    when (equal parent d) return start)))
+    (substitute #\/ #\\ (uiop:native-namestring dir))))
+
 (defcore "%run-process" (argv dir)
   ;; Run ARGV (a vector of strings: the program, then its arguments) without a shell, in
   ;; DIR (a string, or nil for the current directory). Returns {:exit :out :err}, or nil

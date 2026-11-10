@@ -98,7 +98,6 @@
                (:file "repl")
                (:file "math")
                (:file "io")
-               (:file "backend-c-in-skein")
                (:file "backend-c")
                (:file "interp")
                (:file "driver"))

@@ -1,4 +1,7 @@
 (ns hello.greeting
-  "The greeting, in a namespace of its own, so the project's :paths are searched.")
+  "The greeting, in a namespace of its own, so the project's :paths are searched. The
+word itself is an asset, assets/greeting.txt, so a package must carry it."
+  (:require [skein.io :as io]))
 
-(defn greeting [who] (str "hello, " who))
+(defn greeting [who]
+  (str (io/read-file (str (io/resource-dir) "assets/greeting.txt")) ", " who))

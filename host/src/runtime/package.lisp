@@ -19,7 +19,7 @@
    #:namespace #:namespace-p #:namespace-name #:namespace-loaded-p #:namespace-file
    #:*loading-file* #:all-namespaces
    #:find-namespace #:ensure-namespace #:remove-namespace #:find-alias
-   #:+core+ #:*current-namespace* #:*source-paths* #:*namespace-loader*
+   #:+core+ #:*current-namespace* #:*source-paths* #:*program-file* #:*namespace-loader*
    #:namespace-file-name #:require-namespace #:namespace-requires #:namespace-syntax-requires
    #:*expansion-context* #:phase-warning #:defcore #:gensym-name
    #:var #:var-p #:var-namespace #:var-name #:var-value #:var-macro-p #:var-dynamic-p

@@ -132,7 +132,7 @@ const kind_union = 1;
 const kind_enum = 2;
 
 var registry_lock: platform.Mutex = .{};
-var registry: std.StringHashMapUnmanaged(Value) = .empty;
+pub var registry: std.StringHashMapUnmanaged(Value) = .empty;
 
 fn register(qualified: []const u8, t: Value) void {
     registry_lock.lock();

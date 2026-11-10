@@ -1,10 +1,11 @@
-;;;; The native compiler's driver (lib/skein/compiler/main.skn, M1.9 step 5, D-062): on
-;;;; the host it translates every program to the same C as `skein build`.
+;;;; The native compiler's driver (lib/skein/compiler/main.skn, M1.9 step 5, D-062): its
+;;;; options, targets, projects and packages, checked on the host. What it builds is
+;;;; checked by program output in host/tools/bootstrap.sh (D-073).
 
 (in-package #:skein.tests)
 
 (def-suite skein.driver :in all
-  :description "The driver of the native compiler, checked against skein build.")
+  :description "The driver of the native compiler: options, targets and projects.")
 
 (in-suite skein.driver)
 
@@ -23,36 +24,6 @@
 (defun directory-string (dir)
   (let ((s (uiop:native-namestring (uiop:ensure-directory-pathname dir))))
     (substitute #\/ #\\ s)))
-
-(defun driver-outcome (path)
-  "The Skein driver's C for PATH (canonical), with skein build's source paths, or the
-error message."
-  (handler-case
-      (canonical-gensyms
-       (canonical-c
-        (funcall (driver-function "translate-file")
-                 (namestring path)
-                 (skein.runtime:vector-from-list
-                  (mapcar #'directory-string (skein.backend.cl:program-source-paths path))))))
-    (error (e) (list :error (princ-to-string e)))))
-
-(defun lisp-outcome (path)
-  (handler-case (canonical-gensyms
-                 (canonical-c (let ((skein.runtime:*source-paths*
-                                      (skein.backend.cl:program-source-paths path)))
-                                (skein.backend.c:translate-file path))))
-    (error (e) (list :error (princ-to-string e)))))
-
-(test driver-translates-programs-as-skein-build-does
-  (dolist (path (native-programs))
-    (let ((lisp (lisp-outcome path))
-          (skein (driver-outcome path)))
-      (unless (skeinc-only-p lisp skein)
-       (is (equal lisp skein) "~A: the driver differs~%~A" (file-namestring path)
-          (if (and (stringp lisp) (stringp skein))
-              (first-difference lisp skein)
-              (format nil "Lisp: ~S~%Skein: ~S" (if (stringp lisp) "C text" lisp)
-                      (if (stringp skein) "C text" skein))))))))
 
 (test driver-paths
   (flet ((call (name &rest args) (apply (driver-function name) args)))
@@ -99,8 +70,8 @@ the error message."
                         (write-string text s))))
            (driver-function "read-project")
            ;; Translating a program on the host needs skein.core.native's vars, which
-           ;; translating with the Lisp backend makes (as in the test above).
-           (lisp-outcome (first (native-programs)))
+           ;; translating a program with the Lisp backend makes.
+           (ignore-errors (skein.backend.c:translate-file (first (native-programs))))
            (ev-output
             (format nil "(ns driver-projects (:require [skein.compiler.main :as m]))
                          (prn (try ~A (catch error e (condition-message e))))"

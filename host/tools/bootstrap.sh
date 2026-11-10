@@ -61,10 +61,12 @@ test_compiler() {
     fi
     echo "skeinc: hello for $target ok"
   done
-  # A project (M1.11): with no file, skeinc builds the project.skn in the current directory.
-  (cd examples/hello-app && "$OLDPWD/$skeinc" build -o "$OLDPWD/build/examples/hello-app$exe" \
-     > /dev/null)
-  greeted=$(build/examples/hello-app$exe Ada Grace | tr -d '\r')
+  # A project (M1.11): with no file, skeinc builds the project.skn in the current directory,
+  # into it, beside the assets that skein.io/resource-dir finds (D-073). It runs from
+  # another directory.
+  (cd examples/hello-app && "$OLDPWD/$skeinc" build > /dev/null)
+  greeted=$(cd build && ../examples/hello-app/hello$exe Ada Grace | tr -d '\r')
+  rm -f "examples/hello-app/hello$exe" examples/hello-app/hello.pdb
   if [ "$greeted" != $'hello, Ada\nhello, Grace' ]; then
     echo "skeinc: the hello-app project doesn't greet its arguments"
     exit 1
@@ -88,7 +90,8 @@ test_compiler() {
          files="package-app libpkgdemo.so assets/data/note.txt"
          run="${dir}package-app" ;;
     esac
-    "${SKEIN_ZIG:-zig}" cc -target "$target" -shared -o "$app/native/out/$lib" "$app/native/pkgdemo.c"
+    "${SKEIN_ZIG:-zig}" cc -target "$target" -shared -o "$app/native/out/$lib" \
+      "$app/native/pkgdemo.c"
     (cd "$app" && "$OLDPWD/$skeinc" package --target "$target" > /dev/null)
     for f in $files; do
       if [ ! -f "$app/$dir$f" ]; then
@@ -98,17 +101,16 @@ test_compiler() {
     done
     if [ "$target" = "$host" ]; then
       answer=$(cd build && "../$app/$run" | tr -d '\r')
-      if [ "$answer" != "answer: 42" ]; then
+      if [ "$answer" != $'answer: 42\nAn asset that skein package copies.' ]; then
         echo "skeinc: the package for $target didn't find its library: $answer"
         exit 1
       fi
     fi
     echo "skeinc: package for $target ok"
   done
-  # Programs that only skeinc compiles (the FFI, D-064; skein.math and skein.time's host
-  # functions, M1.12), built by skeinc, print what
+  # Every native fixture, built by skeinc, prints what
   # `skein run` prints, and every line a ";; stderr: " comment gives on standard error.
-  for program in host/tests/fixtures/native-ffi*.skn host/tests/fixtures/native-skeinc-*.skn; do
+  for program in host/tests/fixtures/native-*.skn; do
     name=$(basename "$program" .skn)
     ./skein run "$program" > "build/examples/$name.expected"
     "$skeinc" build "$program" -o "build/examples/$name$exe" > /dev/null
@@ -128,6 +130,18 @@ test_compiler() {
     fi
     echo "skeinc: $name ok"
   done
+  # Every example and fixture again with SKEIN_GC_VERIFY=1 (D-073): each collection is
+  # major and is followed by a check that nothing points at an object that's gone.
+  for expected in examples/*.expected build/examples/native-*.expected; do
+    name=$(basename "$expected" .expected)
+    if ! SKEIN_GC_VERIFY=1 "build/examples/$name$exe" 2> "build/examples/$name.verify-err" \
+         | diff --strip-trailing-cr "$expected" - > /dev/null; then
+      echo "skeinc: $name fails with SKEIN_GC_VERIFY=1"
+      head -5 "build/examples/$name.verify-err"
+      exit 1
+    fi
+  done
+  echo "skeinc: everything passes with SKEIN_GC_VERIFY=1"
 }
 
 case "${1:-}" in

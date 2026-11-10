@@ -987,7 +987,7 @@ Date: 2026-11-10 · Status: Accepted
 - **Decision** (Jessie chose the first two; the others are internal):
   1. **`skein.io/resource-dir`** returns the directory holding the program's `:assets`: the package folder, a `.app`'s `Contents/Resources`, or the project directory when run from source (M2.1).
   2. **The C-text comparison tests retire.** `skeinc` is compared with Phase 0 by program output only, as the bootstrap's fixtures are; the Lisp C backend only builds the first compiler (M2.1).
-  3. **`SKEIN_GC_VERIFY=1`**, a mode that collects at every safepoint and checks every root, table and heap slot (M2.1).
-  4. **`.skein-cache/` files are named after the program's full path** (M2.1).
+  3. **`SKEIN_GC_VERIFY=1`**: every collection is major and the nursery is one segment (256 KiB), so collections come often; after each, the collector checks every root, permanent object, live heap object and the runtime's own tables (`runtime/src/verify.zig`) for pointers to objects that are gone, and stops the program naming where it found one (M2.1). It finds the generic-function bug of D-070 at once.
+  4. **`.skein-cache/` files are named after the program's file and a hash of its path** (`main-1234567.c`), so programs that share a file name don't overwrite each other's C (M2.1).
 - **Alternatives:** `skein.game/asset-path` returning one asset's full path; keeping the C comparisons with a growing list of skipped programs.
 - **Consequences:** DESIGN §21 lists `resource-dir` in `skein.io` once M2.1 adds it.

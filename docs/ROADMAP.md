@@ -30,7 +30,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.10 Native FFI | ✅ |
 | M1.11 `skein build` and `skein package` | ✅ |
 | M1.12 Driftrock native | ✅ |
-| M2.1 Phase 1 follow-ups | ⬜ |
+| M2.1 Phase 1 follow-ups | 🟨 |
 | M2.2 Fibers | ⬜ |
 | M2.3 Work-stealing scheduler | ⬜ |
 | M2.4 Dynamic vars natively | ⬜ |
@@ -278,8 +278,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ### M2.1 Phase 1 follow-ups
 - `skein.io/resource-dir`: the directory holding the program's `:assets` (the package folder, a `.app`'s `Contents/Resources`, or the project directory when run from source) (D-073).
 - Retire the tests that compare the Lisp C backend's C with `skeinc`'s; compare programs by output (D-073).
-- `SKEIN_GC_VERIFY=1`: collect at every safepoint and check every root, table and heap slot.
-- Name `.skein-cache/` files after the program's full path, so builds of different programs don't overwrite each other's C.
+- `SKEIN_GC_VERIFY=1`: collect often (every 256 KiB, always major) and check every root, table and heap slot after each collection.
+- Name `.skein-cache/` files after the program's file and a hash of its path, so builds of different programs don't overwrite each other's C.
 
 **Exit:** a packaged example loads an asset through `resource-dir` on all three platforms in CI, and the native test suites pass with `SKEIN_GC_VERIFY=1`.
 
@@ -412,4 +412,4 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - A condition type named by a symbol at run time (`(error 'foo)`) is found by its unique unqualified name, until namespaces exist at run time (M1.8).
   - Some native messages differ from Phase 0's, where Phase 0 shows CL's wording (index errors, returning to an exited block).
   - Unwinding through foreign C frames: decided in M1.10 (D-068). No non-local exit leaves a callback.
-- Packages (D-069): a packaged program has no way yet to find its assets (its working directory isn't its folder, and a `.app`'s are in `Contents/Resources`); add a function for the program's resource directory when a demo loads files. Code signing, notarization and archives are still to do.
+- Packages (D-069): code signing, notarization and archives are still to do. An unpackaged native build finds its assets beside its executable, so `skein build -o elsewhere/` doesn't see them.

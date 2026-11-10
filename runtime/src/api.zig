@@ -29,6 +29,7 @@ extern fn sk_mv_buffer() [*]Value;
 
 export fn sk_init() void {
     @import("mathtime.zig").init();
+    @import("verify.zig").install();
     _ = gc.attachThread();
     coll.ensureConstants();
     @import("cond.zig").ensureBuiltins();

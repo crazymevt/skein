@@ -72,8 +72,8 @@ pub fn className(c: Value) []const u8 {
 }
 
 var lock: platform.Mutex = .{};
-var classes: std.StringHashMapUnmanaged(Value) = .empty;
-var generics: std.StringHashMapUnmanaged(Value) = .empty;
+pub var classes: std.StringHashMapUnmanaged(Value) = .empty;
+pub var generics: std.StringHashMapUnmanaged(Value) = .empty;
 const table_alloc = std.heap.page_allocator;
 
 fn lookup(table: *std.StringHashMapUnmanaged(Value), key: []const u8) ?Value {
@@ -195,7 +195,7 @@ const Builtin = enum {
     }
 };
 
-var builtins: [std.enums.values(Builtin).len]Value = @splat(Value.nil);
+pub var builtins: [std.enums.values(Builtin).len]Value = @splat(Value.nil);
 
 /// Make the built-in classes and generic functions. sk_init calls this.
 pub fn ensureBuiltins() void {
@@ -1016,7 +1016,7 @@ pub fn genericMethods(f: Value) Value {
 
 pub const CoreGeneric = enum { equiv, @"hash-of", initialize, @"update-instance-for-redefined-class" };
 
-var core_generics: [4]Value = @splat(Value.nil);
+pub var core_generics: [4]Value = @splat(Value.nil);
 
 pub fn coreGeneric(name: []const u8) ?Value {
     ensureBuiltins();

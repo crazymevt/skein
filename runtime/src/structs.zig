@@ -189,7 +189,7 @@ const d_value = 1;
 const d_fields = 2;
 
 var lock: platform.Mutex = .{};
-var defs: std.StringHashMapUnmanaged(Value) = .empty;
+pub var defs: std.StringHashMapUnmanaged(Value) = .empty;
 const table_alloc = std.heap.page_allocator;
 
 fn lookup(name: []const u8) ?Value {

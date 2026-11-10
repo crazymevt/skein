@@ -1,7 +1,8 @@
 (ns package-app.main
   "Calls into a C library that only its package holds, so it runs only if the library is
-found beside the executable."
-  (:require [skein.ffi :as ffi]))
+found beside the executable, and prints an asset that only its package holds."
+  (:require [skein.ffi :as ffi]
+            [skein.io :as io]))
 
 (ffi/deflibrary pkgdemo {:macos "libpkgdemo.dylib" :linux "libpkgdemo.so"
                          :windows "pkgdemo.dll"})
@@ -9,4 +10,6 @@ found beside the executable."
 (ffi/defcfun answer "pkgdemo_answer" i32 [])
 
 (defn -main [& args]
-  (println "answer:" (answer)))
+  (println "answer:" (answer))
+  ;; An asset, found through skein.io/resource-dir wherever the package is.
+  (print (io/read-file (str (io/resource-dir) "assets/data/note.txt"))))

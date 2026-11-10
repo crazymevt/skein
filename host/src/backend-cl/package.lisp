@@ -4,7 +4,7 @@
   (:use #:cl #:skein.ir)
   (:import-from #:skein.runtime
                 #:var-get #:def-var #:truthy-p #:invoke-other #:arity-error
-                #:*current-namespace* #:*source-paths* #:*namespace-loader*
+                #:*current-namespace* #:*source-paths* #:*program-file* #:*namespace-loader*
                 #:namespace-name #:ensure-namespace #:find-namespace #:namespace-loaded-p
                 #:namespace-file-name #:skein-error #:namespace-error)
   (:export
