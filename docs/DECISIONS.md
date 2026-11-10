@@ -1196,3 +1196,10 @@ Date: 2026-11-10 · Status: Accepted
 - **Alternatives:** a keyword after the nursery's name (no room for limits), or a policy per `spawn` as well; restarting forever, or a fixed count without a time window; applying the policy first in development, so the debugger would only see the failure at the main fiber, after the task's stack was gone; ignoring silently.
 - **Consequences:** `with-nursery` takes an optional map. Task errors in `skein dev` stop in the debugger where they used to cancel the task's siblings at once.
 
+## D-089: A standard library milestone
+Date: 2026-11-10 · Status: Accepted
+- **Context:** native `skein.core` matches Phase 0's, but common Clojure functions and macros were never built (`cond->`, `memoize`, `partition-by`, `format`, sorted maps, ...), and DESIGN §21's `skein.string`, `skein.log`, `skein.test` and `skein.gc` were never started. The compiler and the Swank server each wrote private string helpers.
+- **Decision** (Jessie's): a new milestone, M2.11 Standard library, before package management (now M2.12) and Driftrock developed live (now M2.13): the `skein.core` gaps, `skein.string` with D-019's cursors, `skein.io`'s files, paths, bytes and streams, `skein.log`, and `skein.test` with a `skein test` command. Whether values carry metadata, and `ex-info` beside conditions, are settled when it's prepared.
+- **Alternatives:** right after supervisors (M2.9); Phase 3.
+- **Consequences:** Phase 2 has thirteen milestones. Libraries fetched as packages can rely on `skein.string` and `skein.test`.
+

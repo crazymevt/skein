@@ -40,8 +40,9 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.8 Supervisors | ⬜ |
 | M2.9 Hot reload of compiled code | ⬜ |
 | M2.10 STM | ⬜ |
-| M2.11 Package management | ⬜ |
-| M2.12 Driftrock developed live, natively | ⬜ |
+| M2.11 Standard library | ⬜ |
+| M2.12 Package management | ⬜ |
+| M2.13 Driftrock developed live, natively | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -269,7 +270,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Goal:** everything Phase 0 does for live development, natively: fibers on a work-stealing scheduler, a REPL and `skein dev` in the running native program, SLIME through a Swank server, supervisors, hot reload of compiled code and STM. At the end `./skein run`, `dev` and `repl` run on the native runtime, and SBCL only bootstraps the compiler (D-072).
 
-**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), package management (M2.11, D-085), and Driftrock developed live (M2.12).
+**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), the standard library (M2.11, D-089), package management (M2.12, D-085), and Driftrock developed live (M2.13).
 
 **Rules for Phase 2**
 - Phase 1's rules still apply (Zig 0.17.1, C11 with `zig cc`, platform code only in `runtime/platform/<os>/`, the Core IR as the contract).
@@ -370,7 +371,18 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Exit:** randomized tests against a model, and a concurrent transfer test that keeps its total, pass natively.
 
-### M2.11 Package management
+### M2.11 Standard library
+- Fill the gaps in `skein.core` and start the namespaces DESIGN §21 lists but nobody began (D-089), natively and in Skein where possible, with docstrings and argument lists for SLIME.
+- Parts:
+  - **`skein.core`:** the missing Clojure functions and macros: `cond->`, `cond->>`, `condp`, `when-first`, `lazy-cat`, `time`, `with-out-str`; `partition-by`, `take-nth`, `take-last`, `drop-last`, `keep-indexed`, `reductions`, `tree-seq`, `shuffle`, `rand-nth`, `subvec`, `rseq`, `update-vals`, `update-keys`, `run!`, `distinct?`; `some-fn`, `every-pred`, `memoize`, `trampoline`, `max-key`, `min-key`; `delay`/`force`, `promise`/`deliver`, `volatile!`, watches and validators on atoms, `swap-vals!`, `reset-vals!`; sorted maps and sets; `parse-double`, `parse-boolean`, `int?`, `pos-int?`, `nat-int?`, `double?`, `hash`, `random-uuid`, the `bit-` operations; `format`, `prn-str`, `print-str`, `read-string`, `slurp`, `spit`; and `*print-length*`, so printing an infinite seq ends.
+  - **`skein.string`:** `split`, `join`, `upper-case`, `lower-case`, `trim`, `starts-with?`, `ends-with?`, `includes?`, `index-of`, `replace`, `blank?`, a string builder, and D-019's byte-offset cursors (`cursor`, `next`, ...), which the reader and the Swank server then use (ROADMAP's note on non-ASCII text).
+  - **`skein.io`:** directory listing, path helpers (join, file name, directory, extension, absolute path), bytes, and streams. **`skein.log`:** leveled logging.
+  - **`skein.test`:** `deftest`, `is`, `testing` and fixtures (DESIGN §20.3), and a `skein test` command.
+- To settle when preparing it: whether values (collections, symbols) carry metadata, with `meta`, `with-meta` and `vary-meta` (today only syntax does); `ex-info` and `ex-data` beside Skein's conditions, or not; docstrings and argument lists for the runtime's functions written in Zig; the order of the steps.
+
+**Exit:** every function and macro above exists natively with tests (randomized against a model where it fits), the Phase 0 host has the ones that fixtures compare with it, and `skein test` runs a project's tests on all three platforms.
+
+### M2.12 Package management
 - `project.skn`'s `:deps` (DESIGN §20.2, D-085): a project uses libraries from git repositories, GitHub's included, pinned to a tag or a commit, and from local files and folders. `skein build`, `run`, `dev` and `package` find their namespaces; a library's `:native` libraries and `:assets` go into packages.
 - To settle when preparing it, in DESIGN and DECISIONS:
   - the `:deps` syntax for git and local dependencies, and whether a local one is a folder with its own `project.skn`, a source folder, or a single `.skn` file;
@@ -382,7 +394,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Exit:** a project that depends on a library in a git repository (a local repository in the tests, and one on GitHub in CI) and on a local folder builds, runs with `skein run` and `skein dev`, and packages with its dependencies' native libraries and assets, on all three platforms.
 
-### M2.12 Driftrock developed live, natively
+### M2.13 Driftrock developed live, natively
 - Develop and debug Driftrock with native `skein dev` and SLIME: fix a crash in the debugger and resume, edit while playing, reload compiled code.
 
 **Exit:** Driftrock is developed live on the native runtime on all three platforms. Write `docs/PHASE2-RETRO.md` and update DESIGN.md.

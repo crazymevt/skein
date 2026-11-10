@@ -918,7 +918,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
  :targets [:aarch64-macos :x86_64-windows-gnu :x86_64-linux-gnu]}
 ```
 
-`:paths` lists where namespaces are found (default `["src"]`); `:assets` lists directories copied into a package as they are; `:main` is the function called with the command-line arguments. The file is read as data, and `skein build` with no file builds the project in the current directory (D-069). `:deps` names libraries from git repositories (GitHub's included, pinned to a tag or a commit) and from local files and folders (M2.11, D-085). A package registry is deferred.
+`:paths` lists where namespaces are found (default `["src"]`); `:assets` lists directories copied into a package as they are; `:main` is the function called with the command-line arguments. The file is read as data, and `skein build` with no file builds the project in the current directory (D-069). `:deps` names libraries from git repositories (GitHub's included, pinned to a tag or a commit) and from local files and folders (M2.12, D-085). A package registry is deferred.
 
 ### 20.3 Testing
 `skein.test` follows the style of `clojure.test`: `deftest`, `is`, `testing`, fixtures. There is also property-based testing with `skein.test.check` (Deferred).
@@ -928,7 +928,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
 | Namespace | Contents | Phase |
 |---|---|---|
 | `skein.core` | special-form wrappers, core macros, collections, seqs, transducers, atoms, numbers, strings basics | 0 |
-| `skein.string` | string operations, builders, formatting | 0 |
+| `skein.string` | string operations, builders, formatting | 0 (M2.11, D-089) |
 | `skein.math` | scalar math; `vec2/3/4`, `quat`, `mat3/4` value structs; lerp, clamp, noise | 0 |
 | `skein.conc` | nurseries, futures, channels, timeouts, job graphs | 0 |
 | `skein.ffi` | FFI | 0 |
