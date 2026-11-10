@@ -20,6 +20,7 @@ const objs = @import("objects.zig");
 const structs = @import("structs.zig");
 const tasks = @import("tasks.zig");
 const io = @import("io.zig");
+const compiler = @import("compiler.zig");
 const Value = @import("value.zig").Value;
 
 const Args = []const Value;
@@ -384,11 +385,22 @@ fn applyFn(a: Args) Value {
     const fixed = a[1 .. a.len - 1];
     var buf: [256]Value = undefined;
     const n = if (last == Value.nil) 0 else count(last);
-    if (fixed.len + n > buf.len) rt.raise(.unsupported_operation_error, "apply with more than {d} arguments is not supported natively yet", .{buf.len});
-    @memcpy(buf[0..fixed.len], fixed);
-    var ctx: Collect = .{ .buf = buf[fixed.len..] };
+    if (fixed.len + n <= buf.len) {
+        @memcpy(buf[0..fixed.len], fixed);
+        var ctx: Collect = .{ .buf = buf[fixed.len..] };
+        each(last, &ctx, Collect.add);
+        return func.call(a[0], @intCast(fixed.len + n), &buf);
+    }
+    // More arguments than fit on the stack: a tuple, which this frame's reference keeps
+    // pinned (the stack is scanned conservatively) while the function runs.
+    const tuple = coll.tupleN(fixed.len + n, Value.nil);
+    const slots = coll.slots(tuple);
+    @memcpy(slots[0..fixed.len], fixed);
+    var ctx: Collect = .{ .buf = slots[fixed.len..] };
     each(last, &ctx, Collect.add);
-    return func.call(a[0], @intCast(fixed.len + n), &buf);
+    const result = func.call(a[0], @intCast(fixed.len + n), slots.ptr);
+    std.mem.doNotOptimizeAway(tuple);
+    return result;
 }
 
 fn vecFn(a: Args) Value {
@@ -478,9 +490,9 @@ fn remFn(a: Args) Value {
 }
 
 fn quotFn(a: Args) Value {
-    if (a[0].isFixnum() and a[1].isFixnum()) {
-        if (a[1].toFixnum() == 0) rt.raise(.arithmetic_error, "division by zero", .{});
-        return int(@divTrunc(a[0].toFixnum(), a[1].toFixnum()));
+    if (num.isInteger(a[0]) and num.isInteger(a[1])) {
+        if (a[1] == Value.fromFixnum(0)) rt.raise(.arithmetic_error, "division by zero", .{});
+        return num.intDivide(.quot, a[0], a[1]);
     }
     const x = num.toF64(a[0]);
     const y = num.toF64(a[1]);
@@ -489,10 +501,9 @@ fn quotFn(a: Args) Value {
 }
 
 fn intDivision(comptime name: []const u8, x: Value, y: Value, comptime mode: enum { floor, trunc }) Value {
-    if (x.isFixnum() and y.isFixnum()) {
-        const b = y.toFixnum();
-        if (b == 0) rt.raise(.arithmetic_error, "division by zero", .{});
-        return int(if (mode == .floor) @mod(x.toFixnum(), b) else @rem(x.toFixnum(), b));
+    if (num.isInteger(x) and num.isInteger(y)) {
+        if (y == Value.fromFixnum(0)) rt.raise(.arithmetic_error, "division by zero", .{});
+        return num.intDivide(if (mode == .floor) .mod else .rem, x, y);
     }
     if (!num.isNumber(x)) num.notANumber(name, x);
     if (!num.isNumber(y)) num.notANumber(name, y);
@@ -1314,9 +1325,10 @@ const base_table = [_]Entry{
     }.f),
 };
 
-/// The core table: the entries above, the concurrency functions (tasks.zig) and
-/// skein.io's primitives (io.zig).
-const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(io.entries);
+/// The core table: the entries above, the concurrency functions (tasks.zig), skein.io's
+/// primitives (io.zig) and what the compiler written in Skein needs (compiler.zig).
+const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(io.entries) ++
+    entriesOf(compiler.entries);
 
 fn entriesOf(comptime from: anytype) [from.len]Entry {
     var t: [from.len]Entry = undefined;
@@ -1328,10 +1340,9 @@ fn entriesOf(comptime from: anytype) [from.len]Entry {
 fn entryCode(comptime i: usize) func.Code {
     return struct {
         fn code(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
-            _ = self;
             const entry = table[i];
             if (argc < entry.min or (entry.max != null and argc > entry.max.?))
-                rt.raise(.arity_error, "wrong number of arguments ({d}) passed to skein.core/{s}", .{ argc, entry.name });
+                compiler.raiseArity(self, argc, "wrong number of arguments ({d}) passed to skein.core/{s}", .{ argc, entry.name });
             return entry.impl(argv[0..argc]);
         }
     }.code;
@@ -1386,4 +1397,15 @@ test "every core function has an object and checks its arguments" {
     const args = [_]Value{ coll.vectorOf(&.{Value.fromFixnum(1)}), Value.fromFixnum(2) };
     const v = func.call(function("conj").?, 2, &args);
     try std.testing.expectEqual(@as(usize, 2), coll.vectorCount(v));
+}
+
+test "apply takes more arguments than fit on the stack" {
+    coll.ensureConstants();
+    var v = coll.vectorOf(&.{});
+    for (0..1000) |i| v = coll.vectorConj(v, Value.fromFixnum(@intCast(i % 10)));
+    const args = [_]Value{ function("str").?, v };
+    const s = applyFn(&args);
+    try std.testing.expectEqual(@as(usize, 1000), string.count(s));
+    const plus = [_]Value{ function("+").?, Value.fromFixnum(1), v };
+    try std.testing.expectEqual(@as(i64, 4501), applyFn(&plus).toFixnum());
 }

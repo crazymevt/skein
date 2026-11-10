@@ -37,8 +37,14 @@ pub fn equiv(a: Value, b: Value) bool {
     if (string.isString(a))
         return string.isString(b) and std.mem.eql(u8, string.bytes(a), string.bytes(b));
     if (names.isSymbol(a)) {
-        // Interned, so equal symbols are identical (checked above).
-        return false;
+        // Symbols are interned, so equal ones are usually identical (checked above); a
+        // copy made for the compiler (%copy-symbol) is equal by namespace and name.
+        if (!names.isSymbol(b) or names.nameHash(a) != names.nameHash(b)) return false;
+        const na = names.nsOf(a);
+        const nb = names.nsOf(b);
+        if ((na == null) != (nb == null)) return false;
+        if (na != null and !std.mem.eql(u8, na.?, nb.?)) return false;
+        return std.mem.eql(u8, names.nameOf(a), names.nameOf(b));
     }
     if (seqs.isSequential(a)) {
         if (!seqs.isSequential(b)) return false;

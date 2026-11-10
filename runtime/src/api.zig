@@ -94,7 +94,7 @@ export fn sk_call(f: Value, argc: u32, argv: [*]const Value) Value {
 }
 
 export fn sk_arity_error(self: Value, argc: u32, defined_at: [*:0]const u8) Value {
-    rt.raise(.arity_error, "wrong number of arguments ({d}) passed to {s} (defined at {s})", .{
+    @import("compiler.zig").raiseArity(self, argc, "wrong number of arguments ({d}) passed to {s} (defined at {s})", .{
         argc, func.name(self), std.mem.span(defined_at),
     });
 }

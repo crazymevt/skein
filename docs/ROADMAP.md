@@ -211,7 +211,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order:
   1. ✅ `skein.io`: `read-file`, `write-file`, `file-exists?` and `run-process`, in Phase 0 and natively.
   2. ✅ The C backend in Skein, running on the host on the Skein expander's IR: the same C as the Lisp backend for every example and native fixture.
-  3. The compile-time environment natively: namespaces and vars at run time, symbol copies, identity tables, calling macros, and skein.core's macros compiled into the compiler.
+  3. ✅ The compile-time environment natively: namespaces and vars at run time, symbol copies, identity tables, calling macros, and skein.core's macros compiled into the compiler.
   4. A Core IR interpreter in Skein for phase-1 code: a program's macros and the functions they call.
   5. The driver in Skein (`skeinc build`): finding namespaces, running phase 1, writing C and running zig. On the host it gives the same C as `skein build`.
   6. Bootstrapping: Phase 0 builds `skeinc`, which builds itself twice; the two builds' C is identical, and `skeinc` builds every example to the same output. CI runs it on all three platforms.
@@ -278,13 +278,14 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Native runtime (D-046): atoms and functions hash by identity differently from Phase 0, so maps keyed by them iterate in a different order natively. Seqs over maps and sets, lazy seqs, `reduced` and most of skein.core wait for M1.8; `first`/`rest` work on lists, vectors and strings. Vars are made per compiled program, not looked up by name (namespaces at run time come with multi-file programs, M1.9).
 - GC (D-045): a nursery segment promoted for one pinned object keeps its whole 256 KiB until the next major collection; consider moving pinned objects' neighbors out, or smaller pinning granularity. Marking is stop-the-world; incremental marking (DESIGN §18.1) and `with-frame-arena` (§18.2) are still to do.
 - FFI callbacks from foreign threads work as SBCL allows; DESIGN §14.3's attach-as-fiber behavior waits for Phase 2.
-- Reader in Skein (D-048): building it natively (M1.9) needs `pr-str`, `parse-long`, `%decimal-to-float` (Zig's `parseFloat` is correctly rounded) and an `apply` that takes more than 256 arguments, or a string builder, since string literals are made with `(apply str chars)`. `skein run` still uses the CL reader until the front end is self-hosted.
+- Reader in Skein (D-048): `skein run` still uses the CL reader until the front end is self-hosted.
 - `skein build` loads a program's required namespaces on the host, running their top-level code, because their macros must exist to expand the program. Self-hosting (M1.9) should load them for syntax only (phase 1).
-- Expander in Skein (D-049), for self-hosting (M1.9):
-  - The native compiler needs its own versions of the compile-time functions in `host/src/runtime/compile-env.lisp`: namespaces, vars, identity tables and symbol copies. Natively, symbols are interned and compared by identity, so `=` on symbol copies must compare names.
-  - Macros run at compile time: skein.core's are compiled into the compiler, and a program's own run in an interpreter (D-050).
-  - The reader and expander use seq functions (`map`, `mapcat`, `partition`, `some`, `doseq`, ...), which become native in M1.8, before self-hosting (D-050).
-- C backend in Skein (D-059), for step 3 of M1.9: natively, the compiler needs the `%` functions it uses on the host: `%ensure-namespace`, `%generic?`, `%struct-def-name`, `%f64-bits` and `%f32-bits`, besides the expander's (`host/src/runtime/compile-env.lisp`). The lists of native skein.core functions and condition types are written in both backends until the Lisp one retires.
+- C backend in Skein (D-059): the lists of native skein.core functions and condition types are written in both backends until the Lisp one retires.
+- The native compiler's environment (D-060), for the next steps of M1.9:
+  - Phase rules (DESIGN §4.4) aren't checked natively yet: the interpreter (step 4) should check them where phase-1 code reads vars.
+  - `%struct-def-name` finds no structs until phase-1 code defines them (step 4), and `%require` needs the driver's loader (step 5).
+  - `declaim` and `defonce` don't compile natively yet (`%declaim`, `%var-bound?`).
+  - A program that includes `skein.compiler.env` registers every public var of skein.core.native at startup, and the model copies them into its skein.core.
 - Native concurrency (D-057):
   - Tasks, nurseries and channels share one lock, and waiters poll every 20 ms; fine for Phase 1's thread pool, replaced by the fiber scheduler in Phase 2.
   - Tasks, nurseries and channels are of class `any` natively, and print as in Phase 0.

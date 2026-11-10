@@ -119,6 +119,34 @@ fn intArith(op: IntOp, a: Value, b: Value) Value {
     }
 }
 
+pub const DivMode = enum { quot, rem, mod };
+
+/// quot (truncated quotient), rem (remainder with the sign of a) or mod (remainder with
+/// the sign of b) of two integers; b is not zero.
+pub fn intDivide(mode: DivMode, a: Value, b: Value) Value {
+    if (a.isFixnum() and b.isFixnum()) {
+        const x: i128 = a.toFixnum();
+        const y: i128 = b.toFixnum();
+        return fromI128(switch (mode) {
+            .quot => @divTrunc(x, y),
+            .rem => @rem(x, y),
+            .mod => @mod(x, y),
+        });
+    }
+    var ba: [1]Limb = undefined;
+    var bb: [1]Limb = undefined;
+    const ca = toConst(a, &ba);
+    const cb = toConst(b, &bb);
+    // a and b are on the stack, so a collection meanwhile leaves their limbs in place.
+    const hq, var q = newBig(ca.limbs.len + 1);
+    const hr, var r = newBig(cb.limbs.len + 1);
+    const buf = rt.scratch.alloc(Limb, big.calcDivLimbsBufferLen(ca.limbs.len, cb.limbs.len)) catch
+        rt.fatal("out of memory", .{});
+    defer rt.scratch.free(buf);
+    if (mode == .mod) q.divFloor(&r, ca, cb, buf) else q.divTrunc(&r, ca, cb, buf);
+    return if (mode == .quot) finishBig(hq, q) else finishBig(hr, r);
+}
+
 fn intOrder(a: Value, b: Value) std.math.Order {
     if (a.isFixnum() and b.isFixnum()) return std.math.order(a.toFixnum(), b.toFixnum());
     var ba: [1]Limb = undefined;
@@ -297,6 +325,26 @@ test "fixnum arithmetic promotes to bignums and comes back" {
     try testing.expect(back.isFixnum());
     try testing.expectEqual(Value.fixnum_max, back.toFixnum());
     try expectInt(@as(i128, Value.fixnum_min) - 1, arith(.sub, Value.fromFixnum(Value.fixnum_min), one));
+}
+
+test "integer division matches i128 at random (a reference model)" {
+    var prng = std.Random.DefaultPrng.init(7);
+    const random = prng.random();
+    for (0..2000) |_| {
+        // Operands past the fixnum range, and small divisors too.
+        const x: i128 = random.int(i100);
+        const y: i128 = switch (random.uintLessThan(u8, 3)) {
+            0 => random.intRangeAtMost(i128, -20, 20),
+            1 => random.int(i64),
+            else => random.int(i90),
+        };
+        if (y == 0) continue;
+        const a = fromI128(x);
+        const b = fromI128(y);
+        try expectInt(@divTrunc(x, y), intDivide(.quot, a, b));
+        try expectInt(@rem(x, y), intDivide(.rem, a, b));
+        try expectInt(@mod(x, y), intDivide(.mod, a, b));
+    }
 }
 
 test "integer arithmetic matches i128 at random (a reference model)" {

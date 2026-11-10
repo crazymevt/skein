@@ -389,6 +389,14 @@ referred in place of skein.core's."
                    (asdf:system-relative-pathname "skein"
                                                   "tests/fixtures/native-concurrency.skn"))))
 
+(test native-compiler
+  ;; Step 3 of M1.9: the reader, expander and C backend written in Skein, with skein.core's
+  ;; macros compiled in and the compile-time environment of skein.compiler.env, translate
+  ;; sample programs to the same C natively as on the host.
+  (native-matches (uiop:read-file-string
+                   (asdf:system-relative-pathname "skein"
+                                                  "tests/fixtures/native-compiler.skn"))))
+
 (test native-io
   ;; Step 1 of M1.9: skein.io natively (runtime/src/io.zig) prints what Phase 0 prints.
   (with-source-tree (dir ("unused.skn" ""))

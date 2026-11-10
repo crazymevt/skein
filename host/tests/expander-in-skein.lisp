@@ -441,6 +441,12 @@ were."
 
 ;;; destructure: the same binding vector (up to gensym numbers) or the same error
 
+(defun library-function (name)
+  "The function skein.core.native/NAME (lib/skein/core/native.skn)."
+  (skein.runtime:var-get (skein.runtime:find-own-var
+                          (skein.runtime:require-namespace "skein.core.native") name)
+                         nil))
+
 (defun destructure-outcome (fn bindings)
   (handler-case (renumber-gensyms (skein.runtime:readable-string (funcall fn bindings)))
     (error (e) (format nil "ERROR: ~A" (if (typep e 'skein.runtime:skein-error)
@@ -453,7 +459,7 @@ were."
          (p0 (destructure-outcome
               (lambda (b) (skein.runtime:vector-from-list (skein.expander::destructure b)))
               bindings))
-         (sk (destructure-outcome (skein-expander-function "destructure") bindings)))
+         (sk (destructure-outcome (library-function "destructure") bindings)))
     (is (string= p0 sk) "~A~%Phase 0:  ~A~%in Skein: ~A" pattern-text p0 sk)))
 
 (defparameter *destructure-patterns*

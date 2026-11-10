@@ -97,6 +97,13 @@ c-backend-error, or (:other text) for another failure of the Lisp side."
                                           (call-skein-expander "analyze-toplevel"
                                                                (to-skein-syntax a) b)
                                           b))
+                     (:core-names (call-skein-c "note-core-names!" unit
+                                                (skein.runtime:vector-from-list a)))
+                     (:core-macro (let ((ns (skein.runtime:var-namespace b)))
+                                    (call-skein-c "emit-core-macro" unit b
+                                                  (call-skein-expander "analyze-toplevel"
+                                                                       (to-skein-syntax a) ns)
+                                                  ns)))
                      (:program (setf skein (canonical-gensyms
                                             (canonical-c
                                              (call-skein-c "program-text" unit b a))))))

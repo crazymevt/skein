@@ -138,7 +138,13 @@ digits, so a following digit can't extend them, unlike \\x."
          ;; the lines of the program body (the top-level forms)
          :body (atom [])
          ;; block tag id -> true if the block's multiple values matter
-         :block-mv {}}))
+         :block-mv {}
+         ;; For a program that includes skein.compiler.env (D-060): the names
+         ;; lib/skein/core.skn defines, whose vars the program compiles; the C names of
+         ;; its macros' vars, in order; and whether the program includes the environment.
+         :core-defined #{}
+         :core-macros []
+         :env false}))
 
 (defn- fresh [st prefix]
   (str prefix (:counter (swap! (:unit st) update :counter inc))))
@@ -659,6 +665,10 @@ is the Lisp backend's list."
     "cpu-count" "chan" "chan?" ">!" "<!" "close!" "alts!" "timeout-chan"
     ;; skein.io's primitives (M1.9)
     "%read-file" "%write-file" "%file-exists?" "%run-process"
+    ;; For the compiler written in Skein (M1.9; runtime/src/compiler.zig)
+    "%copy-symbol" "%identity-table" "%identity-get" "%identity-put!" "%f64-bits" "%f32-bits"
+    "%decimal-to-float" "%generic?" "%arity-error-details" "%function-name" "%skein-error?"
+    "%error-has-location?" "%core-function-names" "%core-function" "%registered-core-vars"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -670,11 +680,18 @@ is the Lisp backend's list."
     "not-callable-error" "unsupported-operation-error" "transient-error" "namespace-error"
     "cancelled" "timeout" "task-cancelled-error"})
 
+(def ^:private library-namespaces
+  "The namespaces that define skein.core functions in Skein: the library (D-051) and the
+native compiler's compile-time environment (D-060)."
+  ["skein.core.native" "skein.compiler.env"])
+
 (defn- library-var
-  "The var of skein.core function nm in the library written in Skein (D-051), or nil."
+  "The var of skein.core function nm in a namespace written in Skein, or nil."
   [nm]
-  (when-let [ns (%find-namespace "skein.core.native")]
-    (%find-own-var ns nm)))
+  (some (fn [ns-name]
+          (when-let [ns (%find-namespace ns-name)]
+            (%find-own-var ns nm)))
+        library-namespaces))
 
 (defn- emit-global-ref
   "Read var's value, checking that it is bound."
@@ -699,7 +716,10 @@ constant), the library's var, or a compile error."
         (startup-constant st [:condition-type (%var-name var)]
                           (str "sk_builtin_condition_type(" (c-string-literal (%var-name var))
                                ")"))
-        (native-core-function st node var))
+        (if (contains? (:core-defined @(:unit st)) (%var-name var))
+          ;; Defined by lib/skein/core.skn, compiled into this program.
+          (emit-global-ref st node var)
+          (native-core-function st node var)))
       (emit-global-ref st node var))))
 
 (defn- emit-if
@@ -1432,6 +1452,34 @@ body."
       (fn [] (let [v (emit st node)]
                (when-not (= v :recur) (stmt st "(void)" v ";")))))))
 
+(defn note-core-names!
+  "Start compiling lib/skein/core.skn into unit, whose top-level forms define names, for a
+program that includes skein.compiler.env (D-060)."
+  [unit names]
+  (swap! unit (fn [u] (-> u (assoc :env true) (update :core-defined into names)))))
+
+(defn emit-core-macro
+  "Compile a macro of lib/skein/core.skn into unit: set var to fn-node's function and
+register it with the runtime as a macro, for skein.compiler.env."
+  [unit var fn-node ns]
+  (emit-toplevel unit {:op :def :loc (:loc fn-node) :var var :init fn-node} ns)
+  (let [st {:unit unit}]
+    (swap! unit update :core-macros conj (var-c-name st var))))
+
+(defn- core-registrations
+  "The C statements that register, for skein.compiler.env, the core macros the program
+compiled and the public vars of skein.core.native."
+  [u]
+  (when (:env u)
+    (let [ns (%find-namespace "skein.core.native")]
+      (concat (map (fn [c] (str "sk_register_core_var(" c ", 1);")) (:core-macros u))
+              (keep (fn [[nm ns-name var-name]]
+                      (let [var (when (and ns (= ns-name "skein.core.native"))
+                                  (%find-own-var ns var-name))]
+                        (when (and var (not (%var-private? var)))
+                          (str "sk_register_core_var(" nm ", 0);"))))
+                    (:var-decls u))))))
+
 (defn program-text
   "The C text of the program in unit, made from the file source-name. If main-var (the
 -main var, or nil) was compiled, main calls it with the command-line arguments."
@@ -1470,6 +1518,7 @@ body."
       (put "  " nm " = " init ";\n"))
     (doseq [[fobj code display] (:fn-objects u)]
       (put "  " fobj " = sk_fn(" code ", " (c-string-literal display) ");\n"))
+    (doseq [r (core-registrations u)] (put "  " r "\n"))
     (put "}\n\nstatic void sk_program_body(void) {\n" (concat-strings @(:body u)) "}\n\n")
     (put "int main(int argc, char **argv) {\n  (void)argc;\n  (void)argv;\n  "
          "sk_init();\n  sk_program_init();\n  sk_program_body();\n")

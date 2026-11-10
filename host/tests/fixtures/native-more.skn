@@ -56,3 +56,8 @@
 (prn (let-values* [[a b] (let-values* [[x y] (two)] (values y x))] [a b]))
 (prn (let-values* [[a b] (identity (two))] [a b]) (let-values* [[a b] (apply two [])] [a b]))
 (prn (let-values* [[a b] ((fn [] (values :f :g)))] [a b]))
+
+;; Integer division past the fixnum range stays exact (regression, M1.9 step 3)
+(def big 100000000000000000000000)
+(prn (quot big 3) (rem big 7) (mod (- big) 7) (rem (- big) 7) (quot 4609434218613702656 16)
+     (mod 4609434218613702656 -10) (quot big big) (rem 7 big))

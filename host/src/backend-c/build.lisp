@@ -17,12 +17,18 @@
   "The namespace of skein.core's functions written in Skein (D-051), which every native
 program includes.")
 
+(defvar *core-macro-mode* nil
+  "True while lib/skein/core.skn is translated for a program that includes
+skein.compiler.env: its macros are compiled into the program (D-060).")
+
 (defun translate-form (form)
   "Translate one top-level syntax object. ns and defmacro forms run on the host at
 compile time and produce no code; everything else becomes C. After an ns form, the
 namespaces it requires are translated first."
   (let ((head (form-head form)))
-    (cond ((member head '("defstruct" "defsoa") :test #'equal)
+    (cond ((and *core-macro-mode* (equal head "defmacro"))
+           (translate-core-macro form))
+          ((member head '("defstruct" "defsoa") :test #'equal)
            ;; Run on the host too, so the vars the struct defines exist for the forms
            ;; after it; the C backend then sets those vars natively (D-055).
            (skein.backend.cl:eval-toplevel form)
@@ -34,9 +40,11 @@ namespaces it requires are translated first."
           (t (translate-compiled form)))))
 
 (defvar *translate-hook* nil
-  "For the tests of the C backend written in Skein (M1.9): a function called with :form,
-each expanded top-level form and its namespace, just before the form is emitted, and at
-the end with :program, the -main var (or NIL) and the source file's name.")
+  "For the tests of the C backend written in Skein (M1.9): a function of an event and two
+arguments. :form, each expanded top-level form and its namespace, just before the form is
+emitted; :core-names, the names lib/skein/core.skn defines, when a program compiles its
+macros; :core-macro, the fn form and the var of each such macro; and :program at the end,
+with the -main var (or NIL) and the source file's name.")
 
 (defun translate-compiled (form)
   "Translate FORM to C, expanding it; a (do ...) expansion's forms are top-level forms."
@@ -62,7 +70,47 @@ so every namespace's code runs after the code of the namespaces it uses."
           (unless path
             (error 'c-backend-error :location nil
                                     :message (format nil "cannot find namespace ~A" name)))
+          ;; The native compiler's environment needs skein.core's macros compiled in.
+          (when (string= name "skein.compiler.env")
+            (translate-core-macros))
           (translate-source path))))))
+
+(defun core-source-names (path)
+  "The names that the top-level defmacro, defn, defn- and def forms of PATH define."
+  (with-open-file (s path :external-format :utf-8)
+    (let ((reader (skein.reader:make-reader s :file (namestring path) :namespace "skein.core"))
+          (names '()))
+      (loop
+        (let ((form (skein.reader:read-form reader :eof-value :eof)))
+          (when (eq form :eof) (return (nreverse names)))
+          (when (member (form-head form) '("defmacro" "defn" "defn-" "def") :test #'equal)
+            (push (sym-name (skein.syntax:syntax-datum
+                             (second (skein.syntax:syntax-datum form))))
+                  names)))))))
+
+(defun translate-core-macros ()
+  "Translate lib/skein/core.skn into the program with its macros compiled, so that
+skein.compiler.env can give the native compiler's skein.core its macros (D-060)."
+  (let* ((path (skein.backend.cl::find-namespace-file "skein.core"))
+         (names (core-source-names path)))
+    (setf (unit-env-p *unit*) t)
+    (dolist (n names) (setf (gethash n (unit-core-defined *unit*)) t))
+    (when *translate-hook* (funcall *translate-hook* :core-names names nil))
+    (let ((*core-macro-mode* t))
+      (translate-source path))))
+
+(defun translate-core-macro (form)
+  "Compile one defmacro of lib/skein/core.skn: only its function is analyzed, since
+analyzing its def would clear the host var's macro flag."
+  (let* ((env (skein.expander:make-env :namespace *current-namespace*))
+         (expanded (skein.expander:macroexpand form env))
+         (def-items (skein.syntax:syntax-datum (second (skein.syntax:syntax-datum expanded))))
+         (name (sym-name (skein.syntax:syntax-datum (second def-items))))
+         (fn-form (car (last def-items)))
+         (var (skein.runtime:find-own-var *current-namespace* name)))
+    (when *translate-hook*
+      (funcall *translate-hook* :core-macro fn-form var))
+    (emit-core-macro var (skein.expander:analyze-toplevel fn-form *current-namespace*))))
 
 (defun translate-source (path)
   "Translate every form of the Skein file at PATH, starting in namespace user. Returns

@@ -49,6 +49,9 @@ sk_value sk_integer(const char *decimal);
 sk_value sk_fn(sk_code code, const char *name);
 sk_value sk_call(sk_value f, uint32_t argc, const sk_value *argv);
 sk_value sk_arity_error(sk_value self, uint32_t argc, const char *defined_at);
+/* For a program that includes the native compiler's environment (D-060): register a var
+ * of skein.core compiled from lib/skein/core.skn (macro = 1) or of skein.core.native. */
+void sk_register_core_var(sk_value var, int macro);
 sk_value sk_unbound(const char *name, const char *location);
 
 sk_value sk_add_slow(sk_value a, sk_value b);

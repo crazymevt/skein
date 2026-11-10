@@ -726,6 +726,7 @@ Backend
   - The reader is `skein.compiler.reader` (`lib/skein/compiler/reader.skn`, D-048). Its syntax objects are maps: `{:kind :datum :loc}`, plus `:meta` when there is metadata. The datum of a compound form is a vector of syntax objects, and a location is a map `{:file :line :column :end-line :end-column}`.
   - The expander is `skein.compiler.expander` (`lib/skein/compiler/expander.skn`, D-049). It produces Core IR as maps (`docs/CORE-IR.md`), and reaches the image's namespaces and vars, and calls macros, through internal `%` functions of skein.core (`host/src/runtime/compile-env.lisp` in Phase 0).
   - The C backend is `skein.compiler.c` (`lib/skein/compiler/c.skn`, D-059). It turns those maps into the same C as the Lisp backend, keeping its state in a map passed down each call rather than in dynamic vars.
+  - Natively, the compiler's namespaces and vars are a model in `skein.compiler.env` (`lib/skein/compiler/env.skn`, D-060), separate from the vars of the compiler itself, so compiling a program never changes the running compiler. Its skein.core holds the runtime's functions, the library's, and the macros of `core.skn`, which are compiled into any program that includes the model.
 - **Compilation unit:** the namespace. Compiled output is cached per namespace, keyed by a source hash plus the hashes of its macro dependencies.
 
 ## 17. Runtime architecture (Phase 1+)

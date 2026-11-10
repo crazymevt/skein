@@ -13,8 +13,11 @@ Core IR here is plain data (docs/CORE-IR.md):
 - :loop and :arity nodes have an :id, and a :recur node's :target is that id.
 
 Namespaces and vars belong to the image the compiler runs in; the expander reaches them
-through skein.core's % functions (host/src/runtime/compile-env.lisp)."
-  (:require [skein.compiler.reader :as reader]))
+through skein.core's % functions (host/src/runtime/compile-env.lisp). Natively the
+compiler models them in skein.compiler.env, which this namespace requires so that native
+builds include it (D-060)."
+  (:require [skein.compiler.reader :as reader]
+            [skein.compiler.env]))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Compile errors
@@ -1031,94 +1034,3 @@ syntax; anything new gets location."
     (if (macro-var form env)
       (recur (macroexpand-1* form env))
       form)))
-
-;;; ------------------------------------------------------------------------------------
-;;; Destructuring (DESIGN §5.4), as skein.core's destructure does it for the let, loop,
-;;; doseq and for macros. It works on plain data.
-
-(defn- d-sym [nm] (symbol "skein.core" nm))
-
-(defn- d-error [& parts] (error (apply str parts)))
-
-(defn- keyword-named? [x nm]
-  (and (keyword? x) (nil? (namespace x)) (= (name x) nm)))
-
-(defn- named-key
-  "For an entry s of a :keys, :strs or :syms vector (kind is that keyword, possibly
-namespaced, as in :ns/keys): [local-symbol lookup-key-form]."
-  [kind s]
-  (let [s-ns (cond (symbol? s) (namespace s)
-                   (keyword? s) (namespace s)
-                   :else (d-error (pr-str kind) " needs symbols, not " (pr-str s)))
-        ns (or (namespace kind) s-ns)
-        nm (name s)
-        local (if (and (symbol? s) (nil? s-ns)) s (symbol nm))]
-    [local (case (name kind)
-             "keys" (keyword ns nm)
-             "strs" nm
-             (list 'quote (symbol ns nm)))]))
-
-(defn destructure
-  "A binding vector that may contain destructuring patterns, turned into one that binds
-only symbols."
-  [bindings]
-  (let [out (transient [])
-        bind (fn [nm init] (conj! out nm) (conj! out init))
-        fresh (fn [prefix] (symbol (name (gensym prefix))))]
-    (letfn [(pb [pattern value]
-              (cond (symbol? pattern)
-                    (do (when (= (name pattern) "&")
-                          (d-error "& must be followed by a binding inside a vector pattern"))
-                        (bind pattern value))
-                    (vector? pattern) (pvec pattern value)
-                    (map? pattern) (pmap pattern value)
-                    :else (d-error "unsupported binding form: " (pr-str pattern))))
-            (pvec [pattern value]
-              (let [g (fresh "vec__")]
-                (bind g value)
-                (loop [items (seq pattern) n 0]
-                  (when items
-                    (let [item (first items)]
-                      (cond (and (symbol? item) (= (name item) "&") (nil? (namespace item)))
-                            (do (when-not (next items) (d-error "& must be followed by a binding"))
-                                (pb (second items) (list (d-sym "nthnext") g n))
-                                (recur (nnext items) n))
-                            (keyword-named? item "as")
-                            (do (when-not (and (next items) (symbol? (second items)))
-                                  (d-error ":as must be followed by a symbol"))
-                                (bind (second items) g)
-                                (recur (nnext items) n))
-                            :else (do (pb item (list (d-sym "nth") g n nil))
-                                      (recur (next items) (inc n)))))))))
-            (pmap [pattern value]
-              (let [g (fresh "map__")
-                    entries (seq pattern)
-                    find-key (fn [k] (some (fn [[ek ev]] (when (keyword-named? ek k) ev)) entries))
-                    as (find-key "as")
-                    defaults (find-key "or")]
-                (bind g value)
-                (bind g (list 'if (list (d-sym "seq?") g)
-                              (list (d-sym "apply") (d-sym "hash-map") g)
-                              g))
-                (when as (bind as g))
-                (let [lookup (fn [local key]
-                               (if (and defaults (symbol? local) (contains? defaults local))
-                                 (list (d-sym "get") g key (get defaults local))
-                                 (list (d-sym "get") g key)))]
-                  (doseq [[k v] entries]
-                    (cond (or (keyword-named? k "as") (keyword-named? k "or")) nil
-                          (and (keyword? k) (contains? #{"keys" "strs" "syms"} (name k)))
-                          (do (when-not (vector? v)
-                                (d-error (pr-str k) " needs a vector of names"))
-                              (doseq [s v]
-                                (let [[local key] (named-key k s)]
-                                  (bind local (lookup local key)))))
-                          (symbol? k) (bind k (lookup k v))
-                          :else (pb k (list (d-sym "get") g v)))))))]
-      (when-not (vector? bindings)
-        (d-error "bindings must be a vector, not " (pr-str bindings)))
-      (when (odd? (count bindings))
-        (d-error "a binding vector needs an even number of forms"))
-      (doseq [[pattern init] (partition 2 bindings)]
-        (pb pattern init))
-      (persistent! out))))

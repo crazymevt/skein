@@ -1,0 +1,123 @@
+(ns native-compiler
+  (:require [skein.compiler.reader :as reader]
+            [skein.compiler.expander :as expander]
+            [skein.compiler.c :as c]
+            [skein.core.native]))
+
+;; The compiler written in Skein, natively (M1.9 step 3): the reader, the expander, the
+;; C backend and skein.core's macros, with the compile-time environment of
+;; skein.compiler.env. This program translates sample programs to C. Under `skein run`
+;; the % functions reach Phase 0's image; natively they reach the model. The C backend
+;; tests check that both print the same, with local and gensym numbers renumbered.
+
+(defn canonical-gensyms
+  "text with the numbers of gensyms (name__123) dropped: the gensym counter differs."
+  [text]
+  (loop [cs (seq text) prev nil prev2 nil skipping false out []]
+    (if cs
+      (let [ch (first cs)
+            digit (<= 48 (int ch) 57)]
+        (cond (and skipping digit) (recur (next cs) prev prev2 true out)
+              (and digit (= prev \_) (= prev2 \_))
+              (recur (next cs) ch prev true (conj out "#"))
+              :else (recur (next cs) ch prev false (conj out (str ch)))))
+      (apply str out))))
+
+(defn- ident-char? [ch]
+  (let [c (int ch)] (or (<= 97 c 122) (<= 65 c 90) (<= 48 c 57) (= c 95))))
+
+(defn canonical-locals
+  "text with each local's C name (l_name_id) renamed by order of first appearance: the
+expander's id counter starts wherever earlier use left it."
+  [text]
+  (let [n (count text)]
+    (loop [i 0 prev-ident false names {} out []]
+      (if (>= i n)
+        (apply str out)
+        (let [ch (nth text i)]
+          (if (and (not prev-ident) (= ch \l) (< (inc i) n) (= (nth text (inc i)) \_))
+            (let [end (loop [j i] (if (and (< j n) (ident-char? (nth text j))) (recur (inc j)) j))
+                  id (subs text i end)
+                  nm (or (get names id) (str "l#" (count names)))]
+              (recur end true (assoc names id nm) (conj out nm)))
+            (recur (inc i) (ident-char? ch) names (conj out (str ch)))))))))
+
+(defn translate
+  "The C program for source, translated in the namespace ns-name."
+  [ns-name source]
+  (let [saved (%current-namespace-name)
+        ns (%in-ns (symbol ns-name))
+        unit (c/make-unit)
+        r (reader/make-reader source {:file "sample.skn" :namespace ns-name})]
+    (try
+      (loop []
+        (let [form (reader/read-form r false ::eof)]
+          (when-not (= form ::eof)
+            (loop [forms [form]]
+              (when (seq forms)
+                (let [expanded (expander/macroexpand (first forms) (expander/make-env ns))]
+                  (if (expander/toplevel-do? expanded)
+                    (recur (into (vec (rest (:datum expanded))) (rest forms)))
+                    (do (c/emit-toplevel unit (expander/analyze-toplevel expanded ns) ns)
+                        (recur (rest forms)))))))
+            (recur))))
+      (canonical-gensyms (canonical-locals (c/program-text unit "sample.skn" nil)))
+      (catch error e (str "error: " (condition-message e)))
+      (finally (%in-ns (symbol saved))))))
+
+(def samples
+  ["(defn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+    (prn (fib 20))"
+   "(defn classify [x]
+      (cond (neg? x) :negative (zero? x) :zero :else :positive))
+    (defn total [xs] (loop [s (seq xs) acc 0] (if s (recur (next s) (+ acc (first s))) acc)))
+    (let [{:keys [a b] :or {b 2}} {:a 1} [x & more :as all] [1 2 3]]
+      (prn a b x more all (classify -1) (total [1 2 3])))"
+   "(defn f ([] 0) ([x] x) ([x & ys] (apply + x ys)))
+    (prn (-> 1 inc (* 3)) (->> [1 2 3] (map inc) (filter odd?)) (f) (f 1) (f 1 2 3))
+    (when-let [x (first [1])] (prn x))
+    (if-let [y nil] (prn y) (prn :none))
+    (case 2 1 :one (2 3) :two-or-three :other)
+    (doseq [i (range 3) :when (odd? i)] (prn i))
+    (prn (for [i (range 3) j [:a :b] :when (pos? i)] [i j]))
+    (dotimes [i 2] (prn i))
+    (letfn [(ev? [n] (if (zero? n) true (od? (dec n)))) (od? [n] (if (zero? n) false (ev? (dec n))))]
+      (prn (ev? 10)))"
+   "(defcondition oops [error] (code :reader oops-code))
+    (prn (try (error 'oops :code 4) (catch oops e (oops-code e)) (finally (prn :done))))
+    (prn (handler-case (/ 1 0) (arithmetic-error [c] :div)))
+    (prn (restart-case (invoke-restart 'use-value 5) (use-value [v] v)))
+    (unwind-protect (prn 1) (prn 2))"
+   "(defclass shape [] (name :init \"s\" :reader shape-name))
+    (defclass circle [shape] (r :init 1))
+    (defgeneric area [s])
+    (defmethod area [(s circle)] (* 3 (:r s) (:r s)))
+    (prn (area (make circle :r 2)) (shape-name (make circle)))"
+   "(defn norm ^f64 [^f64 x ^f64 y] (sqrt (+ (* x x) (* y y))))
+    (defn sum-to ^fixnum [^fixnum n]
+      (loop [^fixnum i 0 ^fixnum acc 0] (if (> i n) acc (recur (inc i) (+ acc i)))))
+    (let [a (make-array f64 3)] (aset! a 0 1.5) (prn (norm 3.0 4.0) (sum-to 10) (aget a 0)))"
+   "(def counter (atom 0))
+    (with-nursery [n] (dotimes [i 4] (spawn n (swap! counter inc))))
+    (prn @counter (pmap inc [1 2]) @(future 1))
+    (let [ch (chan 1)] (>! ch :x) (prn (<! ch)))"
+   "(comment ignored)
+    (prn (and 1 2) (or nil 3) (when-not false 1) (if-not true 1 2) (if-some [x false] x :n)
+         (when-some [y 0] y) (as-> 1 v (inc v) (* v 2)) (some-> {:a 1} :a inc)
+         (some->> [1] (map inc)) (doto (atom 0) (swap! inc)))
+    (def i (atom 0))
+    (while (< @i 3) (swap! i inc))
+    (defn naturals [n] (lazy-seq (cons n (naturals (inc n)))))
+    (prn (take 3 (naturals 0)))
+    (handler-bind [error (fn [c] (prn :seen))] (try (error \"x\") (catch error e :caught)))
+    (prn (with-timeout 1.0 :fast) (on-main-thread :main) @(spawn-pinned :main 1))
+    (let [a (make-array fixnum 4)] (pdotimes [k 4] (aset! a k k)) (prn (seq a)))"
+   ;; Not supported natively yet; both fail the same way.
+   "(declaim (ftype (fn [fixnum] fixnum) twice))"
+   "(defonce once 1)"
+   "(defn bad [] (undefined-thing 1))"
+   "(prn (let [x] x))"])
+
+(doseq [[i source] (map-indexed vector samples)]
+  (println "=== sample" i)
+  (println (translate (str "sample" i) source)))

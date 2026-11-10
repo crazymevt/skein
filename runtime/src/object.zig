@@ -135,6 +135,10 @@ pub const TypeId = enum(u16) {
     chan = 47,
     /// A with-timeout deadline: [monotonic nanoseconds, seconds].
     deadline = 48,
+    // M1.9's compiler support (D-060; compiler.zig).
+    /// A map keyed by identity: [keys (tuple), values (tuple), count, GC epoch of the
+    /// index, index (tuple of positions, keyed by address)].
+    identity_table = 49,
     _,
 };
 

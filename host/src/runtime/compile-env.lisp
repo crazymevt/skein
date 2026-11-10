@@ -106,3 +106,15 @@ received to that form's metadata (as data), for %syntax-meta.")
 (defcore "%f32-bits" (x)
   ;; The IEEE 754 bits of the f32 X, as a non-negative integer.
   (ldb (byte 32 0) (sb-kernel:single-float-bits x)))
+
+;;; For skein.compiler.env (lib/skein/compiler/env.skn, M1.9 step 3), the native
+;;; compiler's model of these namespaces. On the host the compiler uses the image instead,
+;;; so the first three are never called; they exist so the namespace loads.
+
+(defcore "%core-function-names" () (vector-from-list '()))
+(defcore "%core-function" (name) (declare (ignore name)) nil)
+(defcore "%registered-core-vars" () (vector-from-list '()))
+
+(defcore "%namespace-requires" (ns)
+  ;; The namespaces NS requires at run time, in the order its ns form requires them.
+  (vector-from-list (reverse (namespace-requires ns))))

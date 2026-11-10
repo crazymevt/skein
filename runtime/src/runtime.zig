@@ -34,6 +34,7 @@ pub const objects = @import("objects.zig");
 pub const structs = @import("structs.zig");
 pub const tasks = @import("tasks.zig");
 pub const io = @import("io.zig");
+pub const compiler = @import("compiler.zig");
 
 pub const Value = value.Value;
 
@@ -44,6 +45,7 @@ comptime {
     for (std.meta.declarations(cond)) |name| _ = &@field(cond, name);
     for (std.meta.declarations(objects)) |name| _ = &@field(objects, name);
     for (std.meta.declarations(structs)) |name| _ = &@field(structs, name);
+    for (std.meta.declarations(compiler)) |name| _ = &@field(compiler, name);
 }
 
 test {
@@ -69,6 +71,7 @@ test {
     _ = structs;
     _ = tasks;
     _ = io;
+    _ = compiler;
     _ = @import("cond_test.zig");
     _ = @import("platform_test.zig");
 }

@@ -751,3 +751,32 @@ Date: 2026-11-09 · Status: Accepted
   - The port found a bug in the Lisp backend: `emit.lisp` bound `*safety*` before `typed.lisp` declared it special, so `(safety 0)` from a declaration was lost outside typed expressions. The variable is now declared in `emit.lisp`, with a regression test.
   - The compiler's own files don't build natively yet: the reader needs `%decimal-to-float` natively, and the expander needs the compile-time `%` functions (step 3).
 
+## D-060: The native compiler's compile-time environment
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 3 of M1.9 runs the reader, expander and C backend natively. On the host they reach Phase 0's image through about 30 internal `%` functions (namespaces, vars, macro calls, symbol copies, identity tables), and skein.core's macros are host functions. Natively, the program being compiled must not share vars with the compiler compiling it (DESIGN §4.4): compiling the compiler would otherwise redefine the running compiler.
+- **Decision:**
+  - **`skein.compiler.env`** (`lib/skein/compiler/env.skn`) models namespaces and vars as atoms holding maps, with Phase 0's rules for resolving, interning, aliases, refers, `%in-ns`, `%require` and `%refer`. The expander requires it, and the C backend sends calls of the skein.core functions it defines there, as it sends the library's to skein.core.native.
+  - **Its skein.core** is made on first use from:
+    - the runtime's functions (`%core-function-names`, `%core-function`);
+    - the public functions of skein.core.native, which also get their own namespace there, as on the host;
+    - the macros of `lib/skein/core.skn` compiled into the program;
+    - the built-in condition types;
+    - unbound vars for the rest of Phase 0's public names (`%define-method` and others the C backend compiles itself);
+    - the built-in macros `ns`, `defmacro`, `defn` and `defn-`, which the expander implements.
+  - **Compiled core macros:** when a program includes `skein.compiler.env`, both backends first translate `core.skn` into it. Each `defmacro` becomes a `def` of its function, compiled without analyzing the `def`, which would clear the host var's macro flag. References to `core.skn`'s own helpers go to their compiled vars. At startup the program registers these macros and the library's public vars with the runtime (`sk_register_core_var`), for the model to read.
+  - **Runtime support** (`runtime/src/compiler.zig`):
+    - **Symbol copies:** `%copy-symbol` makes a symbol that is `=` to the original (equality compares the namespace and name of symbols that aren't identical) but not `identical?`.
+    - **Identity tables:** keys and values are kept in tuples, with an open-addressing index keyed by address. The index is rebuilt when the GC's collection count has changed, because objects may have moved.
+    - **Floats:** `%f64-bits`, `%f32-bits`, and `%decimal-to-float` on Zig's correctly rounded `parseFloat`.
+    - **Errors:** arity errors carry the function's name and the argument count (`%arity-error-details`).
+    - **Generic functions:** `%generic?`.
+  - **`destructure`** moves from `skein.compiler.expander` to skein.core.native: the core macros call `skein.core/destructure`, which natively must be the library's.
+- **Alternatives:**
+  - Registering compiled programs' vars by name in the runtime and using them as the compile-time namespaces. Simpler, but it shares the compiler's vars with the program it compiles.
+  - Writing the model in Zig. More code to keep in step with Phase 0's rules, and harder to test against them.
+  - Identity tables that scan linearly, or that pin their keys. The first is quadratic for large forms; the second isn't possible with stack-only pinning.
+- **Consequences:**
+  - A test program translates samples that use every core macro: classes, typed code, conditions, concurrency, and errors. It prints the same C natively as under `skein run`, where the same code reaches Phase 0's image.
+  - The work found two native bugs, now fixed with tests: `quot`, `rem` and `mod` on bignums went through floats, and `apply` was limited to 256 arguments.
+  - Phase rules aren't checked natively yet; the interpreter (step 4) will check them.
+

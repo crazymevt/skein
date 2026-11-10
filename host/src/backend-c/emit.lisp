@@ -34,7 +34,13 @@ yet. The message names the milestone that adds it."))
   ;; Statements of the program body (the top-level forms).
   (body (make-string-output-stream))
   ;; Block tag -> true if the block's multiple values matter (its return-froms set them).
-  (block-mv (make-hash-table :test 'eq)))
+  (block-mv (make-hash-table :test 'eq))
+  ;; For a program that includes skein.compiler.env (D-060): the names lib/skein/core.skn
+  ;; defines, whose vars the program compiles; the C names of its macros' vars, in order;
+  ;; and whether the program includes the environment at all.
+  (core-defined (make-hash-table :test 'equal))
+  (core-macros '())
+  (env-p nil))
 
 (defvar *unit*)
 
@@ -344,6 +350,10 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "cpu-count" "chan" "chan?" ">!" "<!" "close!" "alts!" "timeout-chan"
     ;; skein.io's primitives (M1.9; runtime/src/io.zig)
     "%read-file" "%write-file" "%file-exists?" "%run-process"
+    ;; For the compiler written in Skein (M1.9; runtime/src/compiler.zig)
+    "%copy-symbol" "%identity-table" "%identity-get" "%identity-put!" "%f64-bits" "%f32-bits"
+    "%decimal-to-float" "%generic?" "%arity-error-details" "%function-name" "%skein-error?"
+    "%error-has-location?" "%core-function-names" "%core-function" "%registered-core-vars"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -351,10 +361,16 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
   "The skein.core functions the native runtime has (runtime/src/core.zig). Calls to the
 arithmetic, comparison and printing ones are compiled inline.")
 
+(defparameter *library-namespaces* '("skein.core.native" "skein.compiler.env")
+  "The namespaces that define skein.core functions in Skein: the library (D-051) and the
+native compiler's compile-time environment (D-060).")
+
 (defun library-var (name)
-  "The var of skein.core function NAME in the library written in Skein (D-051), or NIL."
-  (let ((ns (skein.runtime:find-namespace "skein.core.native")))
-    (and ns (skein.runtime:find-own-var ns name))))
+  "The var of skein.core function NAME in a namespace written in Skein, or NIL."
+  (loop for ns-name in *library-namespaces*
+        for ns = (skein.runtime:find-namespace ns-name)
+        for var = (and ns (skein.runtime:find-own-var ns name))
+        when var return var))
 
 (defun native-core-function (node var)
   "A C expression for skein.core function VAR: the runtime's function object (a startup
@@ -378,7 +394,10 @@ constant), the library's var, or a compile error."
             (startup-constant (list :condition-type (var-name var))
                               (format nil "sk_builtin_condition_type(~A)"
                                       (c-string-literal (var-name var))))
-            (native-core-function node var))
+            (if (gethash (var-name var) (unit-core-defined *unit*))
+                ;; Defined by lib/skein/core.skn, compiled into this program.
+                (emit-global-ref node var)
+                (native-core-function node var)))
         (emit-global-ref node var))))
 
 (defun emit-global-ref (node var)
@@ -1018,6 +1037,25 @@ through their function objects).")
 ;;; ------------------------------------------------------------------------------------
 ;;; Top-level forms and the whole program
 
+(defun emit-core-macro (var fn-node)
+  "Compile a macro of lib/skein/core.skn into the program: set VAR to FN-NODE's function
+and register it with the runtime as a macro, for skein.compiler.env (D-060)."
+  (emit-toplevel (make-def-node :location (node-location fn-node) :var var :init fn-node))
+  (setf (unit-core-macros *unit*) (append (unit-core-macros *unit*) (list (var-c-name var)))))
+
+(defun core-registrations (unit)
+  "The C statements that register, for skein.compiler.env, the core macros the program
+compiled and the public vars of skein.core.native."
+  (when (unit-env-p unit)
+    (append (mapcar (lambda (c) (format nil "sk_register_core_var(~A, 1);" c))
+                    (unit-core-macros unit))
+            (let ((ns (skein.runtime:find-namespace "skein.core.native")))
+              (loop for (name ns-name var-name) in (unit-var-decls unit)
+                    for var = (and ns (string= ns-name "skein.core.native")
+                                   (skein.runtime:find-own-var ns var-name))
+                    when (and var (not (skein.runtime:var-private-p var)))
+                      collect (format nil "sk_register_core_var(~A, 0);" name))))))
+
 (defun emit-toplevel (node)
   "Emit a top-level form into the program body."
   (let ((*ctx* (make-ctx :out (unit-body *unit*)))
@@ -1063,6 +1101,7 @@ through their function objects).")
           do (format out "  ~A = ~A;~%" name init))
     (loop for (fobj code display) in (unit-fn-objects unit)
           do (format out "  ~A = sk_fn(~A, ~A);~%" fobj code (c-string-literal display)))
+    (dolist (r (core-registrations unit)) (format out "  ~A~%" r))
     (format out "}~%~%static void sk_program_body(void) {~%~A}~%~%"
             (get-output-stream-string (unit-body unit)))
     (format out "int main(int argc, char **argv) {~%  (void)argc;~%  (void)argv;~%  ~

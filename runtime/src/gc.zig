@@ -157,6 +157,10 @@ var initialized = false;
 /// it as `sk_gc_pending`.
 pub export var sk_gc_pending: u8 = 0;
 
+/// How many collections have finished. Objects move only during collections, so a table
+/// keyed by object addresses is valid while this stays the same (compiler.zig).
+pub var epoch = std.atomic.Value(u64).init(0);
+
 threadlocal var current: ?*Mutator = null;
 
 fn fatal(comptime msg: []const u8) noreturn {
@@ -400,6 +404,7 @@ fn parkOrCollect(arg: ?*anyopaque) callconv(.c) void {
     const pause = platform.monotonicNanos() - started;
     state.stats.pause_ns_total += pause;
     state.stats.pause_ns_max = @max(state.stats.pause_ns_max, pause);
+    _ = epoch.fetchAdd(1, .release);
     @atomicStore(u8, &sk_gc_pending, 0, .release);
     m.state = .running;
     world_cond.broadcast();
