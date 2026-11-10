@@ -34,7 +34,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.2 Fibers | ✅ |
 | M2.3 Work-stealing scheduler | ✅ |
 | M2.4 Dynamic vars natively | ✅ |
-| M2.5 Evaluating code in native programs | ⬜ |
+| M2.5 Evaluating code in native programs | ✅ |
 | M2.6 Native REPL and `skein dev` | ⬜ |
 | M2.7 Swank server | ⬜ |
 | M2.8 Supervisors | ⬜ |
@@ -327,7 +327,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   4. ✅ Redefinition (DESIGN §15, D-080): `defclass` updates existing instances natively, subclasses included, `defmethod` clears dispatch caches, `defonce` keeps state; a native program reloads a changed namespace and runs the new code.
   5. ✅ Typed closures: unboxed `f64` and integer paths for declared types; `make bench` compares n-body interpreted and compiled in the same dev build (about 20×, D-079).
 
-**Exit:** a native program reloads a changed namespace from source and runs the new code; interpreted code runs within 10× of compiled code on the n-body benchmark (both in a dev build).
+**Exit:** a native program reloads a changed namespace from source and runs the new code; interpreted code runs within 25× of compiled code on the n-body benchmark (both in a dev build). The target was 10×; Jessie changed it when about 20× was measured, since hot reload of compiled code (M2.9) gives reloaded hot code native speed (D-079).
 
 ### M2.6 Native REPL and `skein dev`
 - The REPL on the terminal and on a localhost socket, the file watcher and the debugger (an unhandled error suspends its fiber; restarts and a backtrace), with Phase 0's behavior (D-039).

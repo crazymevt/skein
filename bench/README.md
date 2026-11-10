@@ -58,7 +58,7 @@ Recorded 2026-11-09 on Apple M4, Zig 0.17.1, macOS, by `bench/nbody/native.lisp`
 
 ## n-body evaluated natively (M2.5)
 
-Recorded 2026-11-10 on Apple M4, Zig 0.17.1, macOS, by `bench/nbody/eval.lisp`: one program built with `skeinc build --eval` (dev profile) runs n-body compiled, then loads `nbody.skn` again so the same functions run in the evaluator (D-079). Both compute the same energies. M2.5's exit criterion asked for a ratio of at most 10.
+Recorded 2026-11-10 on Apple M4, Zig 0.17.1, macOS, by `bench/nbody/eval.lisp`: one program built with `skeinc build --eval` (dev profile) runs n-body compiled, then loads `nbody.skn` again so the same functions run in the evaluator (D-079). Both compute the same energies. M2.5's exit criterion asked for a ratio of at most 10; Jessie set it at 25 when this was measured (D-079).
 
 | n-body, 200,000 steps | Best of 5 (s) |
 |---|---|
