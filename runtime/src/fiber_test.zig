@@ -531,31 +531,37 @@ fn sleepMs(ms: u64) void {
     while (platform.monotonicNanos() < until) c.timedWait(&m, until - platform.monotonicNanos());
 }
 
-fn sleepBlocking(arg: ?*anyopaque) void {
-    const ms: *const u64 = @ptrCast(@alignCast(arg));
-    sleepMs(ms.*);
-}
-
 test "a blocking call hands its worker off to a spare, which leaves afterwards" {
     setup();
+    // Twice as many fibers as workers block, each until all of them are blocked at once:
+    // only spares can run the second half while the first half's workers are blocked.
+    // (A check on how long it took instead failed on a slow CI runner.)
     const Blocker = struct {
         group: *sched.WaitGroup,
+        total: usize,
+        inside: std.atomic.Value(usize) = .init(0),
+        all_met: std.atomic.Value(usize) = .init(0),
+        fn waitForAll(arg: ?*anyopaque) void {
+            const b: *@This() = @ptrCast(@alignCast(arg));
+            _ = b.inside.fetchAdd(1, .acq_rel);
+            const deadline = platform.monotonicNanos() + 10 * std.time.ns_per_s;
+            while (b.inside.load(.acquire) < b.total and platform.monotonicNanos() < deadline) {
+                sleepMs(1);
+            }
+            if (b.inside.load(.acquire) == b.total) _ = b.all_met.fetchAdd(1, .acq_rel);
+        }
         fn job(arg: ?*anyopaque) void {
             const b: *@This() = @ptrCast(@alignCast(arg));
-            const ms: u64 = 150;
-            sched.blocking(sleepBlocking, @constCast(&ms));
+            sched.blocking(waitForAll, b);
             b.group.done();
         }
     };
     const n = sched.workerCount();
     var group = sched.WaitGroup.init(2 * n);
-    var blocker: Blocker = .{ .group = &group };
-    const start = platform.monotonicNanos();
+    var blocker: Blocker = .{ .group = &group, .total = 2 * n };
     for (0..2 * n) |_| sched.spawn(Blocker.job, &blocker);
     group.wait();
-    const took = platform.monotonicNanos() - start;
-    // Without spares the second half would wait for the first: at least 300 ms.
-    try testing.expect(took < 290 * std.time.ns_per_ms);
+    try testing.expectEqual(2 * n, blocker.all_met.load(.acquire));
     try testing.expect(sched.liveWorkers() > n);
     // Idle spares leave again.
     const deadline = platform.monotonicNanos() + 5 * std.time.ns_per_s;
