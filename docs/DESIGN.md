@@ -137,6 +137,8 @@ Following Racket, code runs either at **compile time (phase 1)**, which is macro
 - **Native compiler (D-058):** at phase 1, the native compiler runs only a namespace's `ns` form, its `defmacro`s, its `def`s whose value is a function, and its struct, class and condition-type definitions, in every namespace it compiles, the program's and the ones it requires. Other top-level forms, such as a `println` or a `def` of computed data, run only at phase 0, in the built program. Phase-1 code runs in an interpreter (D-050).
 - The native compiler warns about a phase violation as Phase 0 does, with the same message, and the macro still runs (D-061).
 
+**Implementation status at the end of Phase 1** (M1.12, `docs/PHASE1-RETRO.md`): programs are compiled natively by `skeinc`, the compiler written in Skein, which compiles itself (`skein build`, `skein package`, for every §19.1 target). Native programs have the whole language and the libraries Driftrock uses: `skein.core`, conditions and restarts, the object system, value structs and typed arrays, tasks, nurseries and channels on OS threads, the FFI, `skein.math`, `skein.time`, `skein.jobs`, `skein.game` and `skein.io`. Live development (`skein run`, `dev` and `repl`) still runs on the Phase 0 SBCL host until Phase 2 brings fibers, a native REPL and reloading.
+
 ## 5. Special forms and core macros
 
 ### 5.1 Special forms (the compiler understands only these)
