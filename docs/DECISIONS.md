@@ -1213,3 +1213,15 @@ Date: 2026-11-10 · Status: Accepted
 - **Alternatives:** after Driftrock developed live, or in Phase 3; a library `ui` in a repository of its own, used as a package.
 - **Consequences:** Phase 2 has fifteen milestones. The FFI additions also serve games' bindings (SDL3 declarations bindgen skipped). The widgets, the event API, how properties are set without `setf`, and the steps are settled when M2.14 is prepared.
 
+## D-091: Hot reload of compiled code
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.9 (DESIGN §15). Natively a reloaded file runs in the evaluator (D-079), about 20 times slower than compiled code (the n-body benchmark). A compiled program already finds its vars by name and builds its constants and function objects in an init function, so a namespace compiled the same way can be loaded into a running program and rebind its vars.
+- **Decision** (Jessie chose the first two):
+  - **Evaluate now, compile behind:** a saved file is evaluated at once, as today (`; reloaded x.skn`), then its namespace is compiled in the background and swapped in (`; compiled x.skn`). The change shows at once and runs at full speed shortly after. A compile error leaves the evaluated code running.
+  - **Files and `reload`:** saved files and `(reload 'ns)` get compiled code. A form from `C-c C-c` or the REPL stays evaluated until its file is saved, when the whole namespace is compiled.
+  - **Compiling in the program:** a program built with `--eval` already holds the program's compile-time model, so it also includes the C backend, translates the changed namespace itself and runs `zig cc` on it; no second compiler process has to load the program again. Its module's init function registers its constants and function objects, finds its vars by name and runs the namespace's top-level forms, which rebind them. Modules are never unloaded: running frames and closures may still use their code.
+  - **Linking:** executables built with `--eval` export the runtime's functions for modules (on Windows, through the import library zig makes for the executable).
+  - **Steps:** loading compiled code; `skein dev` and `reload`; speed, and a CI check that edits Driftrock while it plays.
+- **Alternatives:** compiled only (nothing changes until the build is done); compiling every `C-c C-c` form, or only what the watcher sees; a `skeinc` process that compiles modules for the program, which would have to load the whole program's environment for each build.
+- **Consequences:** `--eval` builds grow by the C backend and need Zig where they run (which `skein dev` has). Old modules stay mapped until the program exits.
+

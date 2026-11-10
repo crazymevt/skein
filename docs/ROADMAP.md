@@ -365,6 +365,10 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M2.9 Hot reload of compiled code
 - `skein dev` compiles a changed namespace to a shared library and loads it into the running program, rebinding its vars; changing a value struct's layout warns about code and arrays compiled against the old one (DESIGN §15).
+- Steps, in order (D-091):
+  1. Loading compiled code: a program built with `--eval` includes the C backend, translates a namespace from its live model to C as a module (the program's init and body as an exported init function, its vars found by name), has `zig cc` build a shared library from it, and loads it (`dlopen`, `LoadLibrary`), which rebinds the namespace's vars to compiled code. Executables export the runtime's functions for modules, on all three platforms (on Windows through an import library). Native tests: a reloaded namespace's functions are compiled, callers see them, `defonce` keeps its value.
+  2. `skein dev` and `reload`: a saved file is evaluated at once, as now (`; reloaded x.skn`), then compiled in the background and swapped in (`; compiled x.skn`); `(reload 'ns)` does the same. A compile error is reported and the evaluated code stays. Changing a value struct's layout warns about compiled code and live arrays that use the old one. Forms from the REPL and SLIME stay evaluated until their file is saved.
+  3. Fast enough: the module build reuses the runtime's headers and flags and compiles one namespace in well under a second; a CI step on all three platforms edits Driftrock while it plays (`--autopilot --check-60fps`) and checks that the change runs compiled within a second of saving, without a dropped frame.
 
 **Exit:** an edit to Driftrock is running as compiled code within a second of saving, without a dropped frame, on all three platforms.
 
