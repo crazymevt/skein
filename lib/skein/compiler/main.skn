@@ -1,8 +1,9 @@
 (ns skein.compiler.main
   "The native compiler's driver (M1.9 step 5, D-062): `skeinc build file.skn [-o out]
-[--release] [--keep-c]`. It reads a program and the namespaces it requires, runs their
-phase-1 code (D-058) in the interpreter, translates them to C with skein.compiler.c, and
-compiles the C with zig against the runtime, as host/src/backend-c/build.lisp does.
+[--target T] [--profile dev|release] [--keep-c]` (M1.11, D-069). It reads a program and
+the namespaces it requires, runs their phase-1 code (D-058) in the interpreter,
+translates them to C with skein.compiler.c, and compiles the C with zig against the
+runtime, as host/src/backend-c/build.lisp does.
 
 Translation follows build.lisp function by function, so the C is the same:
 skein.core.native first, then the program; after each ns form, the namespaces it
@@ -298,14 +299,40 @@ Its -main, if any, is called with the command-line arguments."
       (fail (first argv) " failed:\n" (:out result) (:err result)))
     (:out result)))
 
+(def targets
+  "The zig target triples skeinc builds for (DESIGN §19.1); the first three are P0."
+  ["aarch64-macos" "x86_64-windows-gnu" "x86_64-linux-gnu" "x86_64-macos" "aarch64-linux-gnu"
+   "aarch64-windows-gnu"])
+
+(defn target-os
+  "The operating system of a target triple: :macos, :windows or :linux."
+  [target]
+  (let [os (subs target (inc (count (take-while (fn [c] (not= c \-)) target))))]
+    (cond (= os "macos") :macos
+          (= os "windows-gnu") :windows
+          :else :linux)))
+
+(defn- zig-target
+  "The triple given to zig: Linux targets link against glibc 2.28, for older distributions
+(D-069)."
+  [target]
+  (if (= (target-os target) :linux) (str target ".2.28") target))
+
+(def ^:private profiles
+  "Each profile's zig optimize mode for the runtime and C optimization level (D-069)."
+  {"dev" {:optimize "ReleaseSafe" :dir "releasesafe" :c "-O1"}
+   "release" {:optimize "ReleaseFast" :dir "releasefast" :c "-O2"}})
+
 (defn- build-runtime
-  "Build the runtime library with zig build; return its install prefix, relative to the
-current directory."
-  [home optimize]
-  (let [dir (str "runtime/native-" (if (= optimize "ReleaseFast") "releasefast" "releasesafe")
-                 "/")]
+  "Build the runtime library for target (nil: this machine) with zig build; return its
+install prefix, relative to the current directory."
+  [home target profile]
+  (let [{:keys [optimize dir]} (get profiles profile)
+        dir (str "runtime/" (or target "native") "-" dir "/")]
     ;; zig build runs in runtime/, so the prefix is given from there.
-    (run-tool [(zig) "build" (str "-Doptimize=" optimize) "--prefix" (str "../.skein-cache/" dir)]
+    (run-tool (vec (concat [(zig) "build" (str "-Doptimize=" optimize)
+                            "--prefix" (str "../.skein-cache/" dir)]
+                           (when target [(str "-Dtarget=" (zig-target target))])))
               (str home "runtime"))
     (str home ".skein-cache/" dir)))
 
@@ -316,23 +343,30 @@ current directory."
 
 (defn build-program
   "Compile the Skein program at path to an executable at output (default: the file's
-name, in the current directory). Options: :output, :release (optimize more) and :keep-c
-(leave the C file next to the executable). Returns the executable's path."
-  [path {:keys [output release keep-c]}]
+name, in the current directory). Options: :output; :target, a triple of `targets` (nil:
+this machine); :profile, \"dev\" (the default) or \"release\"; and :keep-c (leave the C
+file next to the executable). Returns the executable's path."
+  [path {:keys [output target profile keep-c]}]
   (let [home (find-home)
-        windows (windows?)
+        profile (or profile "dev")
+        _ (when-not (contains? profiles profile)
+            (fail "unknown profile " profile "; use dev or release"))
+        _ (when (and target (not (some #{target} targets)))
+            (fail "unknown target " target "; use one of " (apply str (interpose ", " targets))))
+        windows (if target (= (target-os target) :windows) (windows?))
         output (or output (str (stem path) (if windows ".exe" "")))
         source-paths (vec (distinct [(directory-of path) "" (str home "lib/")]))
         c-source (translate-file path source-paths)
-        optimize (if release "ReleaseFast" "ReleaseSafe")
-        prefix (build-runtime home optimize)
+        prefix (build-runtime home target profile)
         c-file (if keep-c
                  (str (directory-of output) (stem output) ".c")
                  (str home ".skein-cache/" (stem path) ".c"))]
     (io/write-file c-file c-source)
     ;; No fused multiply-adds: floating-point results must be exactly Phase 0's.
-    (run-tool (vec (concat [(zig) "cc" "-std=c11" "-ffp-contract=off" (if release "-O2" "-O1")
-                            "-I" (str prefix "include") c-file (runtime-library prefix)
+    (run-tool (vec (concat [(zig) "cc" "-std=c11" "-ffp-contract=off"
+                            (:c (get profiles profile))]
+                           (when target ["-target" (zig-target target)])
+                           ["-I" (str prefix "include") c-file (runtime-library prefix)
                             "-o" output]
                            (when-not windows ["-lm"])))
               nil)
@@ -342,23 +376,28 @@ name, in the current directory). Options: :output, :release (optimize more) and 
 ;;; The command line
 
 (def ^:private usage
-  "Usage: skeinc build file.skn [-o output] [--release] [--keep-c]")
+  (str "Usage: skeinc build file.skn [-o output] [--target T] [--profile dev|release]"
+       " [--release] [--keep-c]"))
 
 (defn- parse-build-args [args]
   (loop [args (seq args) opts {}]
     (if-let [arg (first args)]
-      (cond (= arg "--release") (recur (next args) (assoc opts :release true))
+      (cond (= arg "--release") (recur (next args) (assoc opts :profile "release"))
             (= arg "--keep-c") (recur (next args) (assoc opts :keep-c true))
-            (= arg "-o") (if (next args)
-                           (recur (nnext args) (assoc opts :output (second args)))
-                           (fail "skeinc build: -o needs a value"))
+            (contains? {"-o" :output "--target" :target "--profile" :profile} arg)
+            (if (next args)
+              (recur (nnext args)
+                     (assoc opts (get {"-o" :output "--target" :target "--profile" :profile}
+                                      arg)
+                            (second args)))
+              (fail "skeinc build: " arg " needs a value"))
             (= (first arg) \-) (fail "skeinc build: unknown option " arg)
             (:file opts) (fail "skeinc build: expected one file")
             :else (recur (next args) (assoc opts :file arg)))
       opts)))
 
 (defn -main
-  "skeinc build file.skn [-o output] [--release] [--keep-c]."
+  "skeinc build file.skn [-o output] [--target T] [--profile dev|release] [--keep-c]."
   [& args]
   (let [[command & more] args]
     (when-not (= command "build") (fail usage))

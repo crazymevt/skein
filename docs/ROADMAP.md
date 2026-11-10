@@ -234,7 +234,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - `skein build --target T --profile P` cross-compiles for the three P0 targets (§19.1); `skein package` makes a folder with the executable, bundled libraries and assets (§19.4). `project.skn` (§20.2) supplies `:main`, `:paths` and `:native`.
 - Both commands are `skeinc`'s; `./skein` hands them to it (D-069).
 - Steps, in order:
-  1. `--target` and `--profile` in `skeinc build`: the runtime and the program cross-compiled for each §19.1 target, Linux against glibc 2.28; `dev` and `release` profiles.
+  1. ✅ `--target` and `--profile` in `skeinc build`: the runtime and the program cross-compiled for each §19.1 target, Linux against glibc 2.28; `dev` and `release` profiles.
   2. `project.skn`: `skeinc build` with no file builds the project's `:main`, finding namespaces in `:paths`.
   3. `./skein build` and `./skein package` run `skeinc`, bootstrapping it if needed; the Lisp backend moves behind an internal command.
   4. `skein package`: a folder with the executable, its `:native` libraries and its `:assets`, or a `.app` for macOS; the runtime finds libraries next to the executable first.
@@ -298,7 +298,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - The native compiler's environment (D-060), for the next steps of M1.9:
   - `declaim` and `defonce` don't compile natively yet (`%declaim`, `%var-bound?`).
   - A program that includes `skein.compiler.env` registers every public var of skein.core.native at startup, and the model copies them into its skein.core.
-- The native compiler's driver (D-062): `skeinc` finds the Skein checkout from `SKEIN_HOME` or by looking in the current directory and its parents, and keeps the runtime and the C file in the checkout's `.skein-cache/`. M1.11 should give it an install layout. It doesn't support `--target` yet.
+- The native compiler's driver (D-062): `skeinc` finds the Skein checkout from `SKEIN_HOME` or by looking in the current directory and its parents, and keeps the runtime and the C file in the checkout's `.skein-cache/`. M1.11 should give it an install layout.
 - Native FFI calls (D-066): an arity or type error in a call to a C function has Skein's wording natively; Phase 0's comes from SBCL and CFFI. Struct and union arguments by value aren't supported, as in Phase 0.
 - Native FFI (D-065): pointers print as `#<ptr 0x...>` (Phase 0 prints SBCL's form), and owned and borrowed pointers are both of class `any`. The GC frees an owned pointer some time after it becomes unreachable, as Phase 0's finalizers do.
 - The interpreter (D-061): declared types aren't checked in phase-1 code, and a handler or restart cluster holds at most 64 entries. Its speed hasn't been measured; macros are usually small.

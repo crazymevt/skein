@@ -76,7 +76,7 @@ These are defined in M0.1; update this section if they change.
 | `./skein repl` | start a Skein REPL |
 | `./skein build <file.skn>` | compile a program natively with the C backend (Phase 1; needs Zig) |
 | `make compiler` | bootstrap the native compiler, `build/skeinc` (Phase 0 builds a first compiler, which builds it) |
-| `build/skeinc build <file.skn> [-o out]` | compile a program natively with the compiler written in Skein |
+| `build/skeinc build <file.skn> [-o out] [--target T] [--profile dev\|release]` | compile a program natively with the compiler written in Skein, for any §19.1 target |
 | `./skein dev <file.skn> [args]` | run with file reloading and a REPL (terminal and localhost:5555) |
 | `make bench` | run the benchmarks in `bench/` |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |

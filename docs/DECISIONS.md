@@ -935,6 +935,7 @@ Date: 2026-11-10 · Status: Accepted
   - **`:assets`:** a new `project.skn` key lists the directories copied into a package as they are. `:paths` is only where namespaces are found.
   - **Targets and profiles:** `--target` takes the zig triples of DESIGN §19.1; the default is the machine's own. Linux targets link against glibc 2.28, for older distributions. `--profile` is `dev` (the default for `build`: safety checks, ReleaseSafe runtime) or `release` (the default for `package`: ReleaseFast, `-O2`); `--release` stays as short for `--profile release`. Each target and profile gets its own runtime build in the cache.
   - **`project.skn`** supplies `:name`, `:version`, `:main` (the `-main` to call, as `ns/-main`), `:paths`, `:native` and `:assets`. `skein build` with no file builds the project in the current directory. `:deps`, `:profiles` and `:targets` aren't read yet.
+  - **This machine's triple** comes from a runtime function, `%host-target`, for the default target of `skein package`.
   - **M1.11 has five steps** (ROADMAP): targets and profiles; `project.skn`; `./skein` handing off to skeinc; `skein package`; and CI that packages `hello` for all three targets on Linux and runs each on its platform.
 - **Alternatives:**
   - Keeping `./skein build` on the Lisp backend, with the new features only in `skeinc`. Two build commands that differ would stay around.

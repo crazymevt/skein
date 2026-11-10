@@ -187,6 +187,12 @@ received to that form's metadata (as data), for %syntax-meta.")
   ;; The environment variable NAME's value, or nil. For the native compiler's driver.
   (uiop:getenv name))
 
+(defcore "%host-target" ()
+  ;; This machine's zig target triple (DESIGN §19.1): the native compiler's default target.
+  (format nil "~A-~A"
+          #+(or arm64 aarch64) "aarch64" #+x86-64 "x86_64"
+          #+darwin "macos" #+linux "linux-gnu" #+win32 "windows-gnu"))
+
 ;;; skein.compiler.env's %define-struct and %define-soa use these natively; in Phase 0
 ;;; %define-struct and %define-soa do the work themselves.
 

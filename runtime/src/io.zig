@@ -8,6 +8,7 @@
 //! made outside the heap.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const platform = @import("platform");
 const rt = @import("rt.zig");
 const gc = @import("gc.zig");
@@ -53,6 +54,13 @@ fn copyPath(v: Value) []u8 {
 }
 
 /// A Skein string of `bytes`, or null if they aren't UTF-8 (Phase 0 can't decode them).
+const host_target = @tagName(builtin.cpu.arch) ++ switch (builtin.os.tag) {
+    .macos => "-macos",
+    .linux => "-linux-gnu",
+    .windows => "-windows-gnu",
+    else => @compileError("the Skein runtime supports macOS, Linux and Windows"),
+};
+
 fn decoded(bytes: []const u8) ?Value {
     if (!std.unicode.utf8ValidateSlice(bytes)) return null;
     return string.make(bytes);
@@ -193,6 +201,14 @@ pub const entries = [_]Entry{
             defer alloc.free(z);
             const v = std.c.getenv(z.ptr) orelse return Value.nil;
             return decoded(std.mem.span(v)) orelse Value.nil;
+        }
+    }.f },
+    .{ .name = "%host-target", .min = 0, .max = 0, .impl = struct {
+        fn f(a: Args) Value {
+            // This machine's zig target triple, as DESIGN §19.1 names it. (Internal: the
+            // native compiler's default target, M1.11.)
+            _ = a;
+            return string.make(host_target);
         }
     }.f },
     .{ .name = "%read-file", .min = 1, .max = 1, .impl = struct {

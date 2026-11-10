@@ -44,6 +44,30 @@ test_compiler() {
     fi
     echo "skeinc: $name ok"
   done
+  # Cross builds (M1.11): hello for each P0 target, in the release profile, is an
+  # executable of that target's format, and the one for this machine runs.
+  local host=""
+  case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64) host=aarch64-macos ;;
+    Linux-x86_64) host=x86_64-linux-gnu ;;
+    MINGW*-x86_64 | MSYS*-x86_64) host=x86_64-windows-gnu ;;
+  esac
+  for target in aarch64-macos x86_64-windows-gnu x86_64-linux-gnu; do
+    out="build/examples/hello-$target"
+    case "$target" in *windows*) out="$out.exe" ;; esac
+    "$skeinc" build examples/hello.skn --target "$target" --profile release -o "$out" > /dev/null
+    magic=$(od -An -tx1 -N4 "$out" | tr -d ' \r\n')
+    case "$target:$magic" in
+      *macos:cffaedfe | *windows-gnu:4d5a* | *linux-gnu:7f454c46) ;;
+      *) echo "skeinc: hello for $target isn't a $target executable ($magic)"; exit 1 ;;
+    esac
+    if [ "$target" = "$host" ] && ! "$out" | diff --strip-trailing-cr examples/hello.expected - \
+         > /dev/null; then
+      echo "skeinc: hello for $target differs from examples/hello.expected"
+      exit 1
+    fi
+    echo "skeinc: hello for $target ok"
+  done
   # Programs that only skeinc compiles (the FFI, D-064), built by skeinc, print what
   # `skein run` prints, and every line a ";; stderr: " comment gives on standard error.
   for program in host/tests/fixtures/native-ffi*.skn; do

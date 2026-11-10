@@ -58,3 +58,19 @@ error message."
   (flet ((call (name &rest args) (apply (driver-function name) args)))
     (is (string= "a/b-c.skn" (call "namespace-file-name" "a.b-c")))
     (is (string= "skein/core/native.skn" (call "namespace-file-name" "skein.core.native")))))
+
+(test driver-targets-and-profiles
+  ;; --target takes DESIGN §19.1's triples and --profile dev or release (M1.11, D-069).
+  ;; Cross builds themselves are checked by host/tools/bootstrap.sh.
+  (driver-function "target-os")
+  (flet ((out (source)
+           (ev-output (format nil "(ns driver-targets (:require [skein.compiler.main :as m]))
+                                   ~A" source))))
+    (is (string= (format nil "[:macos :windows :linux :macos :linux :windows]~%")
+                 (out "(prn (mapv m/target-os m/targets))")))
+    (is (search "unknown target sparc-solaris; use one of aarch64-macos, x86_64-windows-gnu"
+                (out "(prn (try (m/build-program \"x.skn\" {:target \"sparc-solaris\"})
+                             (catch error e (condition-message e))))")))
+    (is (search "unknown profile fast; use dev or release"
+                (out "(prn (try (m/build-program \"x.skn\" {:profile \"fast\"})
+                             (catch error e (condition-message e))))")))))

@@ -355,7 +355,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%decimal-to-float" "%generic?" "%arity-error-details" "%function-name" "%skein-error?"
     "%error-has-location?" "%core-function-names" "%core-function" "%registered-core-vars"
     "%call-with-handlers" "%call-with-restarts" "%apply-values" "%call-with-values"
-    "%named-fn" "%arity-error" "%add-method" "%getenv" "%make-struct-def" "%struct-constructor"
+    "%named-fn" "%arity-error" "%add-method" "%getenv" "%host-target"
+    "%make-struct-def" "%struct-constructor"
     "%struct-predicate" "%struct-accessor" "%make-soa-def" "%soa-maker" "%soa-field"
     "%ctype-info"
     ;; Conditions and restarts (M1.5)
