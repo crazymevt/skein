@@ -25,3 +25,51 @@
   (prn (macroexpand '(native-eval/twice 8)))
   (prn (macroexpand '(twice 9)))
   (prn (macroexpand '(->> 1 (+ 2) inc))))
+
+;; eval: a form given as data, in the current namespace
+(def ^:dynamic *depth* 0)
+(defn depth [] *depth*)
+(defgeneric describe [x])
+(defmethod describe [(x integer)] [:integer x])
+(prn (eval '(+ 1 2)) (eval 5) (eval "s") (eval '(twice 21)) (eval '(depth)))
+(prn (eval '(let [a 1 b (+ a 1)] [a b])) (eval '((fn [x & more] [x more]) 1 2 3)))
+(prn (eval '(loop [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc i)) acc))))
+(prn (eval '(letfn [(ev? [n] (if (zero? n) true (od? (dec n))))
+                    (od? [n] (if (zero? n) false (ev? (dec n))))]
+              [(ev? 10) (od? 7)])))
+(prn (mapv (eval '(fn [x] (* x x))) [1 2 3]))
+(prn (eval '(binding [*depth* 2] [(depth) (do (set! *depth* 3) (depth))])) (depth))
+(prn (eval '(try (error "boom") (catch error e (condition-message e)))))
+(prn (eval '(block* b (return-from* b 7) 8)) (eval '(let-values* [[a b] (values 1 2)] [a b])))
+(prn (eval '(let [a (atom [])]
+              (try (unwind-protect (error "x") (swap! a conj :cleaned)) (catch error e nil))
+              @a)))
+(prn (eval '(restart-case (invoke-restart 'use-value 9) (use-value [v] [:restarted v]))))
+(prn (eval '(handler-case (with-nursery [n] @(spawn n (error "in a task")))
+              (error [c] (condition-message c)))))
+
+;; Definitions made by eval: vars of the current namespace, which compiled code sees
+(defn scale [x] (* 2 x))
+(eval '(defn scale [x] (* 3 x)))
+(prn (scale 2) (eval '(scale 2)))
+(eval '(defmethod describe [(x string)] [:string x]))
+(prn (describe 1) (describe "s"))
+(eval '(defmacro thrice [x] (list '* 3 x)))
+(prn (eval '(thrice 5)) (macroexpand '(thrice 5)))
+(eval '(defstruct point (x f64) (y f64)))
+(prn (eval '(point-x (point 1.5 2.5))))
+(prn (eval '(do (def a-var 1) (def b-var (inc a-var)) [a-var b-var])))
+
+;; load-file and require: a namespace the program doesn't include, loaded from source
+(eval '(ns native-eval.user (:require [native-eval.extra :as x])))
+(prn (eval '(x/hello "eval")) (eval '(x/unless false :unless)) @(eval 'native-eval.extra/loads))
+(eval '(ns native-eval))
+(prn (reload 'native-eval.extra) @(eval 'native-eval.extra/loads))
+
+;; Errors
+(defn message-of [thunk] (try (thunk) (catch error e (condition-message e))))
+(prn (message-of (fn [] (eval '(no-such-function 1)))))
+(prn (message-of (fn [] (eval '(error "from eval")))))
+(prn (message-of (fn [] (load-file "no/such/file.skn"))))
+(prn (message-of (fn [] (reload 'no.such.namespace))))
+(prn (message-of (fn [] (reload "x"))))

@@ -1075,3 +1075,20 @@ Date: 2026-11-10 · Status: Accepted
   - The current namespace is one for the whole program natively, not one per task as in Phase 0.
   - Two evaluators exist for a while: `interp.skn` runs phase-1 code in skeinc (D-061), the Zig one runs code in programs. The Zig one could replace `interp.skn`, which would also give phase-1 code `binding` (D-077).
   - A program's current namespace becomes runtime state, as in Phase 0: each namespace's top-level forms run in it, `-main` runs in `user` (as in Clojure), `ns` and `in-ns` change it, `load-file` restores it afterwards, and a task starts in its spawner's.
+
+## D-079: The evaluator natively
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.5 step 3 runs code evaluated in a program built with `--eval` (D-078). The Skein front end produces Core IR as maps; the evaluator is in Zig (D-078) and must match compiled code: closures, recur, non-local exits, conditions, multiple values, dynamic vars.
+- **Decision:**
+  - **Two halves.** `skein.compiler.eval` lowers a top-level form's Core IR into vectors with every name resolved: each local to a slot of its function's frame or to a value its closure captured, a `^:mutable` local that a closure uses to a box, each var to the program's real var (a skein.core function to its value), and recur to the slots it rebinds. `runtime/src/eval/compile.zig` turns those into a tree of nodes, each a function pointer and its operands, and runs it.
+  - **Frames on the C stack:** an interpreted function is a runtime closure (its first captured value points at its compiled code), so compiled code calls it like any function. A call's locals are an array on the stack, sized per function (8, 32, 128 or 1024 slots), which the collector scans. recur sets a flag that the innermost loop or function sees.
+  - **The C backend's rules:** multiple values as D-053 (a node compiled for a position whose values matter leaves them in the registers); `block*` and `unwind-protect` through C helpers in `unwind.c`, since Zig can't call setjmp; handler and restart clusters pushed as compiled code pushes them; `binding`, `set!` of a dynamic var and `defonce` as D-077.
+  - **The model does the rest:** in an `--eval` program every var that the model makes for the program gets a real var, so env.skn's phase-1 versions of `defmethod`, `defstruct`, `defsoa`, `%class` and `%condition-type` act on the running program. The FFI's type definitions run as at phase 1; a `defcfun` or `defcallback` needs compiled C, so evaluating one again (reloading its namespace) keeps the compiled function, and a new one is an error.
+  - `eval`, `load-file` and `reload` are Phase 0's: `load-file` starts in the current namespace and restores it, records the file of a namespace it declares, and `reload` loads in `user`. `require` of a namespace the program doesn't include loads it from the program's source paths.
+- **Alternatives:** walking the Core IR maps from Zig on every evaluation (slower, and Zig would have to understand locals and captures); the lowering in Zig (more code in the language that's harder to change); a frame on the heap per call (an allocation per call).
+- **Consequences:**
+  - Compiled code can't name a var that only evaluated code defines: skeinc can't know it will exist. Compiled code expands a macro when it's built, so redefining the macro later doesn't change it (Phase 0 expands each form after the one before has run).
+  - An interpreted call takes a few hundred bytes of stack, more than compiled code: recursion in an evaluated function goes about 500 to 1,000 levels deep on a fiber's 256 KB stack.
+  - Declared types aren't checked or used by evaluated code until step 5.
+  - Compiled closures are never freed; evaluating is for development.
+  - Evaluated code that names a compiled struct type in `make-array` or a struct field uses the name as written: the model only knows the struct types that evaluated code defined.

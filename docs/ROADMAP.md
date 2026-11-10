@@ -323,7 +323,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order (D-078):
   1. ✅ Phase 0: `eval`, `load-file` and `reload` in skein.core; host tests.
   2. ✅ The program's namespaces: `skeinc build --eval` (dev profile) includes the reader, the expander and skein.core's macros, compiles the program's own macros in, and registers the program's namespaces and vars, from which `skein.compiler.env` builds its model; `macroexpand` and its relatives natively; without `--eval`, `eval` and its relatives are errors.
-  3. The closure compiler (`runtime/src/eval/`): every Core IR node (functions and closures, loops, `letfn`, `def`, `set!`, blocks, `unwind-protect`, handlers and restarts, multiple values, dynamic vars, the FFI's definitions); `eval`, `load-file` and `reload` natively; a fixture that evaluates code prints what `skein run` prints.
+  3. ✅ The closure compiler (`runtime/src/eval/`, D-079): every Core IR node (functions and closures, loops, `letfn`, `def`, `set!`, blocks, `unwind-protect`, handlers and restarts, multiple values, dynamic vars, the FFI's type definitions; a re-evaluated `defcfun` keeps its compiled function); `eval`, `load-file`, `reload` and `require` from source natively; a fixture that evaluates code prints what `skein run` prints.
   4. Redefinition (DESIGN §15): `defclass` updates existing instances natively, `defmethod` clears dispatch caches, `defonce` keeps state; a native program reloads a changed namespace and runs the new code.
   5. Typed closures: unboxed `f64` and integer paths for declared types; `make bench` compares n-body interpreted and compiled in the same dev build.
 
@@ -434,5 +434,6 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - Some native messages differ from Phase 0's, where Phase 0 shows CL's wording (index errors, returning to an exited block).
   - Unwinding through foreign C frames: decided in M1.10 (D-068). No non-local exit leaves a callback.
 - Packages (D-069): code signing, notarization and archives are still to do. An unpackaged native build finds its assets beside its executable, so `skein build -o elsewhere/` doesn't see them.
+- The evaluator (D-079): an interpreted call takes a few hundred bytes of stack (recursion goes about 500 to 1,000 levels deep on a fiber); evaluated code that names a compiled struct type in `make-array` or a struct field uses the name as written; compiled closures are never freed. Natively the current namespace is one for the whole program, not one per task (D-078).
 - Dynamic vars (D-077): the interpreter of phase-1 code (D-061) has no `binding` (`interp.lisp` leaves `native-dynamic.skn` out); M2.5's evaluator needs it. A read of a dynamic var walks the condition chain, so its cost grows with the frames above it; a per-fiber cache of the innermost binding would help if that shows up in profiles.
 - The scheduler (D-075): tasks and channels share one lock, and wait queues another, as D-057 had one; with many workers they're contended (the million-message ring test spends most of its time waiting for them, about 4 µs a message on an M-series Mac). Per-channel locks and sharded wait queues would help.

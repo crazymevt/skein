@@ -7,6 +7,7 @@
  * any C library in between. */
 
 #include "skein.h"
+#include <string.h>
 
 /* Jump to frame f, whose setjmp then returns 1. */
 _Noreturn void sk_jump(sk_frame *f) {
@@ -105,3 +106,47 @@ sk_value sk_try_call_stopping_exits(sk_value fn, uint32_t argc, const sk_value *
  * count, and starting a call from one value. */
 int32_t sk_mv_count_get(void) { return sk_mv_count; }
 void sk_mv_clear(void) { sk_mv_count = SK_MV_SINGLE; }
+
+/* For the evaluator (runtime/src/eval/, M2.5, D-079), which is Zig and can't call setjmp:
+ * the block* and unwind-protect frames of evaluated code, as the C backend compiles them
+ * (lib/skein/compiler/c.skn). */
+
+typedef sk_value (*sk_eval_thunk)(void *ctx);
+
+/* block*: store the frame's token (which return-from* names it by) in *token, then run
+ * body; its value, or the value a return-from* delivered. */
+sk_value sk_eval_block(sk_eval_thunk body, void *ctx, sk_value *token) {
+    sk_frame f;
+    sk_frame_push(&f, SK_FRAME_BLOCK);
+    *token = SK_BLOCK_TOKEN(f);
+    if (SK_SETJMP(f.jb) == 0) {
+        sk_value v = body(ctx);
+        sk_frame_pop(&f);
+        return v;
+    }
+    sk_frame_pop(&f);
+    return f.value;
+}
+
+/* unwind-protect: run body, then cleanup however body exits, keeping the values of the
+ * body (or of the unwind it interrupted); an unwind then continues. */
+sk_value sk_eval_unwind_protect(sk_eval_thunk body, sk_eval_thunk cleanup, void *ctx) {
+    sk_frame f;
+    sk_frame_push(&f, SK_FRAME_UNWIND);
+    volatile int unwinding = 0;
+    volatile sk_value result = SK_NIL;
+    if (SK_SETJMP(f.jb) == 0) {
+        result = body(ctx);
+        sk_frame_pop(&f);
+    } else {
+        unwinding = 1;
+    }
+    sk_value saved[SK_MV_MAX];
+    int32_t saved_count = sk_mv_count;
+    if (saved_count > 0) memcpy(saved, sk_mv_values, sizeof(sk_value) * (size_t)saved_count);
+    (void)cleanup(ctx);
+    sk_mv_count = saved_count;
+    if (saved_count > 0) memcpy(sk_mv_values, saved, sizeof(sk_value) * (size_t)saved_count);
+    if (unwinding) sk_continue_unwind(&f);
+    return result;
+}

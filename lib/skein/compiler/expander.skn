@@ -1063,6 +1063,11 @@ in the current namespace, as data."
   (syntax-to-data (expand (data-to-syntax form nil nil) (make-env (%current-namespace)))
                   (%identity-table)))
 
+(defn data->syntax
+  "A syntax object for the form given as data, as eval reads it (no locations)."
+  [form]
+  (data-to-syntax form nil nil))
+
 (defn macroexpand-data-1
   "form (data) expanded once if it's a macro call, as skein.core/macroexpand-1."
   [form]

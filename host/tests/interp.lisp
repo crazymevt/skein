@@ -58,10 +58,10 @@ interpreter; the forms of a (do ...) expansion are top-level forms."
 
 (defun interpreted-programs ()
   "The native test programs, without the typed one: the interpreter doesn't check
-declared types, and that fixture tests their errors. Nor the dynamic one: the interpreter
-has no binding yet (D-077)."
+declared types, and that fixture tests their errors. Nor the dynamic and eval ones: the
+interpreter has no binding yet (D-077)."
   (remove-if (lambda (p) (member (pathname-name p) '("native-typed" "main" "native-io"
-                                                      "native-dynamic")
+                                                      "native-dynamic" "native-eval")
                                  :test #'string=))
              (native-programs)))
 

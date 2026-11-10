@@ -123,6 +123,18 @@ received to that form's metadata (as data), for %syntax-meta.")
 (defcore "%runtime-var-value" (var not-found)
   (let ((v (var-value var))) (if (eq v +unbound+) not-found v)))
 (defcore "%set-runtime-var-value!" (var value) (setf (var-value var) value))
+(defcore "%make-runtime-var" (ns-name name)
+  ;; Natively a new var of the program; Phase 0's vars are the image's.
+  (intern-var (ensure-namespace ns-name) name))
+(defcore "%set-runtime-var-dynamic!" (var) (setf (var-dynamic-p var) t) nil)
+(defcore "%runtime-var" (var) var)
+(defcore "%runtime-var-of" (var) var)
+(defcore "%namespace-file" (ns) (namespace-file ns))
+(defcore "%set-namespace-file!" (ns file) (setf (namespace-file ns) file) nil)
+(defcore "%eval-run" (code)
+  ;; Natively the closure compiler runs lowered code (D-079); Phase 0 compiles to CL.
+  (declare (ignore code))
+  (skein-error 'skein-error nil "%eval-run is native only"))
 (defcore "%install-evaluator!" (hooks)
   ;; Phase 0 evaluates code itself (backend-cl/driver.lisp).
   (declare (ignore hooks))

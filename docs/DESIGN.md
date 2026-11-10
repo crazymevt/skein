@@ -706,7 +706,7 @@ Phase 0 details (D-039):
 
 Evaluating code (M2.5, D-078):
 - **`(eval form)`** evaluates a form given as data in the current namespace and returns its value; **`(load-file path)`** evaluates a file's forms in order and returns the last value; **`(reload 'ns)`** loads a namespace's source file again (above). All three are in skein.core.
-- **Native programs** can evaluate code when they are built with `skeinc build --eval` (dev profile only), which includes the reader, the expander and an evaluator (a closure compiler in the runtime), and registers the program's namespaces and vars at start-up. In other builds these functions, and `macroexpand`, `macroexpand-1` and `macroexpand-all`, signal an error saying they need `--eval`. Reloaded code runs in the evaluator until hot reload of compiled code (M2.9); where it declares types, the evaluator computes them unboxed.
+- **Native programs** can evaluate code when they are built with `skeinc build --eval` (dev profile only), which includes the reader, the expander and an evaluator (a closure compiler in the runtime), and registers the program's namespaces and vars at start-up. In other builds these functions, and `macroexpand`, `macroexpand-1` and `macroexpand-all`, signal an error saying they need `--eval`. Compiled code can't name a var that only evaluated code defines, and keeps the expansions of the macros it was built with (D-079). Reloaded code runs in the evaluator until hot reload of compiled code (M2.9); where it declares types, the evaluator computes them unboxed.
 
 ## 16. Compiler architecture
 

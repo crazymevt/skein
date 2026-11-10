@@ -1,0 +1,10 @@
+(ns native-eval.extra
+  "A namespace the fixture native-eval.skn doesn't compile in: evaluated code requires it,
+so the program loads it from source, and reloads it.")
+
+(defonce loads (atom 0))
+(swap! loads inc)
+
+(defn hello [who] (str "hello, " who))
+
+(defmacro unless [test & body] `(if ~test nil (do ~@body)))

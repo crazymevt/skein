@@ -1,12 +1,391 @@
 (ns skein.compiler.eval
-  "Evaluating code in a running native program (M2.5, D-078). A program built with --eval
-includes this namespace and the front end it needs; when the program starts, it installs
-the functions behind skein.core's eval, load-file, reload and macroexpand, which the
-runtime calls (runtime/src/evaluate.zig). In other builds nothing installs them, and they
-are errors. Phase 0 has its own (host/src/backend-cl/driver.lisp)."
-  (:require [skein.compiler.expander :as expander]))
+  "Evaluating code in a running native program (M2.5, D-078, D-079). A program built with
+--eval includes this namespace and the front end it needs; when the program starts, it
+installs the functions behind skein.core's eval, load-file, reload and macroexpand, which
+the runtime calls (runtime/src/evaluate.zig). In other builds nothing installs them, and
+they are errors. Phase 0 has its own (host/src/backend-cl/driver.lisp).
+
+A form is read, expanded into Core IR, lowered here and run by the runtime's closure
+compiler (runtime/src/eval/compile.zig). Lowering resolves what the closure compiler
+shouldn't have to think about:
+- each local to a slot of its function's frame, or to a value the function's closure
+  captured; a ^:mutable local that a closure uses lives in a box;
+- each var to the program's real var, or a skein.core function to its value;
+- recur to the slots it rebinds, and the calls binding and set! expand to.
+
+Lowered code is vectors: [:const v], [:slot i], [:slot-box i], [:capt i], [:capt-box i],
+[:self], [:var rt name loc], [:dvar rt name loc], [:if t then else], [:do [forms]],
+[:def rt init dynamic?], [:fn lambda], [:let [[slot boxed? init]...] body], [:loop ...],
+[:letfn [[slot lambda]...] [[fn-slot capture target-slot]...] body],
+[:recur [[slot boxed?]...] [args]], [:set-slot i boxed? value], [:set-capt i value],
+[:call f [args]], [:values [args]], [:let-values [[[[slot boxed?]...] init]...] body],
+[:unwind-protect body cleanup], [:block id slot body], [:return-from id token value],
+[:throw c], [:handler-bind [[type handler]...] body],
+[:restart-bind [[name fn report]...] body], [:with-bindings [rt...] names values fn],
+[:set-dynamic rt value] and [:var-bound rt]. A lambda is {:name :loc :captures [ref...]
+:arities [{:params :rest :slots :boxes :body}...]}, a ref [:slot i], [:capt i] or [:self]."
+  (:require [skein.compiler.reader :as reader]
+            [skein.compiler.expander :as expander]
+            [skein.compiler.env :as env]
+            [skein.io :as io]))
+
+;;; ------------------------------------------------------------------------------------
+;;; Which locals closures use
+
+(defn- id-of
+  "A local's or block tag's id (one counter numbers both)."
+  [l]
+  (or (:local/id l) (:tag/id l)))
+
+(defn- children
+  "The nodes directly inside node, a nested function's bodies included."
+  [n]
+  (case (:op n)
+    (:const :local-ref :var-ref) []
+    :if [(:test n) (:then n) (:else n)]
+    :do (:forms n)
+    :def (if (:init n) [(:init n)] [])
+    :fn (mapv :body (:arities n))
+    (:let :loop :letfn :let-values) (conj (mapv second (:bindings n)) (:body n))
+    :recur (:args n)
+    :set [(:value n)]
+    :call (into [(:fn n)] (:args n))
+    :unwind-protect [(:body n) (:cleanup n)]
+    :block [(:body n)]
+    :return-from [(:value n)]
+    :values (:args n)
+    :the [(:expr n)]
+    :locally [(:body n)]
+    :throw-condition [(:condition n)]
+    :handler-bind (conj (vec (mapcat identity (:bindings n))) (:body n))
+    :restart-bind (conj (vec (mapcat rest (:bindings n))) (:body n))))
+
+(defn- free-locals
+  "The ids of the locals and block tags that the fn node uses but doesn't bind, in the
+order of their first use."
+  [fn-node]
+  (let [bound (atom #{})
+        seen (atom #{})
+        refs (atom [])
+        bind! (fn [l] (swap! bound conj (id-of l)))
+        use! (fn [l]
+               (let [id (id-of l)]
+                 (when-not (contains? @seen id)
+                   (swap! seen conj id)
+                   (swap! refs conj id))))]
+    (letfn [(walk [n]
+              (case (:op n)
+                :local-ref (use! (:local n))
+                :set (use! (:local n))
+                :return-from (use! (:tag n))
+                :fn (do (when (:self n) (bind! (:self n)))
+                        (doseq [a (:arities n)]
+                          (doseq [p (:params a)] (bind! p))
+                          (when (:rest a) (bind! (:rest a)))))
+                (:let :loop :letfn) (doseq [[l] (:bindings n)] (bind! l))
+                :let-values (doseq [[ls] (:bindings n)] (doseq [l ls] (bind! l)))
+                :block (bind! (:tag n))
+                nil)
+              (doseq [c (children n)] (walk c)))]
+      (walk fn-node))
+    (filterv (fn [id] (not (contains? @bound id))) @refs)))
+
+(defn- boxed-ids
+  "The ids of the ^:mutable locals in node that some function in it uses from outside
+itself: they live in boxes, which the function captures."
+  [node]
+  (let [captured (atom #{})
+        mutable (atom #{})
+        note! (fn [l] (when (:local/mutable? l) (swap! mutable conj (id-of l))))]
+    (letfn [(walk [n]
+              (case (:op n)
+                :fn (do (swap! captured into (free-locals n))
+                        (doseq [a (:arities n)]
+                          (doseq [p (:params a)] (note! p))
+                          (when (:rest a) (note! (:rest a)))))
+                (:let :loop :letfn) (doseq [[l] (:bindings n)] (note! l))
+                :let-values (doseq [[ls] (:bindings n)] (doseq [l ls] (note! l)))
+                nil)
+              (doseq [c (children n)] (walk c)))]
+      (walk node))
+    (set (filter (fn [id] (contains? @mutable id)) @captured))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Lowering
+;;;
+;;; The context of the arity being lowered: its frame's slot count, its locals (id ->
+;;; {:slot :box}, or :self), its loops' and its own rebinding slots (id -> [[slot boxed?]
+;;; ...]), the function's captures, and the ids of the captured locals.
+
+(defn- make-context [fn-ctx boxed]
+  {:fn fn-ctx :slots (atom 0) :locals (atom {}) :targets (atom {}) :boxed boxed})
+
+(defn- make-fn-context [] {:captures (atom []) :index (atom {})})
+
+(defn- bind-local!
+  "Give local l a new slot in c: [slot boxed?]."
+  [c l]
+  (let [slot (dec (swap! (:slots c) inc))
+        boxed (contains? (:boxed c) (id-of l))]
+    (swap! (:locals c) assoc (id-of l) {:slot slot :box boxed})
+    [slot boxed]))
+
+(defn- capture!
+  "The index of id among the captured values of c's function, adding it."
+  [c id]
+  (let [fc (:fn c)]
+    (or (get @(:index fc) id)
+        (let [i (count @(:captures fc))]
+          (swap! (:captures fc) conj id)
+          (swap! (:index fc) assoc id i)
+          i))))
+
+(defn- ref
+  "Lowered code for the local or block tag id in c: its value, or, with deref? false, the
+box it lives in."
+  [c id deref?]
+  (let [info (get @(:locals c) id)
+        boxed (and deref? (contains? (:boxed c) id))]
+    (cond (= info :self) [:self]
+          info [(if boxed :slot-box :slot) (:slot info)]
+          :else [(if boxed :capt-box :capt) (capture! c id)])))
+
+(defn- var-node
+  "Lowered code reading var: the program's real var, or the value of a skein.core
+function, which has none and doesn't change."
+  [var loc]
+  (if (and (nil? (%runtime-var-of var)) (%var-defined? var))
+    [:const (%var-value var)]
+    [(if (%var-dynamic? var) :dvar :var) (%runtime-var var) (%var-qualified-name var)
+     (reader/format-location loc)]))
+
+(defn- qualified-var
+  "The var named by the qualified symbol sym."
+  [sym]
+  (%intern-var (%ensure-namespace (namespace sym)) (name sym)))
+
+(defn- binding-var
+  "The var that sym binds in a binding compiled in the namespace called ns-name, as the C
+backend finds it (D-077): a name nothing defines yet gets a var of its own."
+  [sym ns-name]
+  (let [ns (%ensure-namespace ns-name)]
+    (if (namespace sym)
+      (%intern-var (or (%find-alias ns (namespace sym)) (%ensure-namespace (namespace sym)))
+                   (name sym))
+      (or (%resolve-var ns (name sym)) (%intern-var ns (name sym))))))
+
+(def ^:private lower)
+
+(defn- lower-fn
+  "[lambda captured-ids] for the fn node, in the context c of the code around it."
+  [node c]
+  (let [fc (make-fn-context)
+        arities
+        (mapv (fn [a]
+                (let [ac (make-context fc (:boxed c))
+                      _ (when (:self node) (swap! (:locals ac) assoc (id-of (:self node)) :self))
+                      params (mapv (fn [p] (bind-local! ac p)) (:params a))
+                      rest-binding (when (:rest a) (bind-local! ac (:rest a)))
+                      all (if rest-binding (conj params rest-binding) params)
+                      _ (swap! (:targets ac) assoc (:id a) all)
+                      body (lower (:body a) ac)]
+                  {:params (count params) :rest (boolean rest-binding) :slots @(:slots ac)
+                   :boxes (vec (keep (fn [[slot boxed]] (when boxed slot)) all))
+                   :body body}))
+              (:arities node))
+        captured @(:captures fc)]
+    [{:name (str (or (:name node) "fn")) :loc (reader/format-location (:loc node))
+      :captures (mapv (fn [id] (ref c id false)) captured) :arities arities}
+     captured]))
+
+(defn- lower-bindings
+  "[[slot boxed? init]...] for [local init] bindings, each in scope after its init."
+  [c bindings]
+  (mapv (fn [[l init]]
+          (let [i (lower init c)
+                [slot boxed] (bind-local! c l)]
+            [slot boxed i]))
+        bindings))
+
+(defn- core-call? [f nm]
+  (and (= :var-ref (:op f))
+       (= "skein.core" (%namespace-name (%var-namespace (:var f))))
+       (= nm (%var-name (:var f)))))
+
+(defn- lower-call [n c]
+  (let [f (:fn n)
+        args (:args n)
+        constant (fn [i] (let [a (nth args i nil)] (when (= :const (:op a)) (:value a))))
+        qualified? (fn [x] (and (symbol? x) (namespace x)))]
+    (cond (and (core-call? f "%with-bindings") (= 4 (count args)) (vector? (constant 0))
+               (string? (constant 1)))
+          [:with-bindings (mapv (fn [s] (%runtime-var (binding-var s (constant 1)))) (constant 0))
+           (constant 0) (lower (nth args 2) c) (lower (nth args 3) c)]
+          (and (core-call? f "%set-dynamic!") (= 2 (count args)) (qualified? (constant 0)))
+          [:set-dynamic (%runtime-var (qualified-var (constant 0))) (lower (second args) c)]
+          (and (core-call? f "%var-bound?") (= 1 (count args)) (qualified? (constant 0)))
+          [:var-bound (%runtime-var (qualified-var (constant 0)))]
+          :else [:call (lower f c) (mapv (fn [a] (lower a c)) args)])))
+
+(defn- lower-letfn [n c]
+  (let [bindings (:bindings n)
+        slots (mapv (fn [[l]] (first (bind-local! c l))) bindings)
+        lowered (mapv (fn [[_ f]] (lower-fn f c)) bindings)
+        slot-of (zipmap (map (fn [[l]] (id-of l)) bindings) slots)
+        ;; A function capturing a letfn local captures nil, filled in once all are made.
+        fixups (vec (mapcat (fn [slot [_ captured]]
+                              (keep identity
+                                    (map-indexed (fn [i id]
+                                                   (when-let [target (get slot-of id)]
+                                                     [slot i target]))
+                                                 captured)))
+                            slots lowered))]
+    [:letfn (mapv (fn [slot [lam]] [slot lam]) slots lowered) fixups (lower (:body n) c)]))
+
+(defn- lower*
+  "Lowered code for the Core IR node n in the context c."
+  [n c]
+  (let [l (fn [x] (lower x c))]
+    (case (:op n)
+      :const [:const (:value n)]
+      :local-ref (ref c (id-of (:local n)) true)
+      :var-ref (var-node (:var n) (:loc n))
+      :if [:if (l (:test n)) (l (:then n)) (l (:else n))]
+      :do (if (empty? (:forms n)) [:const nil] [:do (mapv l (:forms n))])
+      :def [:def (%runtime-var (:var n)) (when (:init n) (l (:init n))) (%var-dynamic? (:var n))]
+      :fn [:fn (first (lower-fn n c))]
+      :let (let [bs (lower-bindings c (:bindings n))] [:let bs (l (:body n))])
+      :loop (let [bs (lower-bindings c (:bindings n))]
+              (swap! (:targets c) assoc (:id n) (mapv (fn [[slot boxed]] [slot boxed]) bs))
+              [:loop bs (l (:body n))])
+      :recur [:recur (get @(:targets c) (:target n)) (mapv l (:args n))]
+      :letfn (lower-letfn n c)
+      :set (let [id (id-of (:local n))
+                 info (get @(:locals c) id)
+                 v (l (:value n))]
+             (if (map? info)
+               [:set-slot (:slot info) (:box info) v]
+               [:set-capt (capture! c id) v]))
+      :call (lower-call n c)
+      :unwind-protect [:unwind-protect (l (:body n)) (l (:cleanup n))]
+      :block (let [[slot] (bind-local! c (:tag n))]
+               [:block (id-of (:tag n)) slot (l (:body n))])
+      :return-from [:return-from (id-of (:tag n)) (ref c (id-of (:tag n)) false) (l (:value n))]
+      :values [:values (mapv l (:args n))]
+      :let-values [:let-values (mapv (fn [[ls init]]
+                                       (let [i (l init)] [(mapv (fn [x] (bind-local! c x)) ls) i]))
+                                     (:bindings n))
+                   (l (:body n))]
+      :the (l (:expr n))
+      :locally (l (:body n))
+      :throw-condition [:throw (l (:condition n))]
+      :handler-bind [:handler-bind (mapv (fn [[t h]] [(l t) (l h)]) (:bindings n)) (l (:body n))]
+      :restart-bind [:restart-bind (mapv (fn [[nm f r]] [nm (l f) (l r)]) (:bindings n))
+                     (l (:body n))])))
+
+(def ^:private lower lower*)
+
+(defn- lower-toplevel
+  "A top-level Core IR node, lowered as a function of no arguments."
+  [node]
+  (let [c (make-context (make-fn-context) (boxed-ids node))
+        body (lower node c)]
+    {:name "toplevel" :loc (reader/format-location (:loc node)) :captures []
+     :arities [{:params 0 :rest false :slots @(:slots c) :boxes [] :body body}]}))
+
+;;; ------------------------------------------------------------------------------------
+;;; eval, load-file and reload, as Phase 0's (backend-cl/driver.lisp, repl/repl.lisp)
+
+(defn- eval-syntax
+  "Expand and evaluate the top-level syntax object form in the current namespace; a
+(do ...) expansion's forms are top-level forms, each expanded after the one before runs."
+  [form]
+  (let [ns (%current-namespace)
+        expanded (expander/macroexpand form (expander/make-env ns))]
+    (if (expander/toplevel-do? expanded)
+      (loop [forms (rest (:datum expanded)) value nil]
+        (if (seq forms) (recur (rest forms) (eval-syntax (first forms))) value))
+      (%eval-run (lower-toplevel (expander/analyze-toplevel expanded ns))))))
+
+(defn- eval-form
+  "(eval form): the form, given as data, evaluated in the current namespace."
+  [form]
+  (eval-syntax (expander/data->syntax form)))
+
+(defn- ns-form? [form]
+  (and (= :list (:kind form)) (seq (:datum form))
+       (= 'ns (:datum (first (:datum form))))))
+
+(defn- load-text
+  "Evaluate the forms of text, read from file, starting in the current namespace, which is
+restored afterwards; the last value. A namespace declared in it records it as its file."
+  [text file]
+  (let [saved (%current-namespace-name)
+        r (reader/make-reader text {:file file :namespace saved
+                                    :resolve-alias
+                                    (fn [alias]
+                                      (when-let [ns (%find-alias (%current-namespace) alias)]
+                                        (%namespace-name ns)))})]
+    (try
+      (loop [value nil]
+        (reader/set-reader-namespace! r (%current-namespace-name))
+        (let [form (reader/read-form r false ::eof)]
+          (if (= form ::eof)
+            value
+            (let [v (eval-syntax form)]
+              (when (ns-form? form) (%set-namespace-file! (%current-namespace) file))
+              (recur v)))))
+      (finally (%in-ns (symbol saved))))))
+
+(defn- load-file*
+  "(load-file path): the forms of the file at path, evaluated; the last value."
+  [path]
+  (when-not (string? path)
+    (error (str "load-file needs a path (a string), not " (pr-str path))))
+  (when-not (io/file-exists? path)
+    (error (str "cannot load-file " path ": no such file")))
+  (load-text (io/read-file path) path))
+
+(def ^:private source-paths
+  "The directories the program was built to find namespaces in (nil until first used)."
+  (atom nil))
+
+(defn- namespace-path
+  "The source file of the namespace called nm on the program's source paths, or nil."
+  [nm]
+  (when (nil? @source-paths) (reset! source-paths (nth (%eval-registry) 2)))
+  (let [file (str (apply str (map (fn [ch] (if (= ch \.) \/ ch)) nm)) ".skn")]
+    (some (fn [dir] (let [p (str dir file)] (when (io/file-exists? p) p))) @source-paths)))
+
+(defn- load-namespace!
+  "Load the namespace called nm from its source file (what require does for a namespace
+the program doesn't include)."
+  [nm]
+  (let [path (or (namespace-path nm)
+                 (error (str "cannot find namespace " nm ": no " nm " on the source paths")))]
+    (load-file* path)))
+
+(defn- reload*
+  "(reload 'ns): load the namespace's source file again, in user. Vars keep their
+identity, so code that calls them sees the new definitions."
+  [nm]
+  (when-not (and (symbol? nm) (nil? (namespace nm)))
+    (error "reload needs a namespace name, like (reload 'game.core)"))
+  (let [ns (%find-namespace (name nm))
+        path (or (when ns (%namespace-file ns)) (namespace-path (name nm))
+                 (error (str "cannot reload " (name nm) ": no source file found")))
+        saved (%current-namespace-name)]
+    (%in-ns 'user)
+    (try (load-file* path)
+         (finally (%in-ns (symbol saved))))
+    nil))
+
+(reset! env/namespace-loader load-namespace!)
 
 (%install-evaluator!
- {"macroexpand-1" expander/macroexpand-data-1
+ {"eval" eval-form
+  "load-file" load-file*
+  "reload" reload*
+  "macroexpand-1" expander/macroexpand-data-1
   "macroexpand" expander/macroexpand-data
   "macroexpand-all" expander/macroexpand-all-data})

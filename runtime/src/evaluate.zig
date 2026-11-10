@@ -25,6 +25,9 @@ const alloc = std.heap.c_allocator;
 /// its global, which the collector keeps up to date.
 var namespaces: std.ArrayList(*const Value) = .empty;
 
+/// The source paths the program was built with, for reload and require.
+var source_paths: ?*const Value = null;
+
 const VarEntry = struct { ns: [*:0]const u8, name: [*:0]const u8, v: Value, flags: u32 };
 /// Var objects are permanent, so the entries hold them without being roots.
 var vars: std.ArrayList(VarEntry) = .empty;
@@ -39,6 +42,11 @@ export fn sk_eval_register_ns(info: *const Value) void {
     namespaces.append(alloc, info) catch rt.fatal("out of memory (eval registry)", .{});
 }
 
+/// Register the source paths (the address of a constant vector of directories).
+export fn sk_eval_register_paths(paths: *const Value) void {
+    source_paths = paths;
+}
+
 /// Register a var of the program: `v` is its var object, or nil for a var the program
 /// never compiled code for; `flags` are flag_macro, flag_private and flag_dynamic.
 export fn sk_eval_register_var(ns: [*:0]const u8, name: [*:0]const u8, v: Value, flags: u32) void {
@@ -46,8 +54,9 @@ export fn sk_eval_register_var(ns: [*:0]const u8, name: [*:0]const u8, v: Value,
         rt.fatal("out of memory (eval registry)", .{});
 }
 
-/// [namespace-infos vars] for skein.compiler.env, each var [ns name var-or-nil macro?
-/// private? dynamic?]; nil if the program registered nothing (not an --eval build).
+/// [namespace-infos vars source-paths] for skein.compiler.env, each var [ns name
+/// var-or-nil macro? private? dynamic?]; nil if the program registered nothing (not an
+/// --eval build).
 fn registry() Value {
     if (namespaces.items.len == 0 and vars.items.len == 0) return Value.nil;
     var infos = coll.vectorOf(&.{});
@@ -63,7 +72,7 @@ fn registry() Value {
             Value.fromBool(e.flags & flag_dynamic != 0),
         }));
     }
-    return coll.vectorOf(&.{ infos, vs });
+    return coll.vectorOf(&.{ infos, vs, if (source_paths) |p| p.* else coll.vectorOf(&.{}) });
 }
 
 // ---------------------------------------------------------------------------------------
@@ -139,6 +148,28 @@ pub const entries = [_]Entry{
             checkVar(a[0], "%set-runtime-var-value!");
             names.setVar(a[0], a[1]);
             return a[1];
+        }
+    }.f },
+    // A new real var ns/name, for a var that code evaluated in the program defines.
+    .{ .name = "%make-runtime-var", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            if (!string.isString(a[0]) or !string.isString(a[1]))
+                rt.raise(.type_error, "%make-runtime-var needs a namespace name and a name", .{});
+            return names.makeVar(string.bytes(a[0]), string.bytes(a[1]));
+        }
+    }.f },
+    .{ .name = "%set-runtime-var-dynamic!", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            checkVar(a[0], "%set-runtime-var-dynamic!");
+            names.setDynamic(a[0]);
+            return Value.nil;
+        }
+    }.f },
+    // (%eval-run code): compile code, as skein.compiler.eval lowers a top-level form, to
+    // closures and run it (eval/compile.zig, D-079).
+    .{ .name = "%eval-run", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return @import("eval/compile.zig").evaluate(a[0]);
         }
     }.f },
 };

@@ -682,6 +682,7 @@ is the Lisp backend's list."
     ;; Evaluating code (M2.5, D-078; runtime/src/evaluate.zig)
     "eval" "load-file" "reload" "macroexpand-1" "macroexpand" "macroexpand-all"
     "%install-evaluator!" "%eval-registry" "%runtime-var-value" "%set-runtime-var-value!"
+    "%make-runtime-var" "%set-runtime-var-dynamic!" "%eval-run"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -1814,11 +1815,13 @@ to fn-node's function, so that code it evaluates can call it (D-078)."
 (defn emit-eval-registry!
   "For a program built with --eval: the start-up statements that register namespaces
 (models, in the order the program translated them) and their vars with the runtime, which
-skein.compiler.env builds its model of the program from (D-078)."
-  [unit namespaces]
+skein.compiler.env builds its model of the program from, and the source paths, where
+reload and require find namespaces (D-078)."
+  [unit namespaces source-paths]
   (let [st {:unit unit}
         names (fn [nss] (mapv %namespace-name nss))
-        lines (atom [])]
+        lines (atom [(str "sk_eval_register_paths(&" (constant-expr st (vec source-paths) nil)
+                          ");")])]
     (doseq [ns namespaces]
       (let [m @ns
             info {:name (:name m)

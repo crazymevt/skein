@@ -343,7 +343,7 @@ instead."
        (when eval?
          ;; As in Phase 0, -main runs in user.
          (translate-in-ns build "user" nil)
-         (c/emit-eval-registry! (:unit build) @(:eval-namespaces build)))
+         (c/emit-eval-registry! (:unit build) @(:eval-namespaces build) source-paths))
        (c/program-text (:unit build) (file-name path) main)))))
 
 ;;; ------------------------------------------------------------------------------------
