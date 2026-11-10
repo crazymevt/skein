@@ -688,7 +688,9 @@ fn newGeneric(name: []const u8, required: usize, rest: bool) Value {
     setSlot(g, g_methods, coll.vectorOf(&.{}));
     setSlot(g, g_cache, Value.nil);
     setSlot(g, g_eql, Value.false);
-    return func.closure(dispatchCode, "generic", &.{g});
+    // Permanent: the generics table isn't scanned by the collector, so a young closure
+    // there would be left stale by a collection.
+    return func.permanentClosure(dispatchCode, "generic", &.{g});
 }
 
 /// The generic function named `name` with this many required parameters, made if
@@ -1172,4 +1174,40 @@ test "every value has a class" {
     try testing.expect(isInstance(builtin(.seq), coll.listOf(&.{Value.nil})));
     try testing.expect(isInstance(builtin(.@"error"), cond.makeBuiltin(.arithmetic_error, "x")));
     try testing.expect(!isInstance(builtin(.warning), cond.makeBuiltin(.arithmetic_error, "x")));
+}
+
+/// Define the test's generic functions in a frame of their own, so no stale stack word
+/// keeps them in place.
+noinline fn defineTestGenerics() void {
+    for (0..40) |i| {
+        var buf: [16]u8 = undefined;
+        const n = std.fmt.bufPrint(&buf, "g{d}", .{i}) catch unreachable;
+        _ = defineGeneric(names.symbol(null, n), "t.gen", coll.vectorOf(&.{ names.symbol(null, "a"), names.symbol(null, "b") }));
+    }
+}
+
+noinline fn scrubStack() void {
+    var junk: [16384]usize = undefined;
+    @memset(&junk, 0);
+    std.mem.doNotOptimizeAway(&junk);
+}
+
+test "generic functions survive collections" {
+    // Regression (M1.12): the generics table held young closures, which a minor
+    // collection moved, so defining the same generic again read a stale pointer.
+    testSetup();
+    defineTestGenerics();
+    scrubStack();
+    for (0..4) |_| {
+        gc.collect(.minor);
+        for (0..20000) |i| _ = string.make(if (i % 2 == 0) "xxxxxxxxxxxxxxxxxxxxxxxx" else "yy");
+    }
+    gc.collect(.major);
+    for (0..40) |i| {
+        var buf: [16]u8 = undefined;
+        const n = std.fmt.bufPrint(&buf, "g{d}", .{i}) catch unreachable;
+        const f = defineGeneric(names.symbol(null, n), "t.gen", coll.vectorOf(&.{ names.symbol(null, "a"), names.symbol(null, "b") }));
+        try testing.expect(genericOf(f) != null);
+        try testing.expectEqualStrings(n, gfName(genericOf(f).?)[6..]);
+    }
 }

@@ -22,6 +22,7 @@ const tasks = @import("tasks.zig");
 const io = @import("io.zig");
 const compiler = @import("compiler.zig");
 const ffi = @import("ffi.zig");
+const mathtime = @import("mathtime.zig");
 const Value = @import("value.zig").Value;
 
 const Args = []const Value;
@@ -1327,10 +1328,11 @@ const base_table = [_]Entry{
 };
 
 /// The core table: the entries above, the concurrency functions (tasks.zig), skein.io's
-/// primitives (io.zig), what the compiler written in Skein needs (compiler.zig), and
-/// skein.ffi's functions (ffi.zig, named skein.ffi/<name>).
+/// primitives (io.zig), what the compiler written in Skein needs (compiler.zig),
+/// skein.ffi's functions (ffi.zig, named skein.ffi/<name>), and skein.math's and
+/// skein.time's (mathtime.zig, named skein.math/<name> and skein.time/<name>).
 const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(io.entries) ++
-    entriesOf(compiler.entries) ++ entriesOf(ffi.entries);
+    entriesOf(compiler.entries) ++ entriesOf(ffi.entries) ++ entriesOf(mathtime.entries);
 
 fn entriesOf(comptime from: anytype) [from.len]Entry {
     var t: [from.len]Entry = undefined;

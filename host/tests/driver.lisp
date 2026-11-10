@@ -47,7 +47,7 @@ error message."
   (dolist (path (native-programs))
     (let ((lisp (lisp-outcome path))
           (skein (driver-outcome path)))
-      (unless (and (consp lisp) (search "build FFI programs with skeinc" (second lisp)))
+      (unless (skeinc-only-p lisp skein)
        (is (equal lisp skein) "~A: the driver differs~%~A" (file-namestring path)
           (if (and (stringp lisp) (stringp skein))
               (first-difference lisp skein)

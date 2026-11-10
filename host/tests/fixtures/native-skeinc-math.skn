@@ -1,0 +1,29 @@
+(ns native-skeinc-math
+  (:require [skein.math :as m]
+            [skein.time :as t]))
+
+;; skein.math's and skein.time's host functions natively (M1.12). Only skeinc compiles
+;; them (the Lisp C backend is frozen, D-064); built by skeinc, this must print what
+;; `skein run` prints (host/tools/bootstrap.sh checks). Floats come from the system's
+;; libm, as in Phase 0; an f32 is computed as an f64 and rounded.
+
+(prn [(m/sin 1.0) (m/sin 1.0f) (m/cos 1.0f) (m/cos 2) (m/tan 0.5) (m/tan 0.5f)])
+(prn [(m/asin 0.5) (m/asin 2.0) (m/acos 0.25f) (m/acos -2.0f) (m/atan 1) (m/atan 0.5f)])
+(prn [(m/atan2 1.0 -1.0) (m/atan2 1.0f 2.0f) (m/atan2 1 2) (m/atan2 1.0f 2.0)])
+(prn [(m/exp 1) (m/exp 1.5f) (m/exp -0.25) (m/log 10) (m/log 2.5f) (m/log -1.0)
+      (m/log -1.0f)])
+(prn [(m/pow 2 10) (m/pow 3 40) (m/pow 2 -2) (m/pow 2.0f 3) (m/pow 1.5 -2) (m/pow 2 0.5)
+      (m/pow 2.0 0.5) (m/pow 2.0f 0.5f) (m/pow 2.0f 0.5) (m/pow -8.0 0.5) (m/pow 0 0)])
+(prn [(m/floor 2.5) (m/floor -2.5f) (m/floor 7) (m/ceil 2.1) (m/ceil -2.1f) (m/ceil -7)])
+(prn [(m/round 2.5) (m/round -2.5) (m/round 2.4f) (m/round -0.5f) (m/round 3)
+      (m/trunc -2.7) (m/trunc 2.7f) (m/trunc 5)])
+(prn [(m/noise 0.5 0.25) (m/noise 1.3 2.7 0.9) (m/noise 10 20) (m/noise -3.2 4.1)
+      (m/noise 0.5f 300.75 -12)])
+;; The parts of skein.math written in Skein, on top of them
+(prn [(m/clamp 5 0 3) (m/lerp (m/vec2 0.0f 0.0f) (m/vec2 2.0f 4.0f) 0.5f)
+      (m/length (m/vec2 3.0f 4.0f)) (m/sign -2.5) (m/deg->rad 180)])
+(let [a (t/now)
+      b (t/now-ns)]
+  (prn [(float? a) (>= a 0.0) (< a 60.0) (integer? b) (>= b 0)]))
+;; (The messages differ: Phase 0's come from SBCL.)
+(prn [(try (m/sin "x") (catch error e :error)) (try (m/floor :a) (catch error e :error))])

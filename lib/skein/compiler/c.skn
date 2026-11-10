@@ -723,6 +723,15 @@ as skein.core functions named skein.ffi/<name>. Phase 0 defines them in CL."
     "%put-field!" "c-string" "enum-value" "handle" "handle-value" "free-handle"
     "%call-pinned"})
 
+(def ^:private host-functions
+  "The functions of namespaces besides skein.core that the runtime has, by namespace: in
+its core table as <namespace>/<name>. Phase 0 defines them in CL: skein.ffi's (M1.10,
+D-065), and skein.math's and skein.time's (runtime/src/mathtime.zig, M1.12)."
+  {"skein.ffi" ffi-builtins
+   "skein.time" #{"now" "now-ns"}
+   "skein.math" #{"sin" "cos" "tan" "asin" "acos" "atan" "atan2" "exp" "log" "pow" "floor"
+                  "ceil" "round" "trunc" "noise"}})
+
 (defn- ffi-var? [var] (= (var-ns-name var) "skein.ffi"))
 
 (def ^:private emit-var-ref*)
@@ -730,8 +739,8 @@ as skein.core functions named skein.ffi/<name>. Phase 0 defines them in CL."
 (defn- emit-var-ref [st node]
   (let [var (:var node)]
     (cond
-      (and (ffi-var? var) (contains? ffi-builtins (%var-name var)))
-      (let [nm (str "skein.ffi/" (%var-name var))]
+      (contains? (get host-functions (var-ns-name var)) (%var-name var))
+      (let [nm (str (var-ns-name var) "/" (%var-name var))]
         (startup-constant st [:core nm] (str "sk_core(" (c-string-literal nm) ")")))
       (and (ffi-var? var) (contains? #{"%define-function" "%define-callback"} (%var-name var)))
       (unsupported node "skein.ffi/" (%var-name var) " is supported natively only as "
@@ -1519,6 +1528,13 @@ namespace is set to a pointer to the C function."
     (cond (or (ffi-call? f "%define-struct" args 3) (ffi-call? f "%define-enum" args 3))
           (emit-ffi-definition st node f args)
           (ffi-call? f "%define-function" args 6) (emit-define-function st node args)
+          ;; defonce (M1.12): whether the var named by a constant qualified symbol has a
+          ;; value. Natively nothing is reloaded, so the first time it hasn't.
+          (and (core-call? f "%var-bound?" args 1) (namespace (:value (first args))))
+          (let [sym (:value (first args))
+                var (%intern-var (%ensure-namespace (namespace sym)) (name sym))]
+            (single-value st (str "SK_BOOL(sk_var_value(" (var-c-name st var)
+                                  ") != SK_UNBOUND)")))
           (ffi-call? f "%define-callback" args 4) (emit-define-callback st node args)
           (core-call? f "%define-struct" args 3) (emit-define-struct st node args)
           (core-call? f "%define-soa" args 2) (emit-define-soa st node args)

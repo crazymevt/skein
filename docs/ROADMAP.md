@@ -245,7 +245,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ### M1.12 Driftrock native
 - Build and package Driftrock natively.
 - Steps, in order:
-  1. `skein.time` and `skein.math`'s host functions natively, with Phase 0's results (the system's libm, as SBCL uses).
+  1. ✅ `skein.time` and `skein.math`'s host functions natively, with Phase 0's results (the system's libm, as SBCL uses).
   2. Driftrock builds and runs natively; CI runs it with `--check-60fps` on all three platforms.
   3. Start-up under 0.1 s: Driftrock measures the time from start to its first frame, and CI checks it.
   4. Driftrock packaged with its SDL3 on each platform in CI, and the package runs.
@@ -302,7 +302,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - `skein build` loads a program's required namespaces on the host, running their top-level code, because their macros must exist to expand the program. Self-hosting (M1.9) should load them for syntax only (phase 1).
 - C backend in Skein (D-059): the lists of native skein.core functions and condition types are written in both backends until the Lisp one retires.
 - The native compiler's environment (D-060), for the next steps of M1.9:
-  - `declaim` and `defonce` don't compile natively yet (`%declaim`, `%var-bound?`).
+  - `declaim` doesn't compile natively yet (`%declaim`). `defonce` does (M1.12).
   - A program that includes `skein.compiler.env` registers every public var of skein.core.native at startup, and the model copies them into its skein.core.
 - The native compiler's driver (D-062): `skeinc` finds the Skein checkout from `SKEIN_HOME` or by looking in the current directory and its parents, and keeps the runtime and the C file in the checkout's `.skein-cache/`. M1.11 should give it an install layout.
 - Native FFI calls (D-066): an arity or type error in a call to a C function has Skein's wording natively; Phase 0's comes from SBCL and CFFI. Struct and union arguments by value aren't supported, as in Phase 0.

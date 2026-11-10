@@ -29,6 +29,17 @@ pub fn closure(code: Code, fn_name: [*:0]const u8, captured: []const Value) Valu
     return Value.fromObject(h);
 }
 
+/// A closure that is never moved or freed, for tables the collector doesn't scan (generic
+/// functions, M1.12). Its captured values are stored with the write barrier.
+pub fn permanentClosure(code: Code, fn_name: [*:0]const u8, captured: []const Value) Value {
+    const gc = @import("gc.zig");
+    const h = gc.allocPermanent(.function, 2 + captured.len);
+    h.payload()[0] = @intFromPtr(code);
+    h.payload()[1] = @intFromPtr(fn_name);
+    for (captured, 0..) |v, i| gc.store(h, &h.valueSlots()[i], v);
+    return Value.fromObject(h);
+}
+
 /// Captured value `i` of a closure.
 pub fn capturedOf(self: Value, i: usize) Value {
     return self.toObject().valueSlots()[i];

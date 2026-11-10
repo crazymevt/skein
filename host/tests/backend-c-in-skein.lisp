@@ -122,11 +122,22 @@ the C backend written in Skein compiles (D-064)."
   (and (consp outcome) (eq (first outcome) :error) (stringp (second outcome))
        (search "build FFI programs with skeinc" (second outcome))))
 
+(defun skeinc-only-p (lisp skein)
+  "True if the Lisp backend's outcome LISP and the Skein backend's SKEIN differ because the
+program uses something added to the C backend after the Lisp one froze (D-064): the FFI;
+skein.math's and skein.time's host functions, which the Skein backend calls in the
+runtime; or defonce (M1.12)."
+  (or (ffi-skipped-p lisp)
+      (and (consp lisp) (stringp (second lisp))
+           (search "skein.core/%var-bound?" (second lisp)))
+      (and (stringp skein)
+           (or (search "sk_core(\"skein.math/" skein) (search "sk_core(\"skein.time/" skein)))))
+
 (defun backends-match-p (path)
   "Check that both backends translate PATH the same way (programs that use the FFI are
 built by skeinc only, D-064)."
   (multiple-value-bind (lisp skein) (compare-c-backends path)
-    (when (ffi-skipped-p lisp) (return-from backends-match-p t))
+    (when (skeinc-only-p lisp skein) (return-from backends-match-p t))
     (is (equal lisp skein) "~A: the backends differ~%~A" (file-namestring path)
         (if (and (stringp lisp) (stringp skein))
             (first-difference lisp skein)

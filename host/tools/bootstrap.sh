@@ -105,9 +105,10 @@ test_compiler() {
     fi
     echo "skeinc: package for $target ok"
   done
-  # Programs that only skeinc compiles (the FFI, D-064), built by skeinc, print what
+  # Programs that only skeinc compiles (the FFI, D-064; skein.math and skein.time's host
+  # functions, M1.12), built by skeinc, print what
   # `skein run` prints, and every line a ";; stderr: " comment gives on standard error.
-  for program in host/tests/fixtures/native-ffi*.skn; do
+  for program in host/tests/fixtures/native-ffi*.skn host/tests/fixtures/native-skeinc-*.skn; do
     name=$(basename "$program" .skn)
     ./skein run "$program" > "build/examples/$name.expected"
     "$skeinc" build "$program" -o "build/examples/$name$exe" > /dev/null

@@ -945,6 +945,7 @@ Phase 0 status (D-040):
   - Matrices are column-major: field `mCR` is column C, row R.
   - Projections (`perspective`, `ortho`) map depth to [0, 1], as Vulkan, Metal and SDL's GPU API expect.
   - Scalar functions keep float types; integer arguments give `f64`.
+  - Natively (M1.12, D-070), the runtime has the scalar functions, `noise`, and `skein.time`'s `now` and `now-ns`, with Phase 0's results: they call the system's libm, as SBCL does, and an `f32` is computed as an `f64` and rounded.
 
 Bindings shipped as separate libraries: `sdl3` (windowing, input, the 2D renderer and the GPU API; D-020), `miniaudio`, `cimgui`, `box2d`, `stb`.
 

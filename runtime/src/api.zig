@@ -28,6 +28,7 @@ comptime {
 extern fn sk_mv_buffer() [*]Value;
 
 export fn sk_init() void {
+    @import("mathtime.zig").init();
     _ = gc.attachThread();
     coll.ensureConstants();
     @import("cond.zig").ensureBuiltins();

@@ -944,3 +944,21 @@ Date: 2026-11-10 · Status: Accepted
 - **Consequences:**
   - Building needs `build/skeinc`; the first `./skein build` bootstraps it, which takes a minute or two.
   - Code signing, notarization, archives and finding assets at run time (a packaged program's working directory isn't its folder, and a `.app`'s assets are in `Contents/Resources`) come later.
+
+## D-070: skein.math and skein.time natively
+Date: 2026-11-10 · Status: Accepted
+- **Context:** Step 1 of M1.12. Driftrock needs `skein.time/now` and `skein.math`'s scalar functions, which Phase 0 defines in Lisp (`host/src/runtime/math.lisp`), so no native program could use `skein.math`. Building it also found several things `skeinc` didn't do yet.
+- **Decision:**
+  - **The runtime has them** (`runtime/src/mathtime.zig`), in its core table as `skein.math/<name>` and `skein.time/<name>`, as skein.ffi's are (D-065). The compiler's model puts each `<namespace>/<name>` entry in that namespace, and the C backend calls the runtime for them (`host-functions` in `c.skn`). `lib/skein/math.skn` and `time.skn` add the rest, as on the host.
+  - **Phase 0's results:** the scalar functions call the system's libm, found as an FFI symbol (Zig's compiler_rt has copies that can differ in the last bit). An `f32` is computed as an `f64` and rounded, as SBCL does; a float to an integer power multiplies, as SBCL's `expt` does; `noise` is the same Perlin noise. `now` counts from the runtime's start (`sk_init`). Wrong argument types give Skein's messages; Phase 0's come from SBCL.
+  - **Things `skeinc` now does, which Driftrock needed:**
+    - A program's namespaces are also found from the root that its own namespace name implies (`examples/` for `examples/driftrock/main.skn` declaring `driftrock.main`), as Phase 0's `program-source-paths` does.
+    - At phase 1, `%class` and `%condition-type` qualify the name through the model's aliases and refers first, as the C backend does when it compiles the call, so `(defmethod draw! [(s e/ship) ...])` finds `driftrock.entities/ship`.
+    - `defonce`'s `(%var-bound? 'ns/name)` compiles to a check of the var: natively nothing is reloaded.
+  - **A GC bug:** the runtime's table of generic functions held young closures, which a collection moved; compiling `skein.math`, with many `defgeneric`s, crashed. Generic functions are now permanent objects. A runtime test reproduces it.
+- **Alternatives:**
+  - Zig's `std.math` for the functions: no lookups, but results that can differ from Phase 0's in the last bit.
+  - Writing the scalar functions in Skein over a few primitives. They are the hot path of games, and libm is what Phase 0 uses.
+- **Consequences:**
+  - A fixture (`native-skeinc-math.skn`) built by `skeinc` prints what `skein run` prints for every function. The Lisp-versus-Skein comparison tests skip programs that use these functions or `defonce`, as they skip FFI programs: the Lisp backend is frozen.
+  - Driftrock builds natively, and runs at 60 fps with the dummy video driver on macOS.

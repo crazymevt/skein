@@ -304,6 +304,30 @@ instead."
       (fail (first argv) " failed:\n" (:out result) (:err result)))
     (:out result)))
 
+(defn- declared-namespace
+  "The name of the namespace that the file at path declares in its first form, or nil."
+  [path]
+  (try
+    (let [r (reader/make-reader (io/read-file path) {:file path :namespace "user"
+                                                     :resolve-alias (fn [_] nil)})
+          form (reader/read-form r false ::eof)
+          nm (when (= "ns" (form-head form)) (:datum (second (:datum form))))]
+      (when (symbol? nm) (name nm)))
+    (catch error e nil)))
+
+(defn- namespace-root
+  "If the file at path declares a namespace whose name matches its path, as
+src/game/main.skn declares game.main, the root directory (src/), else nil. (Phase 0's
+skein.backend.cl:namespace-root.)"
+  [path]
+  (when-let [nm (declared-namespace path)]
+    (let [path (apply str (map (fn [c] (if (= c \\) \/ c)) path))
+          rel (namespace-file-name nm)
+          root-length (- (count path) (count rel))]
+      (when (and (>= root-length 0) (= rel (subs path root-length))
+                 (or (zero? root-length) (= \/ (nth path (dec root-length)))))
+        (subs path 0 root-length)))))
+
 (def targets
   "The zig target triples skeinc builds for (DESIGN §19.1); the first three are P0."
   ["aarch64-macos" "x86_64-windows-gnu" "x86_64-linux-gnu" "x86_64-macos" "aarch64-linux-gnu"
@@ -361,7 +385,11 @@ namespaces are) and :main-name (the function to call). Returns the executable's 
             (fail "unknown target " target "; use one of " (apply str (interpose ", " targets))))
         windows (if target (= (target-os target) :windows) (windows?))
         output (or output (str (or (:name opts) (stem path)) (if windows ".exe" "")))
-        source-paths (vec (distinct (concat (or source-paths [(directory-of path) ""])
+        ;; As Phase 0's program-source-paths: the root the file's namespace implies, its
+        ;; directory, the current directory and lib/.
+        source-paths (vec (distinct (concat (or source-paths
+                                                (remove nil? [(namespace-root path)
+                                                             (directory-of path) ""]))
                                             [(str home "lib/")])))
         c-source (translate-file path source-paths main-name)
         prefix (build-runtime home target profile)
