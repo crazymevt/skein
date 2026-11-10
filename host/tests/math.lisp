@@ -216,9 +216,14 @@
                                                     [driftrock.entities :as e]
                                                     [skein.math :as m]))
                           (g/restart!)
-                          (dotimes [i 900] (g/update! (g/autopilot (/ i 60.0)) (/ 1.0 60.0)))
+                          ;; The best score along the way: after a game over the autopilot
+                          ;; restarts, which resets the score.
+                          (def best (atom 0))
+                          (dotimes [i 900]
+                            (g/update! (g/autopilot (/ i 60.0)) (/ 1.0 60.0))
+                            (swap! best max (:score @g/world)))
                           (let [wd @g/world]
-                            [(pos? (:score wd))
+                            [(pos? @best)
                              (contains? #{:playing :respawning :game-over} (:mode wd))
                              (every? e/alive? (:rocks wd))
                              (every? #(<= 0 (m/vec2-x (:pos %)) 960) (:rocks wd))])"
