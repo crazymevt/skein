@@ -42,6 +42,8 @@ pub const Fiber = struct {
     /// Where the scheduler has it (sched.zig): running on a worker, switching away to
     /// park, parked, in a run queue, or woken before it finished parking.
     sched_state: std.atomic.Value(SchedState) = .init(.running),
+    /// The waiter it's blocked on (wait.zig), so a cancellation can wake it.
+    waiter: ?*anyopaque = null,
     next_idle: ?*Fiber = null,
     /// Every fiber ever made, threads' own included, for the collector.
     next_all: ?*Fiber = null,
@@ -94,6 +96,19 @@ pub noinline fn current() *Fiber {
 // ---------------------------------------------------------------------------------------
 // The pool of idle fibers
 
+/// At most this many idle fibers keep their stacks. The others give theirs back, so a
+/// burst of fibers doesn't keep its memory, or its memory mappings (Linux limits them, and
+/// a thread's stack needs one), after it ends.
+const cached_stacks = 256;
+
+/// Idle fibers without a stack (made again when they're reused).
+var bare: ?*Fiber = null;
+
+fn newStack(f: *Fiber) void {
+    platform.createFiber(&f.ctx, default_stack_size, fiberMain, f) catch
+        rt.fatal("out of memory (a fiber's stack)", .{});
+}
+
 fn take() *Fiber {
     lock.lock();
     if (pool) |f| {
@@ -103,22 +118,39 @@ fn take() *Fiber {
         f.next_idle = null;
         return f;
     }
+    if (bare) |f| {
+        bare = f.next_idle;
+        lock.unlock();
+        f.next_idle = null;
+        newStack(f);
+        return f;
+    }
     made += 1;
     lock.unlock();
     const f = alloc.create(Fiber) catch rt.fatal("out of memory (a fiber)", .{});
     f.* = .{};
-    platform.createFiber(&f.ctx, default_stack_size, fiberMain, f) catch
-        rt.fatal("out of memory (a fiber's stack)", .{});
+    newStack(f);
     register(f);
     return f;
 }
 
+/// Put `f` back once its job has finished and it has switched away for good.
 fn give(f: *Fiber) void {
     lock.lock();
+    if (idle < cached_stacks) {
+        f.next_idle = pool;
+        pool = f;
+        idle += 1;
+        lock.unlock();
+        return;
+    }
+    lock.unlock();
+    // The record stays (the collector's list of fibers holds it); the stack goes.
+    platform.destroyFiber(&f.ctx);
+    lock.lock();
     defer lock.unlock();
-    f.next_idle = pool;
-    pool = f;
-    idle += 1;
+    f.next_idle = bare;
+    bare = f;
 }
 
 /// A fiber's life: run each job it's given, then switch back to whoever ran it.

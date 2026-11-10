@@ -302,7 +302,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 - Steps, in order (D-075):
   1. ✅ Worker threads (one per CPU) with work-stealing deques and an injection queue; fibers move between workers; a fiber that runs for about 10 ms yields at its next safepoint.
-  2. Waiting on fibers: wait queues per task and channel, a timer queue for sleeps and deadlines, cancellation that wakes a parked fiber; threads that aren't workers (the main thread, foreign threads) wait on a condition variable.
+  2. ✅ Waiting on fibers: wait queues per task and channel, a timer queue for sleeps and deadlines, cancellation that wakes a parked fiber; threads that aren't workers (the main thread, foreign threads) wait on a condition variable.
   3. Tasks, nurseries, futures, channels, `alts!`, `sleep`, timeouts and the main thread's queue on fibers, with Phase 0's semantics.
   4. `^:blocking` C calls hand their worker off; callbacks from foreign threads run as temporary fibers; Driftrock's job graph on fibers; the exit tests.
 

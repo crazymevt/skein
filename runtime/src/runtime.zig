@@ -38,6 +38,7 @@ pub const compiler = @import("compiler.zig");
 pub const ffi = @import("ffi.zig");
 pub const fiber = @import("fiber.zig");
 pub const sched = @import("sched.zig");
+pub const wait = @import("wait.zig");
 
 pub const Value = value.Value;
 

@@ -359,3 +359,161 @@ test "fibers move between workers and keep their own condition frames" {
     // With several workers, yielded fibers come back on other threads.
     try testing.expect(moved > 0);
 }
+
+// ---------------------------------------------------------------------------------------
+// Waiting (M2.3 step 2)
+
+const wait = @import("wait.zig");
+const platform = @import("platform");
+
+test "fibers and threads wait for each other's notifications" {
+    setup();
+    const Shared = struct {
+        got: std.atomic.Value(bool) = .init(false),
+        group: sched.WaitGroup = sched.WaitGroup.init(2),
+        fn waiter(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            var w = wait.Waiter.init();
+            wait.enqueue(901, &w);
+            if (wait.block(&w, null, null) == .notified) s.got.store(true, .release);
+            s.group.done();
+        }
+        fn notifier(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            while (wait.waiting(902) == 0) sched.yield();
+            _ = wait.notifyOne(902);
+            s.group.done();
+        }
+    };
+    var s: Shared = .{};
+    sched.spawn(Shared.waiter, &s);
+    // A fiber waits for this thread...
+    while (wait.waiting(901) == 0) std.Thread.yield() catch {};
+    wait.notifyAll(901);
+    // ...and this thread for a fiber.
+    var w = wait.Waiter.init();
+    try testing.expect(w.fiber == null);
+    wait.enqueue(902, &w);
+    sched.spawn(Shared.notifier, &s);
+    try testing.expectEqual(wait.Outcome.notified, wait.block(&w, null, null));
+    s.group.wait();
+    try testing.expect(s.got.load(.acquire));
+}
+
+test "deadlines wake parked fibers" {
+    setup();
+    const Sleeper = struct {
+        ms: u64,
+        ok: bool = false,
+        group: *sched.WaitGroup,
+        fn job(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            defer s.group.done();
+            var w = wait.Waiter.init();
+            const start = platform.monotonicNanos();
+            const outcome = wait.block(&w, start + s.ms * std.time.ns_per_ms, null);
+            const took = platform.monotonicNanos() - start;
+            s.ok = outcome == .deadline and took >= s.ms * std.time.ns_per_ms;
+        }
+    };
+    var group = sched.WaitGroup.init(200);
+    var sleepers: [200]Sleeper = undefined;
+    const start = platform.monotonicNanos();
+    for (&sleepers, 0..) |*s, i| {
+        s.* = .{ .ms = 1 + i % 30, .group = &group };
+        sched.spawn(Sleeper.job, s);
+    }
+    group.wait();
+    for (sleepers) |s| try testing.expect(s.ok);
+    // They slept at the same time, not one after another.
+    try testing.expect(platform.monotonicNanos() - start < 2 * std.time.ns_per_s);
+}
+
+test "notifyOne wakes one waiter at a time" {
+    setup();
+    const Shared = struct {
+        woken: std.atomic.Value(usize) = .init(0),
+        group: sched.WaitGroup = sched.WaitGroup.init(10),
+        fn job(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            var w = wait.Waiter.init();
+            wait.enqueue(903, &w);
+            while (wait.block(&w, null, null) != .notified) {}
+            _ = s.woken.fetchAdd(1, .acq_rel);
+            s.group.done();
+        }
+    };
+    var s: Shared = .{};
+    for (0..10) |_| sched.spawn(Shared.job, &s);
+    while (wait.waiting(903) < 10) std.Thread.yield() catch {};
+    for (0..10) |i| {
+        try testing.expect(wait.notifyOne(903));
+        while (s.woken.load(.acquire) < i + 1) std.Thread.yield() catch {};
+        try testing.expectEqual(i + 1, s.woken.load(.acquire));
+    }
+    try testing.expect(!wait.notifyOne(903));
+    s.group.wait();
+}
+
+test "no wake-up is lost: two fibers take 10,000 turns each" {
+    setup();
+    const Turns = struct {
+        m: platform.Mutex = .{},
+        turn: usize = 0,
+        group: sched.WaitGroup = sched.WaitGroup.init(2),
+        const Game = @This();
+        const Player = struct { game: *Game, me: usize };
+        fn job(arg: ?*anyopaque) void {
+            const p: *Player = @ptrCast(@alignCast(arg));
+            const g = p.game;
+            var played: usize = 0;
+            while (played < 10_000) {
+                g.m.lock();
+                if (g.turn == p.me) {
+                    g.turn = 1 - p.me;
+                    g.m.unlock();
+                    wait.notifyAll(910 + (1 - p.me));
+                    played += 1;
+                    continue;
+                }
+                var w = wait.Waiter.init();
+                wait.enqueue(910 + p.me, &w);
+                g.m.unlock();
+                if (wait.block(&w, null, null) != .notified) wait.remove(&w);
+            }
+            g.group.done();
+        }
+    };
+    var game: Turns = .{};
+    var players = [_]Turns.Player{ .{ .game = &game, .me = 0 }, .{ .game = &game, .me = 1 } };
+    for (&players) |*p| sched.spawn(Turns.job, p);
+    game.group.wait();
+}
+
+test "interrupting a parked fiber wakes it" {
+    setup();
+    const Shared = struct {
+        fiber_ptr: std.atomic.Value(?*fiber.Fiber) = .init(null),
+        outcome: wait.Outcome = .deadline,
+        returned: std.atomic.Value(bool) = .init(false),
+        group: sched.WaitGroup = sched.WaitGroup.init(1),
+        fn job(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            var w = wait.Waiter.init();
+            s.fiber_ptr.store(sched.currentFiber(), .release);
+            s.outcome = wait.block(&w, null, null);
+            s.returned.store(true, .release);
+            s.group.done();
+        }
+    };
+    var s: Shared = .{};
+    sched.spawn(Shared.job, &s);
+    while (s.fiber_ptr.load(.acquire) == null) std.Thread.yield() catch {};
+    // Until it's blocked, an interrupt does nothing; keep trying.
+    while (!s.returned.load(.acquire)) {
+        wait.interrupt(s.fiber_ptr.load(.acquire).?);
+        std.Thread.yield() catch {};
+    }
+    s.group.wait();
+    try testing.expectEqual(wait.Outcome.notified, s.outcome);
+}

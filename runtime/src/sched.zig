@@ -11,6 +11,7 @@
 const std = @import("std");
 const platform = @import("platform");
 const fiber = @import("fiber.zig");
+const wait = @import("wait.zig");
 const gc = @import("gc.zig");
 const rt = @import("rt.zig");
 const Value = @import("value.zig").Value;
@@ -33,21 +34,24 @@ const Deque = struct {
     lock: platform.Mutex = .{},
     items: std.ArrayList(*Fiber) = .empty,
     head: usize = 0,
+    /// How many fibers it holds: kept under the lock, read without it (`anyWork`).
+    count: std.atomic.Value(usize) = .init(0),
 
     fn len(q: *Deque) usize {
-        return q.items.items.len - q.head;
+        return q.count.load(.acquire);
     }
 
     fn pushBack(q: *Deque, f: *Fiber) void {
         q.lock.lock();
         defer q.lock.unlock();
         q.items.append(alloc, f) catch rt.fatal("out of memory (a run queue)", .{});
+        q.count.store(q.items.items.len - q.head, .release);
     }
 
     fn popBack(q: *Deque) ?*Fiber {
         q.lock.lock();
         defer q.lock.unlock();
-        if (q.len() == 0) return null;
+        if (q.items.items.len == q.head) return null;
         const f = q.items.pop().?;
         q.compact();
         return f;
@@ -56,23 +60,25 @@ const Deque = struct {
     fn popFront(q: *Deque) ?*Fiber {
         q.lock.lock();
         defer q.lock.unlock();
-        if (q.len() == 0) return null;
+        if (q.items.items.len == q.head) return null;
         const f = q.items.items[q.head];
         q.head += 1;
         q.compact();
         return f;
     }
 
+    /// With the lock held, after taking a fiber.
     fn compact(q: *Deque) void {
-        if (q.len() == 0) {
+        const rest = q.items.items.len - q.head;
+        if (rest == 0) {
             q.items.clearRetainingCapacity();
             q.head = 0;
         } else if (q.head > 1024 and q.head * 2 > q.items.items.len) {
-            const rest = q.len();
             std.mem.copyForwards(*Fiber, q.items.items[0..rest], q.items.items[q.head..]);
             q.items.shrinkRetainingCapacity(rest);
             q.head = 0;
         }
+        q.count.store(rest, .release);
     }
 };
 
@@ -239,11 +245,17 @@ fn enqueue(f: *Fiber) void {
 var monitor_lock: platform.Mutex = .{};
 var monitor_wake: platform.Condition = .{};
 
+/// The monitor thread: every few milliseconds, or sooner when a timer is due, it fires
+/// the timers that are due (wait.zig) and asks fibers that have run too long to yield.
 fn monitorMain(_: ?*anyopaque) callconv(.c) ?*anyopaque {
     monitor_lock.lock();
+    var next_timer: ?u64 = null;
     while (true) {
-        monitor_wake.timedWait(&monitor_lock, monitor_ns);
+        var sleep_ns = monitor_ns;
+        if (next_timer) |t| sleep_ns = @max(@min(sleep_ns, t -| platform.monotonicNanos()), 1);
+        monitor_wake.timedWait(&monitor_lock, sleep_ns);
         const now = platform.monotonicNanos();
+        next_timer = wait.fireTimers(now);
         for (workers) |*w| {
             if (w.running.load(.acquire) == null) continue;
             if (now -| w.slice_start.load(.acquire) < slice_ns) continue;
@@ -252,6 +264,14 @@ fn monitorMain(_: ?*anyopaque) callconv(.c) ?*anyopaque {
                 _ = @atomicRmw(u8, &gc.sk_gc_pending, .Or, gc.pending_preemption, .acq_rel);
         }
     }
+}
+
+/// A waiter's timer was added (wait.zig): the monitor recomputes how long it sleeps.
+pub fn timerAdded() void {
+    ensureStarted();
+    monitor_lock.lock();
+    defer monitor_lock.unlock();
+    monitor_wake.broadcast();
 }
 
 fn takePreemptRequest() void {
@@ -338,12 +358,12 @@ pub const WaitGroup = struct {
         return .{ .remaining = .init(n) };
     }
 
+    /// Under the lock, so the waiter can't return (and free the group, often on its
+    /// stack) before this has finished with it.
     pub fn done(g: *WaitGroup) void {
-        if (g.remaining.fetchSub(1, .acq_rel) == 1) {
-            g.lock.lock();
-            defer g.lock.unlock();
-            g.finished.broadcast();
-        }
+        g.lock.lock();
+        defer g.lock.unlock();
+        if (g.remaining.fetchSub(1, .acq_rel) == 1) g.finished.broadcast();
     }
 
     fn waitBlocking(arg: ?*anyopaque) void {
