@@ -487,3 +487,16 @@ calls back with all traps masked, and restore the caller's modes afterwards."
   (sb-sys:with-pinned-objects ((pin-targets x))
     (scall fn (to-pointer x))))
 (defffi "load-library" (spec) (load-library spec))
+
+;;; For the C backend written in Skein (M1.10): what a foreign type name stands for.
+
+(skein.runtime:defcore "%ctype-info" (x)
+  ;; [kind base name] for a C type: kind :struct, :union or :enum, base an enum's integer
+  ;; type (a symbol), name the qualified name. nil for anything else.
+  (if (ctype-p x)
+      (skein.runtime:vector-from-list
+       (list (skein.runtime:intern-kw (string-downcase (symbol-name (ctype-kind x))))
+             (and (eq (ctype-kind x) :enum)
+                  (skein.runtime:intern-sym (car (rassoc (ctype-cffi-name x) *primitive-ffi-types*))))
+             (ctype-name x)))
+      nil))

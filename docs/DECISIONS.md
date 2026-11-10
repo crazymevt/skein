@@ -877,3 +877,25 @@ Date: 2026-11-10 · Status: Accepted
   - A fixture of struct and union layouts, nested fields, memory, pointer arithmetic, 64-bit integers, C strings, owned pointers (20,000 left to the GC), enums, handles and errors prints the same built by `skeinc` as under `skein run`. `make test-compiler` checks it.
   - Phase 0 doesn't support `(sizeof (array T n))`; neither does the native runtime's test.
 
+## D-066: Native C calls
+Date: 2026-11-10 · Status: Accepted
+- **Context:** Step 2 of M1.10. A `defcfun` must become a Skein function that calls the C function with Phase 0's conversions (D-038), loaded and looked up as D-064 says.
+- **Decision:**
+  - **`skeinc` compiles each `defcfun`** (`skein.ffi/%define-function` with constant arguments) into a C function, and sets the var named after it to that function. The C function:
+    - checks the argument count;
+    - looks the symbol up on the first call and keeps it;
+    - converts each argument: integers keep their low bits, floats convert, `bool` is truthiness, a `c-string` is a NUL-terminated copy freed after the call, `ptr` takes `nil`, pointers and primitive arrays, and an enum takes keywords, collections of them or integers;
+    - calls through a function pointer of the C function's exact type;
+    - converts the result: `nil` for NULL, an owned pointer for `^:owned`.
+  - **Type information:** the C types come from the parameter types at compile time. An enum's integer type comes from its C type, which phase 1 made (`%ctype-info`). A struct or union passed by value is a compile error with Phase 0's message.
+  - **Pinning:** arrays passed as pointers stay pinned during the call, because the arguments are on the stack, which the GC scans conservatively.
+  - **`^:blocking`:** the call runs from a struct of its arguments inside the GC's blocking section (`sk_ffi_blocking`), so other threads can collect while it waits.
+  - **Slow calls:** any other call is timed, and warns once per function if it takes more than 10 ms, as in Phase 0.
+- **Alternatives:**
+  - libffi, or one generic call path for every signature. Slower, and it would need a dependency.
+  - Converting arguments with the C backend's typed layer (D-056). Arguments arrive boxed anyway.
+- **Consequences:**
+  - The native FFI fixture calls `strlen`, `abs`, `getenv` (blocking), `exp`, `sqrtf`, `memset` (on pointers, views, byte views and pinned arrays) and `malloc` (owned and borrowed), and passes enums. It prints what `skein run` prints.
+  - `examples/sdl/window.skn`, built by `skeinc`, runs on macOS with the dummy video driver.
+  - Building it found a GC bug in step 1's code: a C type's young parts were stored into a permanent object without the write barrier, so a collection left stale pointers. A runtime test now reproduces it.
+

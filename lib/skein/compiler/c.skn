@@ -672,6 +672,7 @@ is the Lisp backend's list."
     "%call-with-handlers" "%call-with-restarts" "%apply-values" "%call-with-values"
     "%named-fn" "%arity-error" "%add-method" "%getenv" "%make-struct-def" "%struct-constructor"
     "%struct-predicate" "%struct-accessor" "%make-soa-def" "%soa-maker" "%soa-field"
+    "%ctype-info"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -1322,11 +1323,130 @@ the var named name in this namespace to it, as Phase 0 does."
       (stmt st "sk_var_set(" (var-c-name st var) ", " t ");")
       (single-value st "SK_NIL"))))
 
+(def ^:private ffi-c-types
+  {"i8" "int8_t" "i16" "int16_t" "i32" "int32_t" "i64" "int64_t" "u8" "uint8_t"
+   "u16" "uint16_t" "u32" "uint32_t" "u64" "uint64_t" "f32" "float" "f64" "double"
+   "bool" "_Bool" "void" "void" "c-string" "uintptr_t" "ptr" "void*"})
+
+(defn- ffi-type-desc
+  "How a C function takes or returns the foreign type t: {:kind :int, :float, :bool,
+:void, :c-string, :ptr or :enum; :c its C type; :name the primitive's name; :enum the
+qualified name of an enum}."
+  [st node t c-name]
+  (cond (and (symbol? t) (contains? ffi-primitive-types t))
+        (let [n (name t)]
+          {:kind (case n
+                   ("i8" "i16" "i32" "i64" "u8" "u16" "u32" "u64") :int
+                   ("f32" "f64") :float
+                   "bool" :bool "void" :void "c-string" :c-string "ptr" :ptr)
+           :c (get ffi-c-types n)
+           :name n})
+        (and (list? t) (symbol? (first t)) (contains? #{"ptr" "fn"} (name (first t))))
+        {:kind :ptr :c "void*" :name "ptr"}
+        (symbol? t)
+        (let [q (qualify-ffi-type st t)
+              ns (when (namespace q) (%find-namespace (namespace q)))
+              var (when ns (%find-own-var ns (name q)))
+              info (when (and var (%var-defined? var)) (%ctype-info (%var-value var)))]
+          (cond (nil? info) (unsupported node "unknown foreign type " (pr-str t))
+                (= (first info) :enum)
+                (assoc (ffi-type-desc st node (second info) c-name) :kind :enum :enum (nth info 2))
+                :else (unsupported node (nth info 2) " is a " (name (first info))
+                                   "; pass it by pointer, as (ptr ...)")))
+        :else (unsupported node "unsupported foreign type " (pr-str t))))
+
+(defn- ffi-argument
+  "The C expression converting argument i (an sk_value) to a C value as described."
+  [desc i]
+  (let [arg (str "argv[" i "]")]
+    (case (:kind desc)
+      :int (str "(" (:c desc) ")sk_ffi_to_int(" arg ")")
+      :enum (str "(" (:c desc) ")sk_ffi_enum(" (c-string-literal (:enum desc)) ", " arg ")")
+      :float (str "(" (:c desc) ")sk_ffi_to_f64(" arg ")")
+      :bool (str "SK_TRUTHY(" arg ")")
+      :c-string (str "sk_ffi_to_cstring(" arg ")")
+      :ptr (str "(void*)sk_ffi_to_address(" arg ")"))))
+
+(defn- ffi-result
+  "The C expression converting the C result r to an sk_value."
+  [desc owned]
+  (case (:kind desc)
+    :void "SK_NIL"
+    (:int :enum) (if (= "u" (subs (:name desc) 0 1))
+                   "sk_ffi_from_u64((uint64_t)r)"
+                   "sk_ffi_from_i64((int64_t)r)")
+    :float (if (= (:name desc) "f32") "sk_from_f32(r)" "sk_f64(r)")
+    :bool "SK_BOOL(r)"
+    :c-string "sk_ffi_from_cstring(r)"
+    :ptr (if owned "sk_ffi_owned((uintptr_t)r)" "sk_ffi_pointer((uintptr_t)r)")))
+
+(defn- emit-define-function
+  "(skein.ffi/%define-function 'name \"c_name\" 'return '[[param type]...] blocking owned):
+a C function that converts its arguments, calls c_name through a function pointer of its
+C type (looked up on the first call) and converts the result, as Phase 0's defcfun does
+(D-066). The var named name in this namespace is set to it."
+  [st node args]
+  (let [[nm c-name ret params blocking owned] (mapv :value args)
+        _ (when (some (fn [[_ t]] (nil? t)) params)
+            (unsupported node "every parameter of " c-name " needs a type"))
+        pdescs (mapv (fn [[_ t]] (ffi-type-desc st node t c-name)) params)
+        rdesc (ffi-type-desc st node ret c-name)
+        code (fresh st "ffi")
+        n (count params)
+        out (atom [])
+        line (fn [& parts] (swap! out conj (str (concat-strings parts) "\n")))
+        c-args (if (seq pdescs) (join ", " (map :c pdescs)) "void")
+        fn-type (str (:c rdesc) " (*)(" c-args ")")
+        actuals (join ", " (map (fn [i] (str "a" i)) (range n)))
+        void? (= (:kind rdesc) :void)
+        call (str "((" fn-type ")sym)(" actuals ")")]
+    (when blocking
+      ;; A blocking call runs from a struct of its arguments, in the GC's blocking section.
+      (line "struct " code "_call { uintptr_t sym;"
+            (concat-strings (map-indexed (fn [i d] (str " " (:c d) " a" i ";")) pdescs))
+            (if void? "" (str " " (:c rdesc) " r;")) " };")
+      (line "static void " code "_run(void *p) {")
+      (line "  struct " code "_call *c = p;")
+      (line "  " (if void? "" "c->r = ") "((" fn-type ")c->sym)("
+            (join ", " (map (fn [i] (str "c->a" i)) (range n))) ");")
+      (line "}"))
+    (line "static sk_value " code "(sk_value self, uint32_t argc, const sk_value *argv) {")
+    (line "  static uintptr_t sym;")
+    (when-not blocking (line "  static int warned;"))
+    (line "  (void)argv;")
+    (line "  if (argc != " n ") return sk_arity_error(self, argc, " (location-literal node) ");")
+    (line "  if (!sym) sym = sk_ffi_symbol(" (c-string-literal c-name) ");")
+    (doseq [[i d] (map-indexed vector pdescs)]
+      (line "  " (:c d) " a" i " = " (ffi-argument d i) ";"))
+    (if blocking
+      (do (line "  struct " code "_call c = {sym"
+                (concat-strings (map (fn [i] (str ", a" i)) (range n))) "};")
+          (line "  sk_ffi_blocking(" code "_run, &c);")
+          (when-not void? (line "  " (:c rdesc) " r = c.r;")))
+      (do (line "  uint64_t start = sk_ffi_now();")
+          (line "  " (if void? "" (str (:c rdesc) " r = ")) call ";")
+          (line "  sk_ffi_check_slow(start, &warned, " (c-string-literal c-name) ");")))
+    (doseq [[i d] (map-indexed vector pdescs)]
+      (when (= (:kind d) :c-string) (line "  sk_ffi_free_cstring(a" i ");")))
+    (line "  return " (ffi-result rdesc owned) ";")
+    (line "}")
+    (swap! (:unit st) (fn [u] (-> u
+                                  (update :prototypes conj
+                                          (str "static sk_value " code "(sk_value self, "
+                                               "uint32_t argc, const sk_value *argv);"))
+                                  (update :functions conj (concat-strings @out)))))
+    (let [fobj (fresh st "fobj")
+          var (%intern-var (:ns st) (name nm))]
+      (swap! (:unit st) update :fn-objects conj [fobj code (name nm)])
+      (stmt st "sk_var_set(" (var-c-name st var) ", " fobj ");")
+      (single-value st "SK_NIL"))))
+
 (defn- emit-call [st node]
   (let [f (:fn node)
         args (qualify-condition-type-call f (:args node))]
     (cond (or (ffi-call? f "%define-struct" args 3) (ffi-call? f "%define-enum" args 3))
           (emit-ffi-definition st node f args)
+          (ffi-call? f "%define-function" args 6) (emit-define-function st node args)
           (core-call? f "%define-struct" args 3) (emit-define-struct st node args)
           (core-call? f "%define-soa" args 2) (emit-define-soa st node args)
           :else

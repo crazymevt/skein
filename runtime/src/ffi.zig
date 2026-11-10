@@ -249,15 +249,15 @@ fn defineStruct(name: Value, kind: Value, fields: Value) Value {
         if (union_p) size = @max(size, l.size) else offset = at + l.size;
     }
     if (!union_p) size = offset;
+    // A permanent object is old: storing young values into it needs the write barrier.
     const h = gc.allocPermanent(.ctype, 6);
     const t = Value.fromObject(h);
-    const slots = h.valueSlots();
-    slots[t_name] = string.make(qualified);
-    slots[t_kind] = coll.fx(if (union_p) kind_union else kind_struct);
-    slots[t_size] = coll.fx(alignUp(size, max_align));
-    slots[t_align] = coll.fx(max_align);
-    slots[t_fields] = out;
-    slots[t_base] = Value.nil;
+    coll.set(t, t_name, string.make(qualified));
+    coll.set(t, t_kind, coll.fx(if (union_p) kind_union else kind_struct));
+    coll.set(t, t_size, coll.fx(alignUp(size, max_align)));
+    coll.set(t, t_align, coll.fx(max_align));
+    coll.set(t, t_fields, out);
+    coll.set(t, t_base, Value.nil);
     register(qualified, t);
     return t;
 }
@@ -272,15 +272,15 @@ fn defineEnum(name: Value, base: Value, values: Value) Value {
     while (s != Value.nil) : (s = seq.seqNext(seq.seqNext(s))) {
         map = coll.mapAssoc(map, seq.seqFirst(s), seq.first(seq.seqNext(s)));
     }
+    // A permanent object is old: storing young values into it needs the write barrier.
     const h = gc.allocPermanent(.ctype, 6);
     const t = Value.fromObject(h);
-    const slots = h.valueSlots();
-    slots[t_name] = string.make(qualified);
-    slots[t_kind] = coll.fx(kind_enum);
-    slots[t_size] = Value.nil;
-    slots[t_align] = Value.nil;
-    slots[t_fields] = map;
-    slots[t_base] = base;
+    coll.set(t, t_name, string.make(qualified));
+    coll.set(t, t_kind, coll.fx(kind_enum));
+    coll.set(t, t_size, Value.nil);
+    coll.set(t, t_align, Value.nil);
+    coll.set(t, t_fields, map);
+    coll.set(t, t_base, base);
     register(qualified, t);
     return t;
 }
@@ -585,6 +585,96 @@ export fn sk_ffi_symbol(name: [*:0]const u8) usize {
 }
 
 // ---------------------------------------------------------------------------------------
+// For the C backend's compiled calls (defcfun, M1.10 step 2): converting arguments and
+// results, blocking calls and the slow-call warning. Declared in include/skein.h.
+
+export fn sk_ffi_to_int(v: Value) i64 {
+    return toI64(v);
+}
+
+export fn sk_ffi_to_f64(v: Value) f64 {
+    return toF64(v, "a float argument");
+}
+
+export fn sk_ffi_to_address(v: Value) usize {
+    return toAddress(v);
+}
+
+/// A C string argument: a NUL-terminated copy of the string, or NULL for nil. The call
+/// frees it afterwards (sk_ffi_free_cstring).
+export fn sk_ffi_to_cstring(v: Value) usize {
+    return cStringCopy(v);
+}
+
+export fn sk_ffi_free_cstring(p: usize) void {
+    if (p != 0) std.c.free(@ptrFromInt(p));
+}
+
+/// An enum argument: the value of `v` for the enum registered as `qualified`.
+export fn sk_ffi_enum(qualified: [*:0]const u8, v: Value) i64 {
+    const t = lookup(std.mem.span(qualified)) orelse fail("unknown foreign type {s}", .{std.mem.span(qualified)});
+    return toI64(enumValue(t, v));
+}
+
+export fn sk_ffi_from_i64(n: i64) Value {
+    return num.fromI128(n);
+}
+
+export fn sk_ffi_from_u64(n: u64) Value {
+    return num.fromI128(n);
+}
+
+export fn sk_ffi_pointer(address: usize) Value {
+    return makePointer(address);
+}
+
+export fn sk_ffi_owned(address: usize) Value {
+    return makeOwned(address);
+}
+
+export fn sk_ffi_from_cstring(p: usize) Value {
+    return cString(p);
+}
+
+const Blocking = struct { f: *const fn (?*anyopaque) callconv(.c) void, arg: ?*anyopaque };
+
+fn runBlocking(arg: ?*anyopaque) void {
+    const b: *Blocking = @ptrCast(@alignCast(arg));
+    b.f(b.arg);
+}
+
+/// A ^:blocking call: run `f(arg)` (the C call, which must not touch the heap) while
+/// collections may go ahead without this thread (DESIGN §14.3).
+export fn sk_ffi_blocking(f: *const fn (?*anyopaque) callconv(.c) void, arg: ?*anyopaque) void {
+    var b: Blocking = .{ .f = f, .arg = arg };
+    gc.blocking(runBlocking, &b);
+}
+
+export fn sk_ffi_now() u64 {
+    return platform.monotonicNanos();
+}
+
+/// After a call not marked ^:blocking: if it took more than 10 ms, warn, once per
+/// function (`warned` is the function's flag), as Phase 0 does.
+export fn sk_ffi_check_slow(start: u64, warned: *c_int, c_name: [*:0]const u8) void {
+    if (platform.monotonicNanos() - start <= 10 * std.time.ns_per_ms) return;
+    if (@atomicRmw(c_int, warned, .Xchg, 1, .acq_rel) != 0) return;
+    var buf: [512]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "the C function {s} took more than 10 ms; mark it ^:blocking if it waits", .{std.mem.span(c_name)}) catch "a C function took more than 10 ms";
+    const cond = @import("cond.zig");
+    cond.warn(cond.makeBuiltin(.warning, text));
+}
+
+/// [kind base name] for a C type (the C backend's %ctype-info): kind is :struct, :union
+/// or :enum, base an enum's integer type, name the qualified name. nil for anything else.
+fn ctypeInfo(t: Value) Value {
+    if (!t.isObjectOf(.ctype)) return Value.nil;
+    const k = kindOf(t);
+    const kind = names.keyword(null, if (k == kind_struct) "struct" else if (k == kind_union) "union" else "enum");
+    return coll.vectorOf(&.{ kind, get(t, t_base), get(t, t_name) });
+}
+
+// ---------------------------------------------------------------------------------------
 // skein.ffi functions (core.zig's table includes these, named skein.ffi/<name>)
 
 const Args = []const Value;
@@ -601,6 +691,11 @@ fn opt(a: Args, i: usize, default: Value) Value {
 }
 
 pub const entries = [_]Entry{
+    .{ .name = "%ctype-info", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return ctypeInfo(a[0]);
+        }
+    }.f },
     .{ .name = "skein.ffi/%load-library", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return loadLibrary(a[0]);
@@ -729,3 +824,58 @@ pub const entries = [_]Entry{
         }
     }.f },
 };
+
+// ---------------------------------------------------------------------------------------
+// Tests
+
+const testing = std.testing;
+
+fn testField(n: []const u8, t: Value) Value {
+    return coll.vectorOf(&.{ names.symbol(null, n), t });
+}
+
+/// Define the test's types in a frame of their own, so no stale stack word keeps their
+/// young parts in place.
+noinline fn defineTestTypes() void {
+    const sym = names.symbol;
+    _ = defineStruct(sym("t", "point"), names.keyword(null, "struct"), coll.vectorOf(&.{
+        testField("x", sym(null, "i32")), testField("y", sym(null, "i32")),
+    }));
+    _ = defineStruct(sym("t", "mixed"), names.keyword(null, "struct"), coll.vectorOf(&.{
+        testField("a", sym(null, "u8")),  testField("b", sym(null, "f64")),
+        testField("c", sym(null, "u16")), testField("p", sym("t", "point")),
+    }));
+    _ = defineStruct(sym("t", "u"), names.keyword(null, "union"), coll.vectorOf(&.{
+        testField("i", sym(null, "i64")), testField("f", sym(null, "f32")),
+    }));
+}
+
+noinline fn scrubStack() void {
+    var junk: [16384]usize = undefined;
+    @memset(&junk, 0);
+    std.mem.doNotOptimizeAway(&junk);
+}
+
+test "struct layouts follow C, and survive collections" {
+    coll.ensureConstants();
+    defineTestTypes();
+    scrubStack();
+    // Regression (M1.10): the name and fields are young objects stored into a permanent
+    // ctype, which needs the write barrier to survive a minor collection. Collect, then
+    // allocate enough to reuse the nursery, so a stale pointer would read garbage.
+    for (0..4) |_| {
+        gc.collect(.minor);
+        for (0..20000) |i| _ = string.make(if (i % 2 == 0) "xxxxxxxxxxxxxxxxxxxxxxxx" else "yy");
+    }
+    gc.collect(.major);
+    const point = lookup("t/point").?;
+    const mixed = lookup("t/mixed").?;
+    const u = lookup("t/u").?;
+    try testing.expectEqual(@as(usize, 8), typeSize(point));
+    try testing.expectEqual(@as(usize, 32), typeSize(mixed));
+    try testing.expectEqual(@as(usize, 8), typeSize(u));
+    try testing.expectEqualStrings("t/mixed", ctypeName(mixed));
+    try testing.expectEqual(@as(usize, 20), findField(mixed, names.keyword(null, "p")).offset);
+    try testing.expectEqual(@as(usize, 16), findField(mixed, names.keyword(null, "c")).offset);
+    try testing.expectEqualStrings("t/point", ctypeName(point));
+}

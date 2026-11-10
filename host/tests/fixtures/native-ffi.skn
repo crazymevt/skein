@@ -93,6 +93,45 @@
        [(integer? h) (identical? v (ffi/handle-value h)) (ffi/free-handle h)]))
 (prn (not= (ffi/handle :a) (ffi/handle :a)))
 
+;; Calling C (step 2): functions of the C library every process has loaded
+(ffi/defcfun strlen "strlen" u64 [s c-string])
+(ffi/defcfun c-abs "abs" i32 [x i32])
+(ffi/defcfun ^:blocking getenv "getenv" c-string [name c-string])
+(prn [(strlen "héllo") (strlen "") (c-abs -7) (string? (getenv "PATH"))
+      (getenv "SKEIN_NO_SUCH_VARIABLE_42")])
+(ffi/defcfun c-exp "exp" f64 [x f64])
+(ffi/defcfun c-sqrtf "sqrtf" f32 [x f32])
+(prn [(> (c-exp 1000.0) 1e300) (c-sqrtf 2.25) (c-exp 0)])
+(ffi/defcfun memset "memset" ptr [p ptr, c i32, n u64])
+(prn (let [p (ffi/own (ffi/alloc u8 4))]
+       (memset p 7 4)
+       [(ffi/get p u8 0) (ffi/get p u8 3)]))
+(prn (let [a (make-array u8 6)]
+       (memset (view a 2 4) 9 2)
+       (vec a)))
+(prn (let [a (make-array f32 2)
+           bytes (as-bytes a)]
+       (aset! a 0 1.5f)
+       (aset! a 1 2.5f)
+       (memset bytes 0 (count bytes))
+       [(count bytes) (vec a)]))
+(prn (let [a (make-array u8 4)]
+       (ffi/pin [p a] (memset p 5 4))
+       (vec a)))
+(ffi/defcfun c-malloc "malloc" ^:owned (ptr u8) [n u64])
+(ffi/defcfun c-malloc2 "malloc" ^:owned ptr [n u64])
+(ffi/defcfun ^:blocking c-malloc3 "malloc" ^:borrowed ptr [n u64])
+(prn (let [p (c-malloc 4) q (c-malloc2 4) r (c-malloc3 4)]
+       (ffi/put! p u8 42 3)
+       (ffi/free r)
+       [(ffi/get p u8 3) (ffi/ptr? p) (ffi/null? q)]))
+(dotimes [i 5000] (c-malloc 128))
+(ffi/defcenum color (:red 0) (:green 5))
+(ffi/defcfun color-abs "abs" i32 [x color])
+(prn [(color-abs :green) (color-abs -3)])
+;; (Arity and type errors in calls have SBCL's and CFFI's wording in Phase 0.)
+(prn (message (fn [] (color-abs :blue))))
+
 ;; Errors
 (prn (message (fn [] (ffi/with-foreign [p (ffi/alloc line)] (ffi/put-field! p line :to 0))))
      (message (fn [] (ffi/enum-value flags :zzz)))

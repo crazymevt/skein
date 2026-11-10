@@ -52,6 +52,23 @@ sk_value sk_arity_error(sk_value self, uint32_t argc, const char *defined_at);
 /* For a program that includes the native compiler's environment (D-060): register a var
  * of skein.core compiled from lib/skein/core.skn (macro = 1) or of skein.core.native. */
 void sk_register_core_var(sk_value var, int macro);
+
+/* Compiled C calls (defcfun, M1.10, D-066): converting arguments and results. */
+uintptr_t sk_ffi_symbol(const char *name);
+int64_t sk_ffi_to_int(sk_value v);
+double sk_ffi_to_f64(sk_value v);
+uintptr_t sk_ffi_to_address(sk_value v);
+uintptr_t sk_ffi_to_cstring(sk_value v);
+void sk_ffi_free_cstring(uintptr_t p);
+int64_t sk_ffi_enum(const char *qualified, sk_value v);
+sk_value sk_ffi_from_i64(int64_t n);
+sk_value sk_ffi_from_u64(uint64_t n);
+sk_value sk_ffi_pointer(uintptr_t address);
+sk_value sk_ffi_owned(uintptr_t address);
+sk_value sk_ffi_from_cstring(uintptr_t p);
+void sk_ffi_blocking(void (*f)(void *), void *arg);
+uint64_t sk_ffi_now(void);
+void sk_ffi_check_slow(uint64_t start, int *warned, const char *c_name);
 sk_value sk_unbound(const char *name, const char *location);
 
 sk_value sk_add_slow(sk_value a, sk_value b);
