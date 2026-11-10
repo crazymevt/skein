@@ -6,6 +6,11 @@ ZIG ?= zig
 
 .PHONY: test test-host test-runtime test-compiler compiler repl bench sdl3-bindings
 
+# On Windows, make would run recipes with cmd.exe; use bash (Git for Windows) there too.
+ifeq ($(OS),Windows_NT)
+SHELL := bash
+endif
+
 EXE := $(if $(filter Windows_NT,$(OS)),.exe,)
 SKEINC = build/skeinc$(EXE)
 COMPILER_SOURCES = $(wildcard lib/skein/*.skn lib/skein/*/*.skn) runtime/include/skein.h \
