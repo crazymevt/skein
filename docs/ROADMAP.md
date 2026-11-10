@@ -272,7 +272,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Rules for Phase 2**
 - Phase 1's rules still apply (Zig 0.17.1, C11 with `zig cc`, platform code only in `runtime/platform/<os>/`, the Core IR as the contract).
-- The Phase 0 host stays a test reference by program output: a native result is tested against what `skein run` on SBCL prints, until M2.6 moves `skein run` to the native runtime; after that the reference is the expected-output files and fixtures. The Lisp C backend only builds the first compiler (D-073).
+- The Phase 0 host stays a test reference by program output: a native result is tested against what `skein run` on SBCL prints, which from M2.6 is `skein host run` (D-081), besides the expected-output files and fixtures. The Lisp C backend only builds the first compiler (D-073).
 - New native features go into the runtime and the compiler in Skein; nothing new goes into the Phase 0 host unless a test reference needs it.
 
 ### M2.1 Phase 1 follow-ups
@@ -331,7 +331,12 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M2.6 Native REPL and `skein dev`
 - The REPL on the terminal and on a localhost socket, the file watcher and the debugger (an unhandled error suspends its fiber; restarts and a backtrace), with Phase 0's behavior (D-039).
-- `./skein run`, `dev` and `repl` run on the native runtime; SBCL only bootstraps.
+- `./skein run`, `dev` and `repl` run on the native runtime; SBCL only bootstraps, and runs `./skein host ...` as a reference.
+- Steps, in order (D-081):
+  1. The runtime: a localhost TCP server, file modification dates, reading the terminal without blocking a worker, an unhandled error calling an installed debugger in its fiber, and backtraces (compiled functions' names and locations in `--eval` builds; interpreted frames).
+  2. The REPL (`skein.dev`) natively, with Phase 0's behavior: prompts, `*1` `*2` `*3` `*e`, `:quit`, read errors, the debugger (numbered restarts, `:bt`, nested levels); `skein repl`.
+  3. `skein dev` natively: the server on `localhost:5555`, the file watcher, an error in the program's fiber suspended and debugged from an attached REPL, output that doesn't interleave mid-line.
+  4. The command line: `./skein run`, `dev`, `repl`, `build` and `package` natively through skeinc (programs built with `--eval`, cached by their sources), `./skein host ...` on SBCL; the bootstrap check's references from `skein host run`; M0.11's exit test natively.
 
 **Exit:** M0.11's live-development exit test passes natively on all three platforms.
 

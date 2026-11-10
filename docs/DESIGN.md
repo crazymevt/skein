@@ -704,6 +704,8 @@ Phase 0 details (D-039):
 - **Game loop:** `skein.game/run-loop` takes `:frame` (once per frame, e.g. input), `:update` (called with the fixed timestep `:step`, default 1/60 s, as often as the clock requires, at most `:max-steps` times per frame, default 5), `:render` (once per frame, with the fraction of a step left over), and `:running?`. Each call runs inside `(skein.game/with-frame-restarts ...)`, which establishes `retry-frame` (run that call again) and `skip-frame` (give up on it) (D-040).
 - **Source root:** if the main file declares a namespace that matches its path (`src/game/main.skn` declaring `game.main`), `skein run` and `skein dev` also look for namespaces under that root (`src/`) (D-040).
 
+Natively (M2.6, D-081): `skein run` and `skein dev` build the program with skeinc (dev profile, `--eval`) into `.skein-cache/`, reusing it while its sources are unchanged, and run it; the REPL, debugger and dev loop behave as Phase 0's above, and an error with no handler suspends its fiber for the debugger. `skein host run|dev|repl` runs Phase 0 on SBCL.
+
 Evaluating code (M2.5, D-078):
 - **`(eval form)`** evaluates a form given as data in the current namespace and returns its value; **`(load-file path)`** evaluates a file's forms in order and returns the last value; **`(reload 'ns)`** loads a namespace's source file again (above). All three are in skein.core.
 - **Native programs** can evaluate code when they are built with `skeinc build --eval` (dev profile only), which includes the reader, the expander and an evaluator (a closure compiler in the runtime), and registers the program's namespaces and vars at start-up. In other builds these functions, and `macroexpand`, `macroexpand-1` and `macroexpand-all`, signal an error saying they need `--eval`. Compiled code can't name a var that only evaluated code defines, and keeps the expansions of the macros it was built with (D-079). Reloaded code runs in the evaluator until hot reload of compiled code (M2.9); where it declares types, the evaluator computes them unboxed.
@@ -891,6 +893,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
 | `skein repl` | start a REPL |
 | `skein run <file-or-ns>` | run a program |
 | `skein dev` | run with file watching, hot reload and a REPL server (§15) |
+| `skein host run\|dev\|repl ...` | the same on the Phase 0 SBCL host, as a reference (Phase 2, D-081) |
 | `skein test` | run tests |
 | `skein build [--target T] [--profile P]` | compile a native executable (Phase 1: `skein build [file.skn] [-o FILE] [--target T] [--profile dev\|release]`, by skeinc; with no file, the project in the current directory; D-069) |
 | `skein package` | create distributables |

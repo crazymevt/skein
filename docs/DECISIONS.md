@@ -1105,3 +1105,15 @@ Date: 2026-11-10 · Status: Accepted
 - **Consequences:**
   - When one redefinition changes both a superclass's slots and a cell kind, Phase 0 updates a subclass's instances twice and wraps the cell twice (SBCL makes them obsolete twice); natively they're updated once. Tests make the two changes in separate redefinitions.
   - Two fibers that touch the same out-of-date instance at once may both update it.
+
+## D-081: The native REPL and `skein dev`
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.6 moves `./skein run`, `dev` and `repl` from the SBCL host to the native runtime, with Phase 0's REPL, debugger and dev loop (D-039). Natively a program must be compiled before it runs (D-078: evaluating it from source can't create `defcfun`s), an unhandled error should suspend its fiber, and the runtime has no sockets, file dates or backtraces yet.
+- **Decision** (Jessie chose the first two):
+  - **`skein run` and `skein dev` build the program** with skeinc (dev profile, `--eval`) into `.skein-cache/`, reusing the executable while no source file it was built from has changed, then run it with the arguments. `eval`, `load-file` and `reload` work in both, as in Phase 0. `skein repl` runs a REPL program that the bootstrap builds once.
+  - **`./skein host run|dev|repl ...`** runs Phase 0 on SBCL, as a reference; otherwise SBCL only bootstraps the compiler. The bootstrap check's expected outputs come from `skein host run`.
+  - **The REPL and dev loop are Skein code** (`skein.dev`) in every `--eval` build, with Phase 0's behavior and plain-text protocol: the `namespace=> ` prompt, `*1` `*2` `*3` `*e`, `:quit`, the debugger's numbered restarts, `:bt` and nested `debug[N]` levels, the server on `localhost:5555` (`--port`, `--no-server`), and the watcher that reloads changed files every 0.25 s. `skein dev` tells the program to start them through the environment, before `-main` runs.
+  - **The debugger on fibers:** an error with no handler calls the debugger in the failing fiber, which waits there while a REPL attaches; forms typed then are evaluated in that fiber, so its restarts and state are available. Errors in tasks still go to their nursery (D-037).
+  - **The runtime gains** a localhost TCP server, file modification dates, reading the terminal without blocking a worker, and backtraces: an `--eval` build keeps frame pointers and registers each compiled function's code address, name and location; interpreted functions are named by their lambdas.
+- **Alternatives:** building without the evaluator for `skein run`; evaluating programs from source with a prebuilt runner (fast start, but about 20× slower and no new C bindings); dropping the SBCL path from `./skein` entirely.
+- **Consequences:** the first `skein run` of a changed program waits for a build (about 7 s with the evaluator); later runs start at once. Phase 0 stays for bootstrapping, `skein host`, and its own test suite.
