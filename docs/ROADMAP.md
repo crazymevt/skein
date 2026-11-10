@@ -292,7 +292,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   1. ✅ Fiber stacks (reserved, guarded, committed as touched, pooled) and switching: hand-written for arm64 and x86_64 on macOS and Linux, Windows' fiber API on Windows.
   2. ✅ The GC scans every fiber's stack; condition frames are per fiber; errors, restarts and unwinding work inside fibers.
   3. ✅ Stack overflow: the guard page becomes a `stack-overflow` error in the fiber, which can handle it and go on.
-  4. A scheduler on one thread: spawning, yielding, a run queue, fibers finishing; the exit test.
+  4. ✅ A scheduler on one thread: spawning, yielding, a run queue, fibers finishing; the exit test.
 
 **Exit:** 100,000 fibers that yield and allocate under collections run on all three platforms in CI.
 

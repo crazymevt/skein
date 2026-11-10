@@ -187,3 +187,100 @@ test "a stack overflow is an error in the fiber, which it can handle again and a
     runAll(&more, 1);
     try testing.expect(builder.ok);
 }
+
+// ---------------------------------------------------------------------------------------
+// The scheduler on one thread (step 4)
+
+const sched = @import("sched.zig");
+
+test "the scheduler runs ready fibers in turn" {
+    setup();
+    const Turns = struct {
+        id: u8,
+        log: *std.ArrayList(u8),
+        fn job(arg: ?*anyopaque) void {
+            const t: *@This() = @ptrCast(@alignCast(arg));
+            for (0..3) |_| {
+                t.log.append(testing.allocator, t.id) catch unreachable;
+                sched.yield();
+            }
+        }
+    };
+    var log: std.ArrayList(u8) = .empty;
+    defer log.deinit(testing.allocator);
+    var turns = [_]Turns{ .{ .id = 'a', .log = &log }, .{ .id = 'b', .log = &log }, .{ .id = 'c', .log = &log } };
+    for (&turns) |*t| sched.spawn(Turns.job, t);
+    try testing.expectEqual(@as(usize, 3), sched.runUntilIdle());
+    try testing.expectEqualStrings("abcabcabc", log.items);
+}
+
+test "a parked fiber runs again once it's woken" {
+    setup();
+    const Shared = struct {
+        sleeper: ?*fiber.Fiber = null,
+        log: [4]u8 = undefined,
+        n: usize = 0,
+        fn note(s: *@This(), c: u8) void {
+            s.log[s.n] = c;
+            s.n += 1;
+        }
+        fn sleepJob(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            s.sleeper = sched.currentFiber();
+            s.note('p');
+            sched.park();
+            s.note('r');
+        }
+        fn wakeJob(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            s.note('w');
+            sched.wake(s.sleeper.?);
+            s.note('d');
+        }
+    };
+    var s: Shared = .{};
+    sched.spawn(Shared.sleepJob, &s);
+    sched.spawn(Shared.wakeJob, &s);
+    try testing.expectEqual(@as(usize, 2), sched.runUntilIdle());
+    try testing.expectEqualStrings("pwdr", s.log[0..s.n]);
+}
+
+/// The exit test of M2.2: 100,000 fibers, all alive at once, each building a list that
+/// only its stack holds while it yields, with garbage in between; collections happen as
+/// they allocate.
+const Worker = struct {
+    ok: bool = false,
+    fn job(arg: ?*anyopaque) void {
+        const self: *Worker = @ptrCast(@alignCast(arg));
+        var head = Value.nil;
+        for (0..8) |i| {
+            head = Builder.node(i, head);
+            _ = gc.alloc(.tuple, 32);
+            sched.yield();
+        }
+        var count: usize = 0;
+        var it = head;
+        while (it != Value.nil) : (it = it.toObject().valueSlots()[1]) {
+            if (it.toObject().valueSlots()[0].toFixnum() != @as(i64, @intCast(7 - count))) return;
+            count += 1;
+        }
+        self.ok = count == 8;
+    }
+};
+
+test "100,000 fibers that yield and allocate run under collections" {
+    setup();
+    const count = 100_000;
+    const workers = try testing.allocator.alloc(Worker, count);
+    defer testing.allocator.free(workers);
+    const before = gc.stats();
+    for (workers) |*w| {
+        w.* = .{};
+        sched.spawn(Worker.job, w);
+    }
+    try testing.expectEqual(@as(usize, count), sched.runUntilIdle());
+    for (workers) |w| try testing.expect(w.ok);
+    const after = gc.stats();
+    try testing.expect(after.minor_collections + after.major_collections >
+        before.minor_collections + before.major_collections + 5);
+}

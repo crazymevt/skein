@@ -35,6 +35,8 @@ pub const Fiber = struct {
     resumer: ?*Fiber = null,
     /// Set when its job has returned.
     done: bool = false,
+    /// Set by a fiber that yields to be run again soon (sched.zig).
+    runnable: bool = false,
     next_idle: ?*Fiber = null,
     /// Every fiber ever made, threads' own included, for the collector.
     next_all: ?*Fiber = null,
