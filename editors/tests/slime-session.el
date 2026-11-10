@@ -62,7 +62,10 @@
 
     ;; M-x skein-slime: skein dev runs the program, and SLIME connects to its Swank.
     (skein-slime file)
-    (session-wait "SLIME to connect" #'slime-connected-p 600)
+    ;; Connected, and SLIME has taken in the connection's info (the socket connects first).
+    (session-wait "SLIME to connect"
+                  (lambda () (and (slime-connected-p) (slime-lisp-implementation-type)))
+                  600)
     (session-check "connected to Skein, without the version question"
                    (equal (slime-lisp-implementation-type) "Skein"))
     (session-wait "the REPL's prompt" (lambda () (session-has (slime-output-buffer) "demo>")))
