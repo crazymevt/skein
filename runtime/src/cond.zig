@@ -8,7 +8,8 @@
 //! - a block frame is the target of return-from*;
 //! - an unwind-protect frame runs its cleanup when an unwind passes through it;
 //! - a handler frame is a cluster of handlers (handler-bind*);
-//! - a restart frame is a cluster of restarts (restart-bind*).
+//! - a restart frame is a cluster of restarts (restart-bind*);
+//! - a dynamic frame holds the vars a binding binds (dynamic.zig).
 //!
 //! An unwind walks the chain from the top, stopping at each unwind-protect on the way to
 //! run its cleanup (which then continues the unwind), and lands with longjmp
@@ -27,7 +28,7 @@ const print = @import("print.zig");
 const hash = @import("hash.zig");
 const Value = @import("value.zig").Value;
 
-pub const Kind = enum(u32) { block = 1, unwind = 2, handlers = 3, restarts = 4, scope = 5, barrier = 6 };
+pub const Kind = enum(u32) { block = 1, unwind = 2, handlers = 3, restarts = 4, scope = 5, barrier = 6, dynamic = 7 };
 
 /// `sk_frame` up to its jmp_buf, which only C touches.
 pub const Frame = extern struct {

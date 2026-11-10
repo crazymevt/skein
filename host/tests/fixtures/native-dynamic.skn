@@ -1,0 +1,82 @@
+(ns native-dynamic)
+
+;; Dynamic vars natively (M2.4, D-076): binding, nested and in tasks, non-local exits,
+;; set! and the errors. The bootstrap check builds this with skeinc and compares it with
+;; `skein run`.
+
+(def ^:dynamic *x* 1)
+(def ^:dynamic *y* :root)
+(def ^:dynamic *unbound*)
+(def plain 5)
+
+(defn show [] [*x* *y*])
+(defn message-of [thunk] (try (thunk) (catch error e (condition-message e))))
+
+;; Bindings are seen by the code called inside them, and only there
+(prn (show) (binding [*x* 2] (show)) (show))
+;; The values are evaluated before any is bound
+(prn (binding [*x* 2 *y* *x*] (show)))
+(prn (binding [] (show)))
+;; A var with no root value can be bound
+(prn (binding [*unbound* :bound] *unbound*))
+
+;; Nested bindings, and set! changes the innermost
+(prn (binding [*x* 2]
+       [(binding [*x* 3] (set! *x* 30) (show)) (show)]))
+(prn (binding [*x* 2 *y* :y] (set! *x* (inc *x*)) (set! *y* :changed) (show)))
+(prn (show))
+(prn (binding [*x* 1]
+       (loop [i 0 acc []]
+         (if (< i 3)
+           (do (set! *x* (* *x* 2)) (recur (inc i) (conj acc *x*)))
+           acc))))
+
+;; Non-local exits drop the bindings they leave
+(prn (block* out (binding [*x* 4] (return-from* out (show)))) (show))
+(prn (try (binding [*x* 5] (error "inside")) (catch error e [(condition-message e) (show)])))
+(prn (restart-case (binding [*x* 6] (invoke-restart 'leave (show)))
+       (leave [v] [v (show)])))
+(let [seen (atom nil)]
+  (try (binding [*x* 7] (unwind-protect (error "e") (reset! seen (show))))
+       (catch error e nil))
+  (prn @seen (show)))
+;; A handler runs inside the binding that was in force when the condition was signaled
+(prn (handler-case (binding [*x* 8]
+                     (handler-bind [error (fn [c] (prn :handler-sees (show)))]
+                       (error "e")))
+       (error [c] (show))))
+
+;; A task gets a copy of the bindings where it's spawned
+(prn (binding [*x* 2]
+       [(with-nursery [n]
+          @(spawn n (let [before *x*]
+                      (set! *x* 3)
+                      [before *x* @(future *x*)])))
+        *x*]))
+(prn (binding [*x* 2]
+       (let [f (future (sleep 0.05) *x*)]
+         (set! *x* 5)
+         [@f *x*])))
+(prn @(future *x*) (binding [*x* 2] @(future (binding [*x* 3] (show)))))
+(prn (binding [*x* 0]
+       (with-nursery [n]
+         (doseq [i (range 20)] (spawn n (set! *x* i)))
+         *x*)))
+(prn (binding [*x* 0 *y* :many]
+       (sort (map deref (doall (map (fn [i] (future (set! *x* (+ *x* i)) *x*)) (range 10)))))))
+
+;; A var declared ^:dynamic after code that reads it was compiled is ordinary there
+(def *late* :first)
+(defn early [] *late*)
+(def ^:dynamic *late* :root)
+(defn late [] *late*)
+(prn (binding [*late* :bound] [(early) (late)]))
+
+;; The errors
+(prn (message-of (fn [] (set! *x* 3))))
+(prn (message-of (fn [] (binding [*x* 2] (set! *x* 3)) (set! *x* 4))))
+(defn bind-later [] (binding [later 1] :ok))
+(def later 2)
+(prn (message-of bind-later))
+(prn (message-of (fn [] @(future (set! *y* :task)))))
+(prn (show))

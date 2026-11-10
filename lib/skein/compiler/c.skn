@@ -702,7 +702,9 @@ native compiler's compile-time environment (D-060)."
 (defn- emit-global-ref
   "Read var's value, checking that it is bound."
   [st node var]
-  (temp st (str "sk_var_get(" (var-c-name st var) ", " (c-string-literal (%var-qualified-name var))
+  ;; A var that's ^:dynamic now reads its innermost binding (D-076).
+  (temp st (str (if (%var-dynamic? var) "sk_dynamic_get(" "sk_var_get(") (var-c-name st var) ", "
+                (c-string-literal (%var-qualified-name var))
                 ", " (location-literal node) ")")))
 
 (defn- native-core-function
@@ -1112,6 +1114,38 @@ or class by its full name (D-047, D-054)."
                                   (if var (symbol (var-ns-name var) (name sym)) sym)))]
       (into [(const-node (:loc (first args)) qualified)] (rest args)))
     args))
+
+(defn- binding-var
+  "The var that sym binds in a binding compiled in the namespace called ns-name, found as
+Phase 0 finds it when the binding runs (D-076). A name nothing defines yet gets a var of
+its own: the runtime checks that it's ^:dynamic when the binding runs, by which time a def
+may have made it so."
+  [sym ns-name]
+  (let [ns (%ensure-namespace ns-name)]
+    (if (namespace sym)
+      (let [target (or (%find-alias ns (namespace sym)) (%ensure-namespace (namespace sym)))]
+        (%intern-var target (name sym)))
+      (or (%resolve-var ns (name sym)) (%intern-var ns (name sym))))))
+
+(defn- with-bindings-call?
+  "True for (skein.core/%with-bindings '[names] \"ns\" values fn), which binding expands to."
+  [f args]
+  (and (core-ref? f "%with-bindings") (= (count args) 4)
+       (= :const (:op (first args))) (vector? (:value (first args)))
+       (every? symbol? (:value (first args)))
+       (= :const (:op (second args))) (string? (:value (second args)))))
+
+(defn- emit-with-bindings [st args]
+  (let [vars (mapv (fn [s] (var-c-name st (binding-var s (:value (second args)))))
+                   (:value (first args)))
+        [names values f] (emit-args st [(first args) (nth args 2) (nth args 3)])
+        array (fresh st "vars")]
+    (when (seq vars)
+      (stmt st "const sk_value " array "[] = {" (join ", " vars) "};"))
+    ;; The body sets the values it returns.
+    (when (:tail-mv st) (stmt st "sk_mv_reset();"))
+    (temp st (str "sk_with_bindings(" (count vars) ", " (if (seq vars) array "NULL") ", "
+                  names ", " values ", " f ")"))))
 
 (defn- core-call?
   "True if f is skein.core/nm called with n arguments, the first a quoted symbol."
@@ -1536,6 +1570,14 @@ namespace is set to a pointer to the C function."
             (single-value st (str "SK_BOOL(sk_var_value(" (var-c-name st var)
                                   ") != SK_UNBOUND)")))
           (ffi-call? f "%define-callback" args 4) (emit-define-callback st node args)
+          ;; Dynamic vars (D-076): the vars are resolved here, as for defmethod.
+          (with-bindings-call? f args) (emit-with-bindings st args)
+          (and (core-call? f "%set-dynamic!" args 2) (namespace (:value (first args))))
+          (let [sym (:value (first args))
+                var (%intern-var (%ensure-namespace (namespace sym)) (name sym))
+                [value] (emit-args st [(second args)])]
+            (single-value st (temp st (str "sk_set_dynamic(" (var-c-name st var) ", " value
+                                           ")"))))
           (core-call? f "%define-struct" args 3) (emit-define-struct st node args)
           (core-call? f "%define-soa" args 2) (emit-define-soa st node args)
           :else
@@ -1682,6 +1724,8 @@ namespace is set to a pointer to the C function."
             value))
     ;; def returns the var, as in Phase 0.
     :def (let [nm (var-c-name st (:var node))]
+           (when (%var-dynamic? (:var node))
+             (stmt st "sk_var_set_dynamic(" nm ");"))
            (when (:init node)
              (let [init (emit st (:init node))]
                (stmt st "sk_var_set(" nm ", " init ");")))

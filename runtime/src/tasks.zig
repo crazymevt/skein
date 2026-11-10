@@ -29,6 +29,7 @@ const seq = @import("seq.zig");
 const hash = @import("hash.zig");
 const sched = @import("sched.zig");
 const wait = @import("wait.zig");
+const dynamic = @import("dynamic.zig");
 const Value = @import("value.zig").Value;
 
 extern fn sk_try_call(f: Value, argc: u32, argv: [*]const Value, ntypes: u32, types: [*]Value) Value;
@@ -38,7 +39,8 @@ const tick_ns: u64 = 20 * std.time.ns_per_ms;
 // ---------------------------------------------------------------------------------------
 // Objects
 
-// A task: [fn, state, result, condition, cancel requested, nursery, scopes, hash].
+// A task: [fn, state, result, condition, cancel requested, nursery, scopes, hash, fiber,
+// bindings].
 const t_fn = 0;
 const t_state = 1;
 const t_result = 2;
@@ -50,6 +52,8 @@ const t_hash = 7;
 /// The fiber running the task (its address), so cancelling it can wake it; nil when it
 /// isn't running.
 const t_fiber = 8;
+/// The dynamic bindings in force where it was spawned, which it starts with (D-076).
+const t_bindings = 9;
 
 const State = enum(i64) { pending, running, done, failed, cancelled };
 
@@ -369,7 +373,7 @@ fn currentScopes() Value {
 // Tasks
 
 fn makeTask(f: Value, nursery: Value, scopes: Value) Value {
-    return coll.make(.task, &.{ f, Value.fromFixnum(@intFromEnum(State.pending)), Value.nil, Value.nil, Value.nil, nursery, scopes, identity(), Value.nil });
+    return coll.make(.task, &.{ f, Value.fromFixnum(@intFromEnum(State.pending)), Value.nil, Value.nil, Value.nil, nursery, scopes, identity(), Value.nil, dynamic.capture() });
 }
 
 fn stateOf(t: Value) State {
@@ -439,7 +443,10 @@ fn runTask(t: Value) void {
     pushScope(&inherited, get(t, t_scopes), scope_list);
     var own: cond.Frame = undefined;
     pushScope(&own, t, scope_one);
+    var bindings: cond.Frame = undefined;
+    const bound = dynamic.pushCopy(&bindings, get(t, t_bindings));
     const r = tryCall(func.make(taskBody, "task"), &.{get(t, t_fn)}, &.{ cond.builtinType(.cancelled), cond.builtinType(.@"error") });
+    if (bound) cond.popFrame(&bindings);
     cond.popFrame(&own);
     cond.popFrame(&inherited);
     switch (r[0]) {

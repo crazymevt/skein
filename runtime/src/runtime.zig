@@ -39,6 +39,7 @@ pub const ffi = @import("ffi.zig");
 pub const fiber = @import("fiber.zig");
 pub const sched = @import("sched.zig");
 pub const wait = @import("wait.zig");
+pub const dynamic = @import("dynamic.zig");
 
 pub const Value = value.Value;
 
@@ -81,5 +82,6 @@ test {
     _ = fiber;
     _ = @import("fiber_test.zig");
     _ = @import("cond_test.zig");
+    _ = @import("dynamic_test.zig");
     _ = @import("platform_test.zig");
 }

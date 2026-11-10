@@ -90,6 +90,15 @@ sk_value sk_keyword(const char *ns, const char *name);
 sk_value sk_symbol(const char *ns, const char *name);
 sk_value sk_var(const char *ns, const char *name);
 sk_value sk_var_set(sk_value var, sk_value value);
+/* Dynamic vars (M2.4, D-076): def of a ^:dynamic var marks it; a read of one finds its
+ * innermost binding, else its root value; set! changes the innermost binding; binding
+ * calls fn with n vars bound to the values in a vector (symbols: a vector of the names it
+ * used, for its errors). */
+void sk_var_set_dynamic(sk_value var);
+sk_value sk_dynamic_get(sk_value var, const char *name, const char *location);
+sk_value sk_set_dynamic(sk_value var, sk_value value);
+sk_value sk_with_bindings(uint32_t n, const sk_value *vars, sk_value symbols, sk_value values,
+                          sk_value fn);
 sk_value sk_core(const char *name);
 sk_value sk_list_of(size_t count, const sk_value *items);
 sk_value sk_vector_of(size_t count, const sk_value *items);
@@ -106,15 +115,16 @@ void sk_closure_set(sk_value f, size_t i, sk_value value);
  * unwind-protect frame calls SK_SETJMP itself and keeps its locals volatile.
  * runtime/src/cond.zig mirrors every field before jb. */
 /* SK_FRAME_SCOPE frames hold cancellation scopes (tasks, nurseries, deadlines);
- * SK_FRAME_BARRIER frames stop non-local exits where C called Skein (D-068). Only the
- * runtime pushes them. */
+ * SK_FRAME_BARRIER frames stop non-local exits where C called Skein (D-068);
+ * SK_FRAME_DYNAMIC frames hold a binding's vars (D-076). Only the runtime pushes them. */
 enum {
     SK_FRAME_BLOCK = 1,
     SK_FRAME_UNWIND = 2,
     SK_FRAME_HANDLERS = 3,
     SK_FRAME_RESTARTS = 4,
     SK_FRAME_SCOPE = 5,
-    SK_FRAME_BARRIER = 6
+    SK_FRAME_BARRIER = 6,
+    SK_FRAME_DYNAMIC = 7
 };
 
 typedef struct sk_frame {

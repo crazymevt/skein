@@ -112,14 +112,25 @@ pub fn namespace(name: []const u8) Value {
 }
 
 /// A new var `ns/name`, unbound. (Vars are made once per name by compiled programs.)
+/// Its slots: value, namespace, name, and whether it's ^:dynamic.
 pub fn makeVar(ns: []const u8, name: []const u8) Value {
     const n = namespace(ns);
-    const h = gc.allocPermanent(.@"var", 3);
+    const h = gc.allocPermanent(.@"var", 4);
     const slots = h.valueSlots();
     slots[0] = Value.unbound;
     slots[1] = n;
     slots[2] = permanentString(name);
+    slots[3] = Value.false;
     return Value.fromObject(h);
+}
+
+/// Mark a var ^:dynamic (def of one does, D-076).
+pub fn setDynamic(v: Value) void {
+    v.toObject().valueSlots()[3] = Value.true;
+}
+
+pub fn isDynamic(v: Value) bool {
+    return v.toObject().valueSlots()[3] == Value.true;
 }
 
 pub fn varValue(v: Value) Value {

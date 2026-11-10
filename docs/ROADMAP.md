@@ -312,7 +312,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - `^:dynamic` vars and `binding`, fiber-local and inherited by fibers spawned inside the `binding` (DESIGN §4.3). Phase 0 never had `binding`, so it comes to both (D-076).
 - Steps, in order (D-076):
   1. ✅ Phase 0: `binding`, `set!` of a binding, bindings copied into the tasks spawned inside one, and the errors; host tests.
-  2. Native: binding frames on the condition chain, reads of dynamic vars, `set!`, and the copy a task gets; the C backend compiles them.
+  2. ✅ Native: binding frames on the condition chain, reads of dynamic vars, `set!`, and the copy a task gets; the C backend compiles them.
   3. A native fixture (bindings, nested and in tasks, non-local exits, `set!`, the errors) prints what `skein run` prints.
 
 **Exit:** the new host tests pass, and the fixture prints the same natively as with `skein run`, on all three platforms.
@@ -428,4 +428,5 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - Some native messages differ from Phase 0's, where Phase 0 shows CL's wording (index errors, returning to an exited block).
   - Unwinding through foreign C frames: decided in M1.10 (D-068). No non-local exit leaves a callback.
 - Packages (D-069): code signing, notarization and archives are still to do. An unpackaged native build finds its assets beside its executable, so `skein build -o elsewhere/` doesn't see them.
+- Dynamic vars (D-077): the interpreter of phase-1 code (D-061) has no `binding` (`interp.lisp` leaves `native-dynamic.skn` out); M2.5's evaluator needs it. A read of a dynamic var walks the condition chain, so its cost grows with the frames above it; a per-fiber cache of the innermost binding would help if that shows up in profiles.
 - The scheduler (D-075): tasks and channels share one lock, and wait queues another, as D-057 had one; with many workers they're contended (the million-message ring test spends most of its time waiting for them, about 4 µs a message on an M-series Mac). Per-channel locks and sharded wait queues would help.

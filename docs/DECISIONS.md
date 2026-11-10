@@ -1041,3 +1041,17 @@ Date: 2026-11-10 · Status: Accepted
   - Clojure's rule that a thread may only `set!` bindings it established; or one binding shared by the parent and its tasks, which needs synchronization and races by nature.
   - Letting any var be bound dynamically: every var read would have to look for a binding.
 - **Consequences:** a var declared `^:dynamic` after code that reads it was compiled is read as an ordinary var by that code, as in Clojure.
+
+## D-077: Dynamic bindings natively
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.4 step 2 compiles D-076's `binding`, reads of dynamic vars and `set!` natively. Native vars are objects the compiler makes, with no table to find them by name at run time, so `%with-bindings` can't resolve names when it runs as Phase 0 does.
+- **Decision:**
+  - **The C backend resolves the vars** of `(%with-bindings '[names] "ns" values fn)` when it compiles the call, as it does for `defmethod` (D-054), and calls `sk_with_bindings` with them. A name nothing defines yet gets a var of its own in that namespace.
+  - **A var object records whether it's `^:dynamic`**: `def` of a `^:dynamic` var sets the flag when it runs. `sk_with_bindings` checks it, so a binding of a var that didn't exist when the binding was compiled fails when it runs, with Phase 0's message.
+  - **A binding frame** (`SK_FRAME_DYNAMIC`, runtime/src/dynamic.zig) holds a vector `[var value ...]`. A read walks the chain for the innermost frame that binds the var; `set!` replaces the frame's vector with one whose value has changed. A task's copy is one such vector, one pair per var, stored in the task and pushed when the task starts.
+  - `(set! *x* v)` compiles to `sk_set_dynamic` with the var resolved from its qualified name, and a read of a var that's `^:dynamic` when compiled to `sk_dynamic_get`.
+- **Alternatives:** a run-time table of vars by qualified name, which M2.5's evaluator may need anyway; a hash map per fiber instead of frames, which non-local exits would have to restore.
+- **Consequences:**
+  - A read of a dynamic var walks the condition chain: its cost grows with the frames above it. Hot dynamic reads could cache the innermost binding per fiber later.
+  - The interpreter of phase-1 code (D-061) doesn't support `binding` yet; M2.5's evaluator needs it.
+  - A name that resolves to nothing when compiled is assumed to belong to the namespace being compiled; if a later `:refer` brings in a var of that name, the binding still means the namespace's own var.
