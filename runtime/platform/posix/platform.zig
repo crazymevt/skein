@@ -77,6 +77,11 @@ pub const Condition = struct {
         _ = c.pthread_cond_broadcast(&cond.inner);
     }
 
+    /// Wake one waiter, if any.
+    pub fn signal(cond: *Condition) void {
+        _ = c.pthread_cond_signal(&cond.inner);
+    }
+
     /// Like `wait`, but return after at most `nanos` nanoseconds.
     pub fn timedWait(cond: *Condition, m: *Mutex, nanos: u64) void {
         var now: c.timespec = undefined;

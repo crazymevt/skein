@@ -460,7 +460,7 @@ fn allocInstance(c: Value, slots: Value) Value {
     const s = h.valueSlots();
     s[i_class] = c;
     s[i_slots] = slots;
-    s[i_owner] = Value.fromFixnum(@intCast(gc.currentThreadId()));
+    s[i_owner] = Value.fromFixnum(@intCast(@import("fiber.zig").ownerId()));
     s[i_hash] = Value.fromFixnum(hash.mix32(instance_counter.fetchAdd(1, .monotonic) +% 1));
     for (0..n) |i| s[i_values + i] = Value.nil;
     return Value.fromObject(h);
@@ -582,7 +582,7 @@ fn immutable(obj: Value, key: Value) noreturn {
 }
 
 fn checkOwner(obj: Value, key: Value) void {
-    if (slot(obj, i_owner).toFixnum() != @as(i64, @intCast(gc.currentThreadId())))
+    if (slot(obj, i_owner).toFixnum() != @as(i64, @intCast(@import("fiber.zig").ownerId())))
         rt.raise(.@"error", "slot {s} of {s} is :unsynchronized and owned by another thread", .{ readable(key), className(slot(obj, i_class)) });
 }
 

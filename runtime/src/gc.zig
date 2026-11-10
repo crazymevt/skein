@@ -367,11 +367,6 @@ pub fn attachThread() *Mutator {
     return m;
 }
 
-/// A number identifying the calling thread while it is attached (it owns transients).
-pub fn currentThreadId() usize {
-    return @intFromPtr(attachThread()) >> 3;
-}
-
 /// Unregister the calling thread. Its objects stay alive if something references them.
 pub fn detachThread() void {
     const m = current orelse return;

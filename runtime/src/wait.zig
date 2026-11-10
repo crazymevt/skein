@@ -34,10 +34,18 @@ pub const Waiter = struct {
     /// For a thread: what it sleeps on.
     lock: platform.Mutex = .{},
     cond: platform.Condition = .{},
+    /// For a waiter that only stands in a queue for another (`alts!` waits in several
+    /// queues at once): notifying it notifies that one, which the code blocks on.
+    owner: ?*Waiter = null,
 
     /// A waiter for the code running now.
     pub fn init() Waiter {
         return .{ .fiber = if (sched.inFiber()) sched.currentFiber() else null };
+    }
+
+    /// A waiter that queues on behalf of `primary`.
+    pub fn standIn(primary: *Waiter) Waiter {
+        return .{ .fiber = primary.fiber, .owner = primary };
     }
 };
 
@@ -103,6 +111,13 @@ pub fn notifyAll(key: u64) void {
     }
 }
 
+/// Make `w` the waiter that `interrupt` wakes, before blocking on it: a caller that checks
+/// for cancellation under its own lock does this under the same lock, so a cancellation
+/// either comes before the check or finds the waiter.
+pub fn attach(w: *Waiter) void {
+    if (w.fiber) |f| setWaiter(f, w);
+}
+
 fn setWaiter(f: *Fiber, w: ?*Waiter) void {
     lock.lock();
     defer lock.unlock();
@@ -128,7 +143,8 @@ pub fn waiting(key: u64) usize {
 }
 
 /// Wake `w` (it may be in no queue: a cancellation wakes its task's current waiter).
-pub fn notify(w: *Waiter) void {
+pub fn notify(waiter: *Waiter) void {
+    const w = waiter.owner orelse waiter;
     // A waiter can return as soon as it sees `notified`, and it's usually on its stack:
     // nothing here touches it after that.
     if (w.fiber) |f| {

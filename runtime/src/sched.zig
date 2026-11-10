@@ -136,7 +136,9 @@ fn ensureStarted() void {
         if (!platform.spawnThread(workerMain, w, worker_stack_size))
             rt.fatal("could not start a worker thread", .{});
     }
-    if (!platform.spawnThread(monitorMain, null, 256 * 1024))
+    // As large a stack as the workers': on Linux a thread's stack also holds its
+    // thread-local storage, and a small one made pthread_create fail in CI.
+    if (!platform.spawnThread(monitorMain, null, worker_stack_size))
         rt.fatal("could not start the scheduler's monitor thread", .{});
     started.store(true, .release);
 }
@@ -219,11 +221,12 @@ fn sleepUntilWork() void {
     gc.blocking(sleepBlocking, &s);
 }
 
+/// Work was queued: wake one sleeping worker (it steals the rest of the work as needed).
 fn notifyWork() void {
     _ = work_epoch.fetchAdd(1, .acq_rel);
     idle_lock.lock();
     defer idle_lock.unlock();
-    if (sleepers > 0) idle_wake.broadcast();
+    if (sleepers > 0) idle_wake.signal();
 }
 
 fn enqueueShared(f: *Fiber) void {

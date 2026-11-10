@@ -303,7 +303,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order (D-075):
   1. ✅ Worker threads (one per CPU) with work-stealing deques and an injection queue; fibers move between workers; a fiber that runs for about 10 ms yields at its next safepoint.
   2. ✅ Waiting on fibers: wait queues per task and channel, a timer queue for sleeps and deadlines, cancellation that wakes a parked fiber; threads that aren't workers (the main thread, foreign threads) wait on a condition variable.
-  3. Tasks, nurseries, futures, channels, `alts!`, `sleep`, timeouts and the main thread's queue on fibers, with Phase 0's semantics.
+  3. ✅ Tasks, nurseries, futures, channels, `alts!`, `sleep`, timeouts and the main thread's queue on fibers, with Phase 0's semantics.
   4. `^:blocking` C calls hand their worker off; callbacks from foreign threads run as temporary fibers; Driftrock's job graph on fibers; the exit tests.
 
 **Exit:** the native concurrency fixtures pass on fibers, a million channel messages pass between 10,000 fibers, and Driftrock's job graph runs on fibers, on all three platforms.
@@ -424,3 +424,4 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - Some native messages differ from Phase 0's, where Phase 0 shows CL's wording (index errors, returning to an exited block).
   - Unwinding through foreign C frames: decided in M1.10 (D-068). No non-local exit leaves a callback.
 - Packages (D-069): code signing, notarization and archives are still to do. An unpackaged native build finds its assets beside its executable, so `skein build -o elsewhere/` doesn't see them.
+- The scheduler (D-075): tasks and channels share one lock, and wait queues another, as D-057 had one; with many workers they're contended (the million-message ring test spends most of its time waiting for them, about 4 µs a message on an M-series Mac). Per-channel locks and sharded wait queues would help.

@@ -27,14 +27,13 @@ const names = @import("names.zig");
 const print = @import("print.zig");
 const seq = @import("seq.zig");
 const hash = @import("hash.zig");
+const sched = @import("sched.zig");
+const wait = @import("wait.zig");
 const Value = @import("value.zig").Value;
 
 extern fn sk_try_call(f: Value, argc: u32, argv: [*]const Value, ntypes: u32, types: [*]Value) Value;
-extern fn sk_mv_buffer() [*]Value;
 
 const tick_ns: u64 = 20 * std.time.ns_per_ms;
-const worker_idle_ns: u64 = 30 * std.time.ns_per_s;
-const worker_stack_size: usize = 8 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------------------
 // Objects
@@ -48,6 +47,9 @@ const t_cancel = 4;
 const t_nursery = 5;
 const t_scopes = 6;
 const t_hash = 7;
+/// The fiber running the task (its address), so cancelling it can wake it; nil when it
+/// isn't running.
+const t_fiber = 8;
 
 const State = enum(i64) { pending, running, done, failed, cancelled };
 
@@ -56,6 +58,8 @@ const n_cancelled = 0;
 const n_failure = 1;
 const n_children = 2;
 const n_hash = 3;
+/// The fiber running the nursery's body, if it runs in one: a failing child wakes it.
+const n_owner = 4;
 
 // A channel: [capacity, items (vector), head (index of the next item), closed, takes,
 // puts, takers waiting, hash].
@@ -145,10 +149,14 @@ fn checkTask(v: Value, comptime what: []const u8) void {
 // The lock
 
 var sched_lock: platform.Mutex = .{};
-var sched_wake: platform.Condition = .{};
 
 fn lock() void {
-    if (sched_lock.tryLock()) return;
+    // It's held briefly: try a few times before blocking (which lets collections go on,
+    // but takes the GC's lock).
+    for (0..64) |_| {
+        if (sched_lock.tryLock()) return;
+        std.atomic.spinLoopHint();
+    }
     gc.blocking(lockBlocking, null);
 }
 
@@ -160,20 +168,23 @@ fn unlock() void {
     sched_lock.unlock();
 }
 
-fn wakeAll() void {
-    sched_wake.broadcast();
+// Wait queue keys (wait.zig): what is waited for, by its identity number.
+fn identityOf(v: Value, i: usize) u64 {
+    return @intCast(get(v, i).toFixnum());
 }
+fn taskKey(t: Value) u64 {
+    return (1 << 40) | identityOf(t, t_hash);
+}
+fn takeKey(ch: Value) u64 {
+    return (2 << 40) | identityOf(ch, c_hash);
+}
+fn putKey(ch: Value) u64 {
+    return (3 << 40) | identityOf(ch, c_hash);
+}
+/// The main thread waits under this too, so work queued for it wakes it.
+const main_key: u64 = 4 << 40;
 
-/// With the lock held: release it, wait up to `nanos` for a wake-up, and take it back.
-fn waitTick(nanos: u64) void {
-    var n = nanos;
-    gc.blocking(waitBlocking, &n);
-}
-
-fn waitBlocking(arg: ?*anyopaque) void {
-    const n: *u64 = @ptrCast(@alignCast(arg));
-    sched_wake.timedWait(&sched_lock, n.*);
-}
+const max_keys = max_alts + 1;
 
 fn now() u64 {
     return platform.monotonicNanos();
@@ -188,11 +199,14 @@ fn nanosFromNow(seconds: Value) u64 {
 }
 
 /// Wait until `ctx.ready()` (called with the lock held) is true, and return true with the
-/// lock still held. Returns false, without the lock, if `deadline` passes first. Every
-/// 20 ms (or wake-up) it runs main-thread work and checks for cancellation; before
-/// signaling a cancellation it calls `ctx.abort()`.
+/// lock still held. Returns false, without the lock, if `deadline` passes first. A fiber
+/// parks until something it waits for changes (`ctx.keys`), a deadline of its scopes
+/// passes or it's cancelled; a thread that isn't a worker also wakes every 20 ms, and the
+/// main thread runs the work queued for it. Before signaling a cancellation it calls
+/// `ctx.abort()` (M2.3, D-075).
 fn waitFor(ctx: anytype, deadline: ?u64) bool {
     while (true) {
+        const scope_deadline = nearestScopeDeadline();
         lock();
         if (ctx.ready()) return true;
         if (deadline) |d| {
@@ -201,16 +215,67 @@ fn waitFor(ctx: anytype, deadline: ?u64) bool {
                 return false;
             }
         }
-        var wait = tick_ns;
-        if (deadline) |d| wait = @max(@min(wait, d -| now()), 1);
-        waitTick(wait);
+        var keys: [max_keys]u64 = undefined;
+        var n = ctx.keys(keys[0..max_alts]);
+        if (onMainThreadNow()) {
+            keys[n] = main_key;
+            n += 1;
+        }
+        // A cancellation sets its flag before it takes the lock to wake the waiter: so
+        // either it's seen here, or it finds the waiter attached below.
+        if (pendingCancellation()) |c| {
+            unlock();
+            ctx.abort();
+            cond.signalError(c);
+        }
+        var primary = wait.Waiter.init();
+        wait.attach(&primary);
+        var stand_ins: [max_keys]wait.Waiter = undefined;
+        for (keys[0..n], 0..) |k, i| {
+            stand_ins[i] = wait.Waiter.standIn(&primary);
+            wait.enqueue(k, &stand_ins[i]);
+        }
         unlock();
+        var until = deadline;
+        if (scope_deadline) |d| until = if (until) |u| @min(u, d) else d;
+        _ = wait.block(&primary, until, if (primary.fiber == null) tick_ns else null);
+        for (stand_ins[0..n]) |*w| wait.remove(w);
         drainMainThread();
         if (pendingCancellation()) |c| {
             ctx.abort();
             cond.signalError(c);
         }
     }
+}
+
+/// The earliest with-timeout deadline of the running code's scopes, its inherited ones
+/// included, or null.
+fn nearestScopeDeadline() ?u64 {
+    var best: ?u64 = null;
+    var f = cond.topFrame();
+    walk: while (f) |fr| : (f = fr.prev) {
+        if (fr.kind != @intFromEnum(cond.Kind.scope)) continue;
+        switch (fr.count) {
+            scope_one => best = earlier(best, scopeDeadline(fr.value)),
+            scope_list => {
+                var it = seq.seq(fr.value);
+                while (it != Value.nil) : (it = seq.seqNext(it)) best = earlier(best, scopeDeadline(seq.seqFirst(it)));
+                break :walk;
+            },
+            else => break :walk,
+        }
+    }
+    return best;
+}
+
+fn scopeDeadline(scope: Value) ?u64 {
+    return if (scope.toObject().type_id == .deadline) ux(get(scope, d_time)) else null;
+}
+
+fn earlier(a: ?u64, b: ?u64) ?u64 {
+    const x = a orelse return b;
+    const y = b orelse return x;
+    return @min(x, y);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -304,7 +369,7 @@ fn currentScopes() Value {
 // Tasks
 
 fn makeTask(f: Value, nursery: Value, scopes: Value) Value {
-    return coll.make(.task, &.{ f, Value.fromFixnum(@intFromEnum(State.pending)), Value.nil, Value.nil, Value.nil, nursery, scopes, identity() });
+    return coll.make(.task, &.{ f, Value.fromFixnum(@intFromEnum(State.pending)), Value.nil, Value.nil, Value.nil, nursery, scopes, identity(), Value.nil });
 }
 
 fn stateOf(t: Value) State {
@@ -337,7 +402,8 @@ fn finishTask(t: Value, state: State, v: Value) void {
         },
         else => {},
     }
-    wakeAll();
+    set(t, t_fiber, Value.nil);
+    wait.notifyAll(taskKey(t));
     unlock();
     // The first failure cancels the other tasks.
     if (first_failure) cancelNursery(n);
@@ -385,16 +451,36 @@ fn runTask(t: Value) void {
 
 /// Ask `t` to stop at its next cancellation point. Returns true if it had not finished.
 fn cancelTask(t: Value) bool {
-    @atomicStore(Value, &coll.slots(t)[t_cancel], Value.true, .release);
     lock();
     defer unlock();
-    return !isFinished(t);
+    // Whether it had finished when it was cancelled: decided before the flag is set, as
+    // a task can see the flag and finish at once.
+    const unfinished = !isFinished(t);
+    @atomicStore(Value, &coll.slots(t)[t_cancel], Value.true, .release);
+    // A parked task wakes to find its cancellation.
+    interruptFiber(get(t, t_fiber));
+    return unfinished;
+}
+
+/// Wake the fiber whose address `v` holds (nil: none), if it's blocked. With the lock
+/// held, so it's still the fiber that the task or nursery runs in.
+fn interruptFiber(v: Value) void {
+    if (v == Value.nil) return;
+    wait.interrupt(@ptrFromInt(@as(usize, @intCast(v.toFixnum()))));
+}
+
+fn fiberValue() Value {
+    return if (sched.inFiber()) fx(@intFromPtr(sched.currentFiber())) else Value.nil;
 }
 
 const FinishedWait = struct {
     t: Value,
     fn ready(w: *const FinishedWait) bool {
         return isFinished(w.t);
+    }
+    fn keys(w: *const FinishedWait, out: []u64) usize {
+        out[0] = taskKey(w.t);
+        return 1;
     }
     fn abort(_: *const FinishedWait) void {}
 };
@@ -424,19 +510,23 @@ pub fn deref(a: []const Value) Value {
 // ---------------------------------------------------------------------------------------
 // The worker pool and the main thread's queue
 
-// GC roots: the pool's queue and the main thread's queue, each a vector and the index
-// of its next task.
+// GC roots: the queue of tasks waiting for a fiber, and the main thread's queue, each a
+// vector and the index of its next task.
 var roots: [4]Value = @splat(Value.nil);
-const pool_queue = 0;
+const start_queue = 0;
 const main_queue = 2;
-var idle_workers: usize = 0;
-var worker_count: usize = 0;
-threadlocal var is_worker = false;
+threadlocal var is_main = false;
+
+/// Whether this is the main thread (where sk_init ran). Not inlined (D-075).
+noinline fn onMainThreadNow() bool {
+    return is_main;
+}
 
 /// Set up the queues. sk_init calls this on the main thread.
 pub fn init() void {
     roots = .{ coll.vectorOf(&.{}), fx(0), coll.vectorOf(&.{}), fx(0) };
     gc.addRoots(&roots);
+    is_main = true;
 }
 
 // These run with the lock held.
@@ -463,53 +553,28 @@ fn dequeue(q: usize) ?Value {
     return t;
 }
 
-fn workerMain(_: ?*anyopaque) callconv(.c) ?*anyopaque {
-    _ = gc.attachThread();
-    is_worker = true;
-    const mv = sk_mv_buffer()[0..64];
-    gc.addRoots(mv);
-    while (true) {
-        lock();
-        idle_workers += 1;
-        const until = now() + worker_idle_ns;
-        while (queued(pool_queue) == 0 and now() < until) waitTick(std.time.ns_per_s);
-        idle_workers -= 1;
-        const t = dequeue(pool_queue) orelse {
-            worker_count -= 1;
-            unlock();
-            break;
-        };
-        unlock();
-        runTask(t);
-    }
-    gc.removeRoots(mv);
-    gc.detachThread();
-    return null;
+/// A fiber's job: run the next task waiting for one (the queue keeps tasks reachable
+/// until a fiber has them).
+fn startJob(_: ?*anyopaque) void {
+    lock();
+    const t = dequeue(start_queue).?;
+    if (stateOf(t) == .pending) set(t, t_fiber, fiberValue());
+    unlock();
+    runTask(t);
 }
 
-/// Queue `t` to run on a worker thread, starting a new worker if none is idle.
+/// Run `t` in a fiber of its own (M2.3, D-075).
 fn submit(t: Value) Value {
     lock();
-    enqueue(pool_queue, t);
-    if (idle_workers >= queued(pool_queue)) {
-        wakeAll();
-        unlock();
-        return t;
-    }
-    worker_count += 1;
+    enqueue(start_queue, t);
     unlock();
-    if (!platform.spawnThread(workerMain, null, worker_stack_size)) {
-        lock();
-        worker_count -= 1;
-        unlock();
-        rt.raise(.@"error", "could not start a thread for a task", .{});
-    }
+    sched.spawn(startJob, null);
     return t;
 }
 
 /// Run the work queued for the main thread. Does nothing on other threads.
 pub fn drainMainThread() void {
-    if (is_worker) return;
+    if (!onMainThreadNow()) return;
     while (true) {
         lock();
         const t = dequeue(main_queue);
@@ -522,7 +587,7 @@ fn queueForMain(f: Value) Value {
     const t = makeTask(f, Value.nil, coll.listOf(&.{}));
     lock();
     enqueue(main_queue, t);
-    wakeAll();
+    wait.notifyAll(main_key);
     unlock();
     return t;
 }
@@ -534,6 +599,8 @@ fn cancelNursery(n: Value) void {
     @atomicStore(Value, &coll.slots(n)[n_cancelled], Value.true, .release);
     lock();
     const children = get(n, n_children);
+    // The code waiting in the nursery's body, if parked, wakes to find it.
+    interruptFiber(get(n, n_owner));
     unlock();
     for (0..coll.vectorCount(children)) |i| _ = cancelTask(coll.vectorNth(children, i).?);
 }
@@ -595,7 +662,7 @@ fn joinNursery(n: Value) Value {
 /// others and the body, then re-signal that failure; if the body fails, cancel the tasks
 /// and re-signal its error.
 fn withNursery(body: Value) Value {
-    const n = coll.make(.nursery, &.{ Value.nil, Value.nil, coll.vectorOf(&.{}), identity() });
+    const n = coll.make(.nursery, &.{ Value.nil, Value.nil, coll.vectorOf(&.{}), identity(), fiberValue() });
     var frame: cond.Frame = undefined;
     pushScope(&frame, n, scope_one);
     const r = tryCall(body, &.{n}, &.{ cond.builtinType(.cancelled), cond.builtinType(.@"error") });
@@ -613,6 +680,7 @@ fn withNursery(body: Value) Value {
     if (problem == Value.nil) problem = interruption;
     lock();
     const failure = get(n, n_failure);
+    set(n, n_owner, Value.nil);
     unlock();
     if (failure != Value.nil) cond.signalError(failure);
     if (problem != Value.nil) cond.signalError(problem);
@@ -625,6 +693,9 @@ fn withNursery(body: Value) Value {
 const Never = struct {
     fn ready(_: *const Never) bool {
         return false;
+    }
+    fn keys(_: *const Never, _: []u64) usize {
+        return 0;
     }
     fn abort(_: *const Never) void {}
 };
@@ -649,7 +720,7 @@ fn withTimeout(seconds: Value, body: Value) Value {
 }
 
 fn onMainThread(f: Value) Value {
-    if (!is_worker) return func.call(f, 0, &.{});
+    if (!sched.inFiber()) return func.call(f, 0, &.{});
     return awaitTask(queueForMain(f), null).?;
 }
 
@@ -699,7 +770,8 @@ fn takeNow(ch: Value) Value {
         set(ch, c_head, fx(head + 1));
     }
     set(ch, c_takes, fx(ux(get(ch, c_takes)) + 1));
-    wakeAll();
+    // Buffer space, or a taken unbuffered value: the putters look again.
+    wait.notifyAll(putKey(ch));
     return v;
 }
 
@@ -713,7 +785,7 @@ fn putReady(ch: Value) bool {
 fn putNow(ch: Value, v: Value) ?usize {
     if (isClosed(ch)) return null;
     set(ch, c_items, coll.vectorConj(get(ch, c_items), v));
-    wakeAll();
+    wait.notifyAll(takeKey(ch));
     const ticket = ux(get(ch, c_puts)) + 1;
     set(ch, c_puts, fx(ticket));
     return ticket;
@@ -729,6 +801,10 @@ fn chanPut(ch: Value, v: Value) Value {
         fn ready(w: *const @This()) bool {
             const capacity = ux(get(w.ch, c_capacity));
             return isClosed(w.ch) or capacity == 0 or itemCount(w.ch) < capacity;
+        }
+        fn keys(w: *const @This(), out: []u64) usize {
+            out[0] = putKey(w.ch);
+            return 1;
         }
         fn abort(_: *const @This()) void {}
     };
@@ -746,6 +822,10 @@ fn chanPut(ch: Value, v: Value) Value {
         fn ready(w: *const @This()) bool {
             return ux(get(w.ch, c_takes)) >= w.ticket or isClosed(w.ch);
         }
+        fn keys(w: *const @This(), out: []u64) usize {
+            out[0] = putKey(w.ch);
+            return 1;
+        }
         fn abort(_: *const @This()) void {}
     };
     const taken: Taken = .{ .ch = ch, .ticket = t };
@@ -761,12 +841,17 @@ fn chanTake(ch: Value) Value {
     checkChan(ch, "<!");
     lock();
     set(ch, c_takers, fx(ux(get(ch, c_takers)) + 1));
-    wakeAll();
+    // An unbuffered put waits for a taker.
+    wait.notifyAll(putKey(ch));
     unlock();
     const Ready = struct {
         ch: Value,
         fn ready(w: *const @This()) bool {
             return takeReady(w.ch);
+        }
+        fn keys(w: *const @This(), out: []u64) usize {
+            out[0] = takeKey(w.ch);
+            return 1;
         }
         fn abort(w: *const @This()) void {
             lock();
@@ -787,7 +872,8 @@ fn chanClose(ch: Value) Value {
     checkChan(ch, "close!");
     lock();
     set(ch, c_closed, Value.true);
-    wakeAll();
+    wait.notifyAll(takeKey(ch));
+    wait.notifyAll(putKey(ch));
     unlock();
     return Value.nil;
 }
@@ -836,6 +922,10 @@ fn alts(ops_coll: Value) Value {
                 }
             }
             return false;
+        }
+        fn keys(w: *@This(), out: []u64) usize {
+            for (w.ops, 0..) |op, i| out[i] = if (op.put) putKey(op.ch) else takeKey(op.ch);
+            return w.ops.len;
         }
         fn abort(_: *@This()) void {}
     };

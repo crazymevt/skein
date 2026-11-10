@@ -576,7 +576,7 @@ Phase 0 details (D-037):
 - The main thread runs work queued by `on-main-thread` and `(spawn-pinned :main ...)` whenever it waits, and when it calls `drain-main-thread!`.
 - `skein.jobs`: `(job {:after [names]} body...)` and `(graph {name job ...})`, which returns a map of results; a missing dependency or a cycle is an error before anything runs.
 
-Native details (Phase 1, D-057): the runtime has Phase 0's model and messages: a cached pool of OS threads, cancellation within about 20 ms, and one lock shared by tasks and channels. The running code's cancellation scopes are frames on the condition chain (§10), so a non-local exit leaves them as it leaves handlers. Native code has no special variables, so a task inherits nothing from its spawner but its cancellation scopes.
+Native details (Phase 1, D-057; fibers since M2.3, D-075): the runtime has Phase 0's model and messages. Each task runs in a fiber on the work-stealing scheduler; waiting for a task, a channel, a nursery's tasks or a sleep parks the fiber, and the task, channel or timer wakes it, as does a cancellation, at once. Code that isn't in a fiber (the main thread's `-main`) blocks instead, waking at least every 20 ms to run the main thread's queue. Tasks and channels share one lock. The running code's cancellation scopes are frames on the condition chain (§10), so a non-local exit leaves them as it leaves handlers. Native code has no special variables, so a task inherits nothing from its spawner but its cancellation scopes.
 
 ### 13.3 STM (Deferred)
 Clojure-style refs with `dosync`/`alter`/`commute` are planned once the native runtime exists. The `:cell :ref` slot kind and the `ref` name are reserved.

@@ -26,6 +26,7 @@ extern "kernel32" fn AcquireSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) v
 extern "kernel32" fn ReleaseSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
 extern "kernel32" fn SleepConditionVariableSRW(cv: *CONDITION_VARIABLE, lock: *SRWLOCK, milliseconds: u32, flags: u32) callconv(.winapi) i32;
 extern "kernel32" fn WakeAllConditionVariable(cv: *CONDITION_VARIABLE) callconv(.winapi) void;
+extern "kernel32" fn WakeConditionVariable(cv: *CONDITION_VARIABLE) callconv(.winapi) void;
 extern "kernel32" fn GetCurrentThreadStackLimits(low: *usize, high: *usize) callconv(.winapi) void;
 extern "kernel32" fn QueryPerformanceCounter(count: *i64) callconv(.winapi) i32;
 extern "kernel32" fn QueryPerformanceFrequency(frequency: *i64) callconv(.winapi) i32;
@@ -102,6 +103,11 @@ pub const Condition = struct {
 
     pub fn broadcast(cond: *Condition) void {
         WakeAllConditionVariable(&cond.inner);
+    }
+
+    /// Wake one waiter, if any.
+    pub fn signal(cond: *Condition) void {
+        WakeConditionVariable(&cond.inner);
     }
 
     /// Like `wait`, but return after at most `nanos` nanoseconds.

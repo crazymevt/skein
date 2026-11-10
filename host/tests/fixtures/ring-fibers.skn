@@ -1,0 +1,27 @@
+(ns ring-fibers
+  "A million channel messages between 10,000 fibers (the exit test of M2.3): tasks in a
+ring of channels, each passing what it takes to the next, with 100 messages going once
+round the ring. Native only: Phase 0 would need 10,000 threads. host/tools/bootstrap.sh
+builds it with skeinc and checks what it prints.")
+
+(def fiber-count 10000)
+(def message-count 100)
+
+(defn -main []
+  (let [chans (vec (repeatedly fiber-count (fn [] (chan 1))))
+        done (chan message-count)]
+    (with-nursery [n]
+      (dotimes [i fiber-count]
+        (let [in (nth chans i)
+              out (nth chans (mod (inc i) fiber-count))]
+          ;; A message is the number of hops it has left.
+          (spawn n (loop []
+                     (when-let [hops (<! in)]
+                       (if (= hops 1) (>! done 1) (>! out (dec hops)))
+                       (recur))))))
+      (dotimes [m message-count]
+        (>! (nth chans (* m (quot fiber-count message-count))) fiber-count))
+      (let [arrived (loop [k 0 total 0]
+                      (if (< k message-count) (recur (inc k) (+ total (<! done))) total))]
+        (doseq [c chans] (close! c))
+        (println (* arrived fiber-count) "messages passed between" fiber-count "fibers")))))

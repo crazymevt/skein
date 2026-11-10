@@ -130,6 +130,15 @@ test_compiler() {
     fi
     echo "skeinc: $name ok"
   done
+  # A million channel messages between 10,000 fibers (M2.3; native only).
+  "$skeinc" build host/tests/fixtures/ring-fibers.skn --profile release \
+    -o "build/examples/ring-fibers$exe" > /dev/null
+  ring=$(build/examples/ring-fibers$exe | tr -d '\r')
+  if [ "$ring" != "1000000 messages passed between 10000 fibers" ]; then
+    echo "skeinc: ring-fibers printed: $ring"
+    exit 1
+  fi
+  echo "skeinc: ring-fibers ok"
   # Every example and fixture again with SKEIN_GC_VERIFY=1 (D-073): each collection is
   # major and is followed by a check that nothing points at an object that's gone.
   for expected in examples/*.expected build/examples/native-*.expected; do

@@ -93,6 +93,13 @@ pub noinline fn current() *Fiber {
     return f;
 }
 
+/// A number identifying the running fiber (a thread's own, on a thread that runs none):
+/// what owns transients and :unsynchronized slots, which a fiber keeps using as it moves
+/// between threads (M2.3, D-075).
+pub fn ownerId() usize {
+    return @intFromPtr(current()) >> 3;
+}
+
 // ---------------------------------------------------------------------------------------
 // The pool of idle fibers
 

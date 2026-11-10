@@ -125,12 +125,12 @@ pub fn ensureConstants() void {
 // Edit tokens (transients belong to the thread that made them)
 
 fn makeEdit() Value {
-    return make(.edit_token, &.{fx(gc.currentThreadId())});
+    return make(.edit_token, &.{fx(@import("fiber.zig").ownerId())});
 }
 
 fn checkEdit(edit: Value, comptime what: []const u8) void {
     if (edit == Value.nil) rt.raise(.transient_error, what ++ " used after persistent!", .{});
-    if (ux(get(edit, 0)) != gc.currentThreadId())
+    if (ux(get(edit, 0)) != @import("fiber.zig").ownerId())
         rt.raise(.transient_error, what ++ " used by a thread that does not own it", .{});
 }
 
