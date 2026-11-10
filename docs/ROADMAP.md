@@ -30,6 +30,17 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.10 Native FFI | ✅ |
 | M1.11 `skein build` and `skein package` | ✅ |
 | M1.12 Driftrock native | 🟨 |
+| M2.1 Phase 1 follow-ups | ⬜ |
+| M2.2 Fibers | ⬜ |
+| M2.3 Work-stealing scheduler | ⬜ |
+| M2.4 Dynamic vars natively | ⬜ |
+| M2.5 Evaluating code in native programs | ⬜ |
+| M2.6 Native REPL and `skein dev` | ⬜ |
+| M2.7 Swank server | ⬜ |
+| M2.8 Supervisors | ⬜ |
+| M2.9 Hot reload of compiled code | ⬜ |
+| M2.10 STM | ⬜ |
+| M2.11 Driftrock developed live, natively | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -253,8 +264,80 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Exit:** native Driftrock plays at 60 fps on macOS, Windows and Linux and starts in under 0.1 s (until `-main` runs, D-071). Write `docs/PHASE1-RETRO.md` and update DESIGN.md.
 
-## Phase 2: Native live development (outline)
-Fibers and a work-stealing scheduler; channels on fibers; a closure-compiling interpreter for REPL redefinitions; a Swank-compatible REPL server (D-018); hot reload of native code via shared libraries; supervisors and the debugger over the REPL protocol; STM.
+## Phase 2: Native live development
+
+**Goal:** everything Phase 0 does for live development, natively: fibers on a work-stealing scheduler, a REPL and `skein dev` in the running native program, SLIME through a Swank server, supervisors, hot reload of compiled code and STM. At the end `./skein run`, `dev` and `repl` run on the native runtime, and SBCL only bootstraps the compiler (D-072).
+
+**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), and Driftrock developed live (M2.11).
+
+**Rules for Phase 2**
+- Phase 1's rules still apply (Zig 0.17.1, C11 with `zig cc`, platform code only in `runtime/platform/<os>/`, the Core IR as the contract).
+- The Phase 0 host stays a test reference by program output: a native result is tested against what `skein run` on SBCL prints, until M2.6 moves `skein run` to the native runtime; after that the reference is the expected-output files and fixtures. The Lisp C backend only builds the first compiler (D-073).
+- New native features go into the runtime and the compiler in Skein; nothing new goes into the Phase 0 host unless a test reference needs it.
+
+### M2.1 Phase 1 follow-ups
+- `skein.io/resource-dir`: the directory holding the program's `:assets` (the package folder, a `.app`'s `Contents/Resources`, or the project directory when run from source) (D-073).
+- Retire the tests that compare the Lisp C backend's C with `skeinc`'s; compare programs by output (D-073).
+- `SKEIN_GC_VERIFY=1`: collect at every safepoint and check every root, table and heap slot.
+- Name `.skein-cache/` files after the program's full path, so builds of different programs don't overwrite each other's C.
+
+**Exit:** a packaged example loads an asset through `resource-dir` on all three platforms in CI, and the native test suites pass with `SKEIN_GC_VERIFY=1`.
+
+### M2.2 Fibers
+- Fiber stacks: reserved virtual memory with a guard page, committed as touched, pooled (DESIGN §17.4, D-024); stack overflow signals an error in the fiber.
+- Context switching per architecture (arm64, x86_64 System V, x86_64 Windows).
+- The GC scans each fiber's stack; conditions, handlers and restarts are per fiber.
+- A scheduler on one thread first.
+
+**Exit:** 100,000 fibers that yield and allocate under collections run on all three platforms in CI.
+
+### M2.3 Work-stealing scheduler
+- Worker threads with work-stealing deques and an injection queue (DESIGN §13.1).
+- Tasks, nurseries, channels, `sleep`, futures and nursery joins park fibers instead of OS threads; `^:blocking` C calls hand their worker off (§14.3); callbacks from foreign threads run as temporary fibers.
+
+**Exit:** the native concurrency fixtures pass on fibers, a million channel messages pass between 10,000 fibers, and Driftrock's job graph runs on fibers, on all three platforms.
+
+### M2.4 Dynamic vars natively
+- `^:dynamic` vars and `binding`, fiber-local and inherited by fibers spawned inside the `binding` (DESIGN §4.3).
+
+**Exit:** the host's dynamic-var tests pass natively.
+
+### M2.5 Evaluating code in native programs
+- Dev builds include the compiler's front end and a closure-compiling interpreter (Core IR to closures), so a running native program can `eval`, load a file and `(reload 'ns)`.
+- Redefinition follows DESIGN §15: `defn`/`def` rebind vars, `defclass` updates instances, `defmethod` clears dispatch caches, `defonce` keeps state.
+
+**Exit:** a native program reloads a changed namespace from source and runs the new code; interpreted code runs within 10× of compiled code on the n-body benchmark.
+
+### M2.6 Native REPL and `skein dev`
+- The REPL on the terminal and on a localhost socket, the file watcher and the debugger (an unhandled error suspends its fiber; restarts and a backtrace), with Phase 0's behavior (D-039).
+- `./skein run`, `dev` and `repl` run on the native runtime; SBCL only bootstraps.
+
+**Exit:** M0.11's live-development exit test passes natively on all three platforms.
+
+### M2.7 Swank server
+- A Swank-compatible server in the native runtime (D-018): evaluation, loading files, completion, argument lists, the debugger (SLDB) with Skein's restarts and backtrace, and the inspector. SLIME is the reference client.
+
+**Exit:** a scripted SLIME session against native `skein dev` passes in CI.
+
+### M2.8 Supervisors
+- Unhandled errors go to the fiber's supervisor: in development the root supervisor opens the debugger; in release builds the policies `:cancel-siblings`, `:restart-fiber`, `:ignore` and `:crash` apply (DESIGN §10).
+
+**Exit:** each policy is tested natively.
+
+### M2.9 Hot reload of compiled code
+- `skein dev` compiles a changed namespace to a shared library and loads it into the running program, rebinding its vars; changing a value struct's layout warns about code and arrays compiled against the old one (DESIGN §15).
+
+**Exit:** an edit to Driftrock is running as compiled code within a second of saving, without a dropped frame, on all three platforms.
+
+### M2.10 STM
+- Refs with `dosync`, `alter`, `commute` and `ensure`, and `:cell :ref` slots (DESIGN §13.3).
+
+**Exit:** randomized tests against a model, and a concurrent transfer test that keeps its total, pass natively.
+
+### M2.11 Driftrock developed live, natively
+- Develop and debug Driftrock with native `skein dev` and SLIME: fix a crash in the debugger and resume, edit while playing, reload compiled code.
+
+**Exit:** Driftrock is developed live on the native runtime on all three platforms. Write `docs/PHASE2-RETRO.md` and update DESIGN.md.
 
 ## Phase 3: Optimization and polish (outline)
 Sealing; inlining across namespaces; escape analysis and arena inference; SIMD for `vec`/`mat`; optional LLVM backend; full hygienic macros; `skein fmt`; package registry; documentation site.

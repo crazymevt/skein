@@ -94,7 +94,8 @@ Takeaways:
 
 ## Proposed changes
 
-These need a decision before they go into DESIGN.md:
+Jessie decided these right after Phase 1 (D-073): all four are in M2.1, with the
+function named `skein.io/resource-dir`.
 
 1. **Finding assets.** A packaged program can't find its assets: its working directory
    isn't its folder, and a `.app` keeps them in `Contents/Resources`. Add a function that

@@ -969,3 +969,25 @@ Date: 2026-11-10 · Status: Accepted
 - **Decision** (Jessie chose): start-up is the time from the program's start until `-main` runs, which includes the runtime's start and every namespace's top-level code. Driftrock prints it and the time to its first frame; `--check-startup` fails if `-main` started more than 0.1 s in. `skein.time/now` counts from the runtime's start, so `(skein.time/now)` at the top of `-main` measures it.
 - **Alternatives:** the time to the first frame with SDL's dummy video driver (about 60 ms; it includes SDL's software renderer), or with a real window and a limit of 0.25 s.
 - **Consequences:** CI runs packaged Driftrock with `--check-60fps --check-startup` on all three platforms. `examples/driftrock/project.skn` packages it with SDL3 from `vendor/`, which CI fills from the installed SDL3.
+
+## D-072: Phase 2 milestones, fibers first
+Date: 2026-11-10 · Status: Accepted
+- **Context:** The roadmap left Phase 2 (native live development) as an outline: fibers and a work-stealing scheduler, channels on fibers, an interpreter for REPL redefinitions, a Swank server (D-018), hot reload of native code, supervisors and the debugger, and STM. At the end of Phase 1, live development (`skein run`, `dev`, `repl`) still runs on SBCL.
+- **Decision** (Jessie chose):
+  - **Order:** fibers first. Phase 2 has eleven milestones (ROADMAP): Phase 1 follow-ups (M2.1); fibers, the work-stealing scheduler and dynamic vars (M2.2–M2.4); evaluating code in native programs, the native REPL and `skein dev`, and the Swank server (M2.5–M2.7); supervisors (M2.8); hot reload of compiled code (M2.9); STM (M2.10); and Driftrock developed live natively (M2.11).
+  - **SBCL's role:** by the end of Phase 2, `./skein run`, `dev` and `repl` run on the native runtime (from M2.6), and the Phase 0 host only bootstraps the compiler and serves as a reference until then.
+- **Alternatives:**
+  - Live development first, on OS threads, with fibers after. Native live editing would work sooner, but the debugger and REPL would be reworked when fibers arrive, since an unhandled error suspends a fiber.
+  - Keeping SBCL for `skein run` and `repl`, with only `dev` native. Two implementations would stay in daily use.
+- **Consequences:** the debugger, REPL and supervisors are built once, on fibers. The Phase 0 host gets no new features in Phase 2.
+
+## D-073: Phase 1 retrospective decisions
+Date: 2026-11-10 · Status: Accepted
+- **Context:** `docs/PHASE1-RETRO.md` proposed four changes.
+- **Decision** (Jessie chose the first two; the others are internal):
+  1. **`skein.io/resource-dir`** returns the directory holding the program's `:assets`: the package folder, a `.app`'s `Contents/Resources`, or the project directory when run from source (M2.1).
+  2. **The C-text comparison tests retire.** `skeinc` is compared with Phase 0 by program output only, as the bootstrap's fixtures are; the Lisp C backend only builds the first compiler (M2.1).
+  3. **`SKEIN_GC_VERIFY=1`**, a mode that collects at every safepoint and checks every root, table and heap slot (M2.1).
+  4. **`.skein-cache/` files are named after the program's full path** (M2.1).
+- **Alternatives:** `skein.game/asset-path` returning one asset's full path; keeping the C comparisons with a growing list of skipped programs.
+- **Consequences:** DESIGN §21 lists `resource-dir` in `skein.io` once M2.1 adds it.
