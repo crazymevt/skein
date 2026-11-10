@@ -704,11 +704,18 @@ fn allocOld(words: usize) *Header {
 /// namespaces). Its value slots must be written with `store`, like any old object's.
 pub fn allocPermanent(type_id: object.TypeId, len: usize) *Header {
     const payload = @max(len, 1);
-    world.lock();
+    // Don't allocate in the middle of a collection: park for it, as at a safepoint, so the
+    // collector counts this thread as stopped. (Waiting on the world lock without parking
+    // left it running, and the collector waited for it forever.)
+    while (true) {
+        world.lock();
+        if (!collecting()) break;
+        world.unlock();
+        safepoint();
+        if (current == null) platform.yieldThread();
+    }
     defer world.unlock();
     ensureInit();
-    // Don't allocate in the middle of a collection.
-    while (collecting()) world_cond.wait(&world);
     const h = if (1 + payload >= large_words) blk: {
         const n = ((1 + payload) * 8 + segment_size - 1) / segment_size;
         break :blk @as(*Header, @ptrFromInt(segmentStart(acquireSegments(n, .large_head))));

@@ -405,3 +405,32 @@ test "callbacks from C enter and leave the runtime: from blocking calls and othe
     // The foreign threads left: collections don't wait for them.
     gc.collect(.major);
 }
+
+test "a permanent allocation during another thread's collection parks for it" {
+    // Regression (M2.6): allocPermanent waited for a collection without parking, so the
+    // collector waited for that thread forever. One thread makes permanent objects while
+    // another collects again and again.
+    const Worker = struct {
+        fn permanents(done: *std.atomic.Value(bool)) void {
+            _ = gc.attachThread();
+            defer gc.detachThread();
+            for (0..20_000) |_| _ = gc.allocPermanent(.tuple, 2);
+            done.store(true, .release);
+        }
+        fn collections(done: *std.atomic.Value(bool)) void {
+            _ = gc.attachThread();
+            defer gc.detachThread();
+            while (!done.load(.acquire)) gc.collect(.minor);
+        }
+        fn join(arg: ?*anyopaque) void {
+            const t: *std.Thread = @ptrCast(@alignCast(arg));
+            t.join();
+        }
+    };
+    var done = std.atomic.Value(bool).init(false);
+    var a = try std.Thread.spawn(.{}, Worker.permanents, .{&done});
+    var b = try std.Thread.spawn(.{}, Worker.collections, .{&done});
+    gc.blocking(Worker.join, &a);
+    gc.blocking(Worker.join, &b);
+    try testing.expect(done.load(.acquire));
+}
