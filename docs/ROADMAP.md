@@ -27,7 +27,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.7 Expander and Core IR in Skein | ✅ |
 | M1.8 Native `skein.core` | ✅ |
 | M1.9 Self-hosting | ✅ |
-| M1.10 Native FFI | 🟨 |
+| M1.10 Native FFI | ✅ |
 | M1.11 `skein build` and `skein package` | ⬜ |
 | M1.12 Driftrock native | ⬜ |
 
@@ -226,7 +226,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   1. ✅ The runtime's FFI: foreign pointers, loading libraries and finding symbols, structs, unions and enums with C layouts, memory access, handles, and owned pointers freed by the GC. skein.ffi's functions natively.
   2. ✅ `defcfun` in `skeinc`: typed C calls with Phase 0's conversions (C strings, enums, `nil` as NULL), arrays pinned for the call, `^:owned` results, `^:blocking` calls that let the GC run, and the slow-call warning.
   3. ✅ `defcallback`: C functions that call Skein; an error warns and returns zero, as in Phase 0.
-  4. `examples/sdl/window.skn`, built by `skeinc`, runs natively on all three platforms in CI.
+  4. ✅ `examples/sdl/window.skn`, built by `skeinc`, runs natively on all three platforms in CI.
 
 **Exit:** `examples/sdl/window.skn` runs natively on all three platforms.
 
