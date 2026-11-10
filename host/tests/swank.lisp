@@ -33,6 +33,13 @@ them, and return the messages up to its (:return ...), in order."
         collect message
         until (eql 0 (search "(:return" message))))
 
+(defun swank-until (stream prefix)
+  "The messages from STREAM up to the first that starts with PREFIX, in order."
+  (loop for message = (swank-receive stream)
+        while message
+        collect message
+        until (eql 0 (search prefix message))))
+
 (defun swank-has (messages &rest texts)
   "True if each of TEXTS is in one of MESSAGES."
   (every (lambda (text) (some (lambda (m) (search text m)) messages)) texts))
@@ -109,10 +116,12 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
     (is (swank-has (swank-request s "(swank-repl:listener-eval \"*1\")" "\"serve\""
                                   ":repl-thread" 8)
                    "(:write-string \"#<namespace other>\\n\" :repl-result)"))
-    ;; An error aborts the request (the debugger comes in step 2).
-    (is (swank-has (swank-request s "(swank-repl:listener-eval \"(/ 1 0)\")" "\"serve\""
-                                  ":repl-thread" 9)
-                   "(:return (:abort \"division by zero\") 9)"))
+    ;; An error opens the debugger; its abort aborts the request.
+    (swank-send s "(:emacs-rex (swank-repl:listener-eval \"(/ 1 0)\") \"serve\" :repl-thread 9)")
+    (is (swank-has (swank-until s "(:debug-activate") "(:debug 1 1 (\"division by zero\""))
+    (swank-send s "(:emacs-rex (swank:sldb-abort) \"serve\" 1 90)")
+    (is (swank-has (swank-until s "(:return (:abort \"division by zero\") 9)")
+                   "(:debug-return 1 1 nil)"))
     (is (swank-has (swank-request s "(swank:no-such-request 1)" "nil" "t" 10)
                    "(:return (:abort \"Skein's Swank server has no swank:no-such-request\") 10)"))))
 
@@ -177,3 +186,89 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
                    "(:return (:ok nil) 1)")
                  m)
           "~S" m))))
+
+;;; The debugger (SLDB, M2.7 step 2)
+
+(test swank-debugger-for-requests
+  (with-swank-program (s dir (("serve.skn" "(ns serve)
+(defn greet [n] (str \"hi \" n))
+(defn inner [x] (/ x 0))
+(defn outer [x] (inner x))
+(defn safe [x] (restart-case (outer x) (use-ten [] :report \"Use ten\" 10)))
+(defn -main [& args] (sleep 60))
+")))
+    ;; An error in the listener: SLDB in its thread (1), with Skein's restarts and the
+    ;; functions between the error and the REPL.
+    (swank-send s "(:emacs-rex (swank-repl:listener-eval \"(safe 1)\") \"serve\" :repl-thread 1)")
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (equal (list (concatenate 'string "(:debug 1 1 (\"division by zero\" "
+                                    "\"   [Condition of type arithmetic-error]\" nil) "
+                                    "((\"use-ten\" \"Use ten\") "
+                                    "(\"abort\" \"Return to SLIME's top level.\")) "
+                                    "((0 \"inner\") (1 \"outer\") (2 \"safe\")) (1))")
+                       "(:debug-activate 1 1 nil)")
+                 m)
+          "~S" m))
+    (is (swank-has (swank-request s "(swank:backtrace 1 3)" "\"serve\"" "1" 2)
+                   "(:return (:ok ((1 \"outer\") (2 \"safe\"))) 2)"))
+    (is (swank-has (swank-request s "(swank:frame-source-location 0)" "\"serve\"" "1" 3)
+                   "(:return (:ok (:location (:file \"serve.skn\") (:line 3 1) nil)) 3)"))
+    ;; Evaluating in the debugger's thread; a compile error is only an answer; a runtime
+    ;; error opens level 2, whose abort returns to level 1.
+    (is (swank-has (swank-request s "(swank:eval-string-in-frame \"(greet 3)\" 0 \"serve\")"
+                                  "\"serve\"" "1" 4)
+                   "(:return (:ok \"=> \\\"hi 3\\\"\") 4)"))
+    (is (swank-has (swank-request s "(swank:eval-string-in-frame \"(car 1)\" 0 \"serve\")"
+                                  "\"serve\"" "1" 5)
+                   "(:return (:abort \"unable to resolve symbol `car`"))
+    (swank-send s (concatenate 'string "(:emacs-rex (swank:eval-string-in-frame \"(outer 2)\" 0 "
+                               "\"serve\") \"serve\" 1 6)"))
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (swank-has m "(:debug 1 2 (\"division by zero\""
+                     "((\"abort\" \"Return to sldb level 1.\") (\"use-ten\" \"Use ten\")"
+                     " (1 6))")
+          "~S" m))
+    (swank-send s "(:emacs-rex (swank:sldb-abort) \"serve\" 1 7)")
+    (let ((m (swank-until s "(:return (:abort \"division by zero\") 6)")))
+      (is (swank-has m "(:debug-return 1 2 nil)") "~S" m))
+    ;; Restart 0 of level 1: safe returns 10, and the listener prints it.
+    (swank-send s "(:emacs-rex (swank:invoke-nth-restart-for-emacs 1 0) \"serve\" 1 8)")
+    (let ((m (swank-until s "(:return (:ok nil) 1)")))
+      (is (swank-has m "(:debug-return 1 1 nil)" "(:write-string \"10\\n\" :repl-result)")
+          "~S" m))
+    ;; An error in another request: a thread of its own; q aborts the request.
+    (swank-send s "(:emacs-rex (swank:interactive-eval \"(outer 3)\") \"serve\" t 9)")
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (swank-has m "(:debug 2 1 (\"division by zero\"" "(9))") "~S" m))
+    (swank-send s "(:emacs-rex (swank:throw-to-toplevel) \"serve\" 2 10)")
+    (let ((m (swank-until s "(:return (:abort \"division by zero\") 9)")))
+      (is (swank-has m "(:debug-return 2 1 nil)") "~S" m))))
+
+(test swank-debugger-for-the-program
+  (with-swank-program (s dir (("serve.skn" "(ns serve)
+(defonce go? (atom false))
+(defn inner [x] (/ x 0))
+(defn -main [& args]
+  (loop [] (when-not @go? (sleep 0.02) (recur)))
+  (println \"got\" (restart-case (inner 1) (use-ten [] :report \"Use ten\" 10)))
+  (reset! go? :done)
+  (sleep 60))
+")))
+    ;; An error in the program that no handler handles opens SLDB in Emacs, in the
+    ;; program's fiber, which a restart resumes.
+    (is (swank-has (swank-request s "(swank:interactive-eval \"(reset! go? true)\")" "\"serve\""
+                                  "t" 1)
+                   "(:return (:ok \"=> true\") 1)"))
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (swank-has m "(:debug 2 1 (\"division by zero\""
+                     "((\"use-ten\" \"Use ten\") (\"abort\" \"Stop the program\"))"
+                     "((0 \"inner\") (1 \"-main\")) nil)")
+          "~S" m))
+    (swank-send s "(:emacs-rex (swank:invoke-nth-restart-for-emacs 1 0) \"serve\" 2 2)")
+    (is (swank-has (swank-until s "(:debug-return") "(:debug-return 2 1 nil)"))
+    (loop repeat 100
+          until (search ":done" (car (swank-request s "(swank:interactive-eval \"@go?\")"
+                                                    "\"serve\"" "t" 3)))
+          do (sleep 0.05))
+    (is (swank-has (swank-request s "(swank:interactive-eval \"@go?\")" "\"serve\"" "t" 4)
+                   "(:return (:ok \"=> :done\") 4)"))))

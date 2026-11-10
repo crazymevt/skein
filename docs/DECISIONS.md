@@ -1138,3 +1138,16 @@ Date: 2026-11-10 · Status: Accepted
 - **Decision:** `skein.compiler.env` takes the current namespace from a hook, `%set-namespace-cell-hook!`. skein.dev installs a function that returns its dynamic var `*namespace-cell*`, and every console or Swank evaluation (`skein.dev/call-in`) binds that var to an atom of its own, starting at the console's namespace. Tasks the evaluation starts copy the binding, so they share it. Other code (the program, the file watcher) uses the shared atom as before. The hook exists because Phase 0's C backend, which compiles `env.skn` for the first compiler, has no `binding`; Phase 0's `%set-namespace-cell-hook!` does nothing, since its REPL binds `*current-namespace*` per thread.
 - **Alternatives:** a lock around each evaluation, which would make a long listener evaluation hold up every other one, the program's debugger sessions included; a dynamic var in `env.skn` itself, which Phase 0's C backend can't compile.
 - **Consequences:** `%current-namespace` calls the hook in `--eval` programs (one dynamic var read). The program's own code still shares one current namespace between its tasks.
+
+## D-084: SLDB natively
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.7 step 2 gives Swank's debugger (D-082). Swank runs it in the thread where the error happened, and Emacs sends the debugger's requests to that thread.
+- **Decision:**
+  - **Requests:** an error in a request runs SLDB in the request's fiber, inside a handler, so the error's restarts and dynamic state are there. It sends `(:debug thread level condition restarts frames pending)` and `:debug-activate`, then answers the requests Emacs sends for that thread in that fiber until a restart unwinds out (`:debug-return`). Thread ids are per connection: the listener is 1, and other fibers get one when they first need debugging. Each request has an `abort` restart ("Return to SLIME's top level.", or "Return to sldb level N." inside the debugger), which answers `(:abort message)`.
+  - **The program:** an error that no handler handles goes to `skein.dev`'s debugger, which first runs SLDB in the newest Swank connection, in the failing fiber. If no Emacs is connected, or it disconnects before a restart is chosen, the text REPL's debug session takes over, as in D-081.
+  - **Read and compile errors** in what a request evaluates answer `(:abort message)` without the debugger: no code ran, and the backtrace would only show the compiler.
+  - **Backtraces:** frames are the shadow stack's Skein functions between the error and the evaluator or the program's start; a frame's source location is where its function is defined. There are no frame locals yet.
+  - **Restarts** keep Skein's names (`abort`, `use-value`), not CL's upper-case ones.
+- **Alternatives:** sending program errors to the text REPL as well and letting the first console claim them; opening SLDB for read and compile errors, as SBCL's Swank does.
+- **Consequences:** a restart that takes arguments can't be chosen from SLDB (or from the text REPL's debugger): Skein restarts can't say how to ask for their arguments. Interrupting a running evaluation (`C-c C-c` in the REPL) needs a way to signal a running fiber, which the runtime doesn't have yet.
+

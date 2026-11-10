@@ -8,9 +8,12 @@ keywords, pkg:name symbols are symbols with a namespace, and names are lowercase
 Emacs writes them. What's sent back is written as Emacs Lisp reads it.
 
 A request is (:emacs-rex form package thread id); the answer is (:return (:ok value) id),
-or (:return (:abort message) id) after an error. Requests for the REPL thread run in
-order in one fiber per connection (the listener); the others each in a fiber of their
-own, as Swank's :spawn style runs them. Code runs in the namespace the request's package
+or (:return (:abort message) id). Requests for the REPL thread run in order in one fiber
+per connection (the listener, thread 1); the others each in a fiber of their own, as
+Swank's :spawn style runs them, and requests for a thread in the debugger in its fiber.
+An error opens SLDB in the fiber where it happened, with Skein's restarts and the shadow
+stack's backtrace; so does an error in the program that no handler handles, in the newest
+connection (D-084). Code runs in the namespace the request's package
 names, or the listener's if there is none of that name; what it prints goes to Emacs as
 (:write-string text).
 
@@ -326,6 +329,109 @@ note for a read or compile error. Other errors go on up."
   (apply hash-map args))
 
 ;;; ------------------------------------------------------------------------------------
+;;; The debugger (SLDB). An error runs it in the fiber where it happened, where its
+;;; restarts are: it tells Emacs (:debug, :debug-activate), then answers the requests
+;;; Emacs sends for that thread until one invokes a restart, which unwinds out of it
+;;; (:debug-return). Errors in what those requests evaluate open the next level.
+
+(def ^:private answer)
+
+(def ^:dynamic *thread*
+  "The Swank thread this fiber is, {:id n :inbox channel}, or nil until it needs one (to
+be debugged). Requests Emacs sends for thread n arrive on its inbox."
+  nil)
+
+(def ^:dynamic *pending*
+  "The ids of the requests this fiber is answering, outermost first."
+  [])
+
+(def ^:dynamic *sldb*
+  "The debugger level this fiber is in, {:level :condition :restarts :frames}, or nil."
+  nil)
+
+(def ^:private connections
+  "The connections open now, oldest first."
+  (atom []))
+
+(defn- new-thread!
+  "A Swank thread for this fiber, which Emacs can send requests to."
+  [c]
+  (let [id (swap! (:next-thread c) inc)
+        inbox (chan 64)]
+    (swap! (:threads c) assoc id inbox)
+    {:id id :inbox inbox}))
+
+(defn- condition-info [e]
+  (list (condition-message e)
+        (str "   [Condition of type " (name (condition-type-name (condition-type e))) "]")
+        nil))
+
+(defn- restart-info [restarts]
+  (map (fn [r] (let [nm (name (restart-name r))] (list nm (or (restart-report r) nm))))
+       restarts))
+
+(defn- frame-info
+  "Frames start to end (nil for all) of the backtrace, as SLDB shows them."
+  [frames start end]
+  (let [end (min (count frames) (or end (count frames)))]
+    (map (fn [i] (list i (first (nth frames i)))) (range (min start end) end))))
+
+(defn- restart-named
+  "The first of restarts named nm."
+  [restarts nm]
+  (first (filter (fn [r] (= nm (name (restart-name r)))) restarts)))
+
+(defn- debug-in-emacs
+  "SLDB for the condition e in this fiber: frames is the backtrace from where it was
+signaled. Returns (on-close) if the connection ends before a restart is invoked."
+  [c e frames on-close]
+  (let [fresh (nil? *thread*)
+        thread (or *thread* (new-thread! c))
+        level (inc (if *sldb* (:level *sldb*) 0))
+        restarts (vec (compute-restarts e))
+        frames (vec (dev/user-frames frames))]
+    (dev/record-error! e)
+    (binding [*thread* thread
+              *sldb* {:level level :condition e :restarts restarts :frames frames}]
+      (try
+        (send! c (list :debug (:id thread) level (condition-info e) (restart-info restarts)
+                       (frame-info frames 0 nil) (apply list *pending*)))
+        (send! c (list :debug-activate (:id thread) level nil))
+        (loop []
+          (when-let [[form pkg id] (<! (:inbox thread))]
+            (answer c form pkg id)
+            (recur)))
+        (finally
+          (send! c (list :debug-return (:id thread) level nil))
+          (when fresh (swap! (:threads c) dissoc (:id thread)))))
+      (on-close))))
+
+(defn- debug-program
+  "skein.dev's debugger for an error c in the program: SLDB in the newest connection.
+Returns nil if there's none, or when it disconnects first."
+  [e frames]
+  (when-let [c (last @connections)]
+    (dev/announce (str "; error: " (condition-message e) " (in the SLIME debugger)"))
+    ;; A task started from a request copied its bindings; this is a thread of its own.
+    (binding [*thread* nil *sldb* nil *pending* []]
+      (debug-in-emacs c e frames (fn [] nil)))))
+
+(defn- frame-location
+  "The source location of a frame, from its \"file:line:column\"."
+  [loc]
+  (let [colon-before (fn [end] (loop [i (dec end)]
+                                 (cond (< i 0) nil
+                                       (= (nth loc i) \:) i
+                                       :else (recur (dec i)))))
+        b (when (string? loc) (colon-before (count loc)))
+        a (when b (colon-before b))
+        line (when a (parse-long (subs loc (inc a) b)))
+        column (when b (parse-long (subs loc (inc b))))]
+    (if (and line column)
+      (list :location (list :file (subs loc 0 a)) (list :line line column) nil)
+      (list :error "no source location for this frame"))))
+
+;;; ------------------------------------------------------------------------------------
 ;;; Requests: each is a function of the connection, the request's package and its
 ;;; arguments, whose result is the :ok value.
 
@@ -400,6 +506,48 @@ note for a read or compile error. Other errors go on up."
 (defn- quit-lisp [c pkg args]
   (%exit 0))
 
+(defn- sldb-frame [index]
+  (let [frames (:frames *sldb*)]
+    (if (and (integer? index) (< -1 index (count frames)))
+      (nth frames index)
+      (error (str "no frame " index)))))
+
+(defn- invoke-nth-restart [c pkg [level n]]
+  (when (and *sldb* (= level (:level *sldb*)))
+    (let [restarts (:restarts *sldb*)]
+      (if (and (integer? n) (< -1 n (count restarts)))
+        (invoke-restart (nth restarts n))
+        (error (str "no restart " n))))))
+
+(defn- sldb-abort [c pkg args]
+  (when-let [r (restart-named (:restarts *sldb*) "abort")] (invoke-restart r)))
+
+(defn- sldb-continue [c pkg args]
+  (when-let [r (restart-named (:restarts *sldb*) "continue")] (invoke-restart r)))
+
+(defn- throw-to-toplevel [c pkg args]
+  (when-let [r (restart-named (reverse (:restarts *sldb*)) "abort")] (invoke-restart r)))
+
+(defn- backtrace-request [c pkg [start end]]
+  (frame-info (:frames *sldb*) (or start 0) end))
+
+(defn- debugger-info [c pkg [start end]]
+  (let [{:keys [condition restarts frames]} *sldb*]
+    (list (condition-info condition) (restart-info restarts) (frame-info frames (or start 0) end)
+          (apply list *pending*))))
+
+(defn- frame-source-location [c pkg [index]]
+  (frame-location (second (sldb-frame index))))
+
+(defn- eval-string-in-frame [c pkg [text index frame-pkg]]
+  (sldb-frame index)
+  (echo (eval-text (console-for c (namespace-for c (or frame-pkg pkg))) text "slime" 1 1)))
+
+(defn- pprint-eval-string-in-frame [c pkg [text index frame-pkg]]
+  (sldb-frame index)
+  (let [value (eval-text (console-for c (namespace-for c (or frame-pkg pkg))) text "slime" 1 1)]
+    (if (= value ::none) "; No value" (dev/show value))))
+
 (def ^:private requests
   "The requests the server answers, by name (without their package, swank: or
 swank-repl:)."
@@ -417,48 +565,101 @@ swank-repl:)."
    "set-package" set-package
    "list-all-package-names" list-all-package-names
    "buffer-first-change" (fn [c pkg args] nil)
-   "quit-lisp" quit-lisp})
+   "quit-lisp" quit-lisp
+   ;; The debugger
+   "invoke-nth-restart-for-emacs" invoke-nth-restart
+   "sldb-abort" sldb-abort
+   "sldb-continue" sldb-continue
+   "throw-to-toplevel" throw-to-toplevel
+   "backtrace" backtrace-request
+   "debugger-info-for-emacs" debugger-info
+   "frame-locals-and-catch-tags" (fn [c pkg args] (list nil nil))
+   "frame-source-location" frame-source-location
+   "eval-string-in-frame" eval-string-in-frame
+   "pprint-eval-string-in-frame" pprint-eval-string-in-frame
+   "sldb-print-condition" (fn [c pkg args] (condition-message (:condition *sldb*)))})
 
 (defn- argument
   "The value of an argument of a request: Emacs quotes lists and symbols."
   [x]
   (if (and (seq? x) (symbol? (first x)) (= "quote" (name (first x)))) (second x) x))
 
-(defn- answer
-  "Handle the request form and send its answer."
+(defn- source-error?
+  "True for an error reading or compiling code."
+  [e]
+  (contains? #{reader/read-error expander/compile-error} (condition-type e)))
+
+(defn- answer*
+  "Handle the request form and send its answer. An error in it opens SLDB, in this fiber;
+its abort restart answers (:abort message)."
   [c form pkg id]
-  (let [result (try
-                 (when-not (and (seq? form) (symbol? (first form)))
-                   (error (str "not a request: " (write-data form))))
-                 (let [handler (or (get requests (name (first form)))
-                                   (error (str "Skein's Swank server has no "
-                                               (write-data (first form)))))]
-                   (list :ok (handler c pkg (map argument (rest form)))))
-                 (catch error e (list :abort (condition-message e))))]
-    (send! c (list :return result id))))
+  (let [handler (when (and (seq? form) (symbol? (first form)))
+                  (get requests (name (first form))))
+        replied (atom false)
+        reply (fn [result] (reset! replied true) (send! c (list :return result id)))
+        failure (atom nil)]
+    (if-not handler
+      ;; Not an error in the code being developed: no debugger.
+      (reply (list :abort (if (and (seq? form) (symbol? (first form)))
+                            (str "Skein's Swank server has no " (write-data (first form)))
+                            (str "not a request: " (write-data form)))))
+      (binding [*pending* (conj *pending* id)]
+        (try
+          (reply
+           (block* request
+             (restart-case
+              (handler-bind [error (fn swank-debugger [e]
+                                     (reset! failure e)
+                                     ;; Code that can't be read or compiled isn't run: its
+                                     ;; error is the answer, without the compiler's frames.
+                                     (when (source-error? e)
+                                       (return-from* request
+                                         (list :abort (condition-message e))))
+                                     ;; If Emacs disconnects, this request ends.
+                                     (debug-in-emacs c e (rest (%backtrace))
+                                                     (fn [] (return-from* request
+                                                              (list :abort "disconnected")))))]
+                (list :ok (handler c pkg (map argument (rest form)))))
+              (abort []
+                :report (if *sldb*
+                          (str "Return to sldb level " (:level *sldb*) ".")
+                          "Return to SLIME's top level.")
+                (list :abort (if @failure (condition-message @failure) "aborted"))))))
+          ;; A restart of an outer level unwound this request.
+          (finally (when-not @replied (reply (list :abort "aborted")))))))))
+
+(def ^:private answer answer*)
 
 (defn- dispatch
   "Act on a message from Emacs."
   [c message]
   (when (and (seq? message) (= :emacs-rex (first message)))
     (let [[_ form pkg thread id] message]
-      (if (= thread :repl-thread)
-        (>! (:listener c) [form pkg id])
-        (future (answer c form pkg id))))))
+      (cond (= thread :repl-thread) (>! (:listener c) [form pkg id])
+            ;; A thread in the debugger, which is waiting for its requests.
+            (get @(:threads c) thread) (>! (get @(:threads c) thread) [form pkg id])
+            :else (future (answer c form pkg id))))))
 
 (defn- serve
   "Talk to the Emacs connected on socket until it disconnects."
   [socket]
-  (let [c {:socket socket
+  (let [listener (chan 256)
+        c {:socket socket
            :out (chan)
-           :listener (chan 256)
+           :listener listener
+           ;; Swank thread id -> the inbox of the fiber that is that thread; the listener
+           ;; is thread 1.
+           :threads (atom {1 listener})
+           :next-thread (atom 1)
            :pending (atom {:chunks [] :bytes 0})
            :ns (atom (dev/starting-namespace))}]
+    (swap! connections conj c)
     (future (writer c))
-    (future (loop []
-              (when-let [[form pkg id] (<! (:listener c))]
-                (answer c form pkg id)
-                (recur))))
+    (future (binding [*thread* {:id 1 :inbox listener}]
+              (loop []
+                (when-let [[form pkg id] (<! listener)]
+                  (answer c form pkg id)
+                  (recur)))))
     (try (loop []
            (let [message (read-message c)]
              (when-not (= message ::end)
@@ -466,7 +667,9 @@ swank-repl:)."
                (recur))))
          (catch error e (println (str "; Swank: " (condition-message e))))
          (finally
-           (close! (:listener c))
+           (swap! connections (fn [cs] (vec (remove (fn [x] (identical? x c)) cs))))
+           ;; Fibers in the debugger see their inboxes close and leave it.
+           (doseq [[_ inbox] @(:threads c)] (close! inbox))
            (close! (:out c))
            (%tcp-close socket)))))
 
@@ -481,4 +684,4 @@ listen there."
                 (recur))))
     server))
 
-(dev/install-swank! start-server)
+(dev/install-swank! start-server debug-program)

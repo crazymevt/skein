@@ -49,6 +49,14 @@ other's (D-083)."
   "The namespace new consoles start in: the program's in skein dev."
   (atom "user"))
 
+(def ^:private swank-starter
+  "skein.swank's start-server, which it installs when it's loaded."
+  (atom nil))
+
+(def ^:private swank-debugger
+  "skein.swank's debugger for errors in the program, which it installs when it's loaded."
+  (atom nil))
+
 (defn starting-namespace
   "The name of the namespace new consoles start in: the program's in skein dev."
   []
@@ -81,7 +89,7 @@ text). output is the function code evaluated from it prints with, or nil."
   [console]
   (when-not @(:fresh console) (write! console "\n")))
 
-(defn- announce
+(defn announce
   "Print a line on every console, or on standard output if there are none."
   [text]
   (let [cs @consoles]
@@ -176,6 +184,11 @@ text). output is the function code evaluated from it prints with, or nil."
 
 (defn- set-core-var! [nm value] (%set-var-value! (core-var nm) value))
 
+(defn record-error!
+  "Make the condition c *e."
+  [c]
+  (set-core-var! "*e" c))
+
 (defn- core-value [nm]
   (let [v (%var-value (core-var nm))] (if (%var-defined? (core-var nm)) v nil)))
 
@@ -238,12 +251,18 @@ for an error no handler in it handles."
               (if-let [report (restart-report r)] (str "  " report) "") "\n")))
   (write! console "Also: :bt for a backtrace, or any form to evaluate it here.\n"))
 
+(defn user-frames
+  "The frames of a backtrace ([name location] each, innermost first) between the error and
+the REPL's evaluator or the program's start."
+  [frames]
+  (let [ends #{"evaluate-syntax" "run-main" "run-dev"}]
+    (take-while (fn [[nm]] (not (contains? ends nm))) frames)))
+
 (defn- backtrace-text
   "The Skein functions between the error and the REPL or the program's start, innermost
 first."
   [frames]
-  (let [ends #{"evaluate-syntax" "run-main" "run-dev"}
-        shown (take-while (fn [[nm]] (not (contains? ends nm))) frames)]
+  (let [shown (user-frames frames)]
     (if (seq shown)
       (apply str (map-indexed (fn [i [nm]] (str "  " i ": " nm "\n")) shown))
       "  (no Skein frames)\n")))
@@ -362,6 +381,9 @@ console to attach, and evaluate what it sends in this fiber, where the restarts 
                   (println (str "error in thread " thread ": " (condition-message c)))
                   (if-let [a (outermost-abort restarts)] (invoke-restart a) (%exit 1)))]
     (set-core-var! "*e" c)
+    ;; SLDB in a connected Emacs first (D-082); it returns if there's none, or if Emacs
+    ;; disconnects before a restart is chosen.
+    (when-let [swank @swank-debugger] (swank c frames))
     (when (empty? @consoles) (give-up))
     (offer-session! session)
     (try
@@ -485,15 +507,14 @@ function that stops it."
           (recur))))
     (fn [] (reset! stop true))))
 
-(def ^:private swank-starter
-  "skein.swank's start-server, which it installs when it's loaded."
-  (atom nil))
-
 (defn install-swank!
-  "Give skein dev the function that serves Swank: (start port) listens on localhost:port
-and returns the server, or nil if it can't listen there (skein.swank calls this)."
-  [start]
-  (reset! swank-starter start))
+  "Give skein dev Swank (skein.swank calls this when it's loaded): (start port) listens on
+localhost:port and returns the server, or nil if it can't listen there; (debug c frames),
+for an error c in the program that no handler handles, debugs it in a connected Emacs,
+returning only if there's none or it disconnects first."
+  [start debug]
+  (reset! swank-starter start)
+  (reset! swank-debugger debug))
 
 (defn- run-dev
   "Run main-fn with args as skein dev does: serve the REPL on the terminal and, unless
