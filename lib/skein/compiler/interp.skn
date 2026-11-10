@@ -1,0 +1,235 @@
+(ns skein.compiler.interp
+  "The interpreter of phase-1 code (M1.9 step 4, D-061): it evaluates Core IR as data, as
+skein.compiler.expander makes it, so that the native compiler can run a program's own
+macros and the functions they call while it compiles the program (D-050). skein.core's
+macros are compiled into the compiler instead.
+
+Interpreted functions are ordinary Skein functions, so compiled code (skein.core's
+functions, the expander calling a macro) calls them like any other. A local's value lives
+in the environment map; a ^:mutable local or a letfn function lives in an atom there.
+recur returns a marker to its loop or arity, block* is Skein's own block*, and multiple
+values are carried as vectors where they matter.
+
+Namespaces and vars come through skein.core's % functions, as in the expander: the
+image's on the host, skein.compiler.env's natively. Declared types are not checked."
+  (:require [skein.compiler.env]))
+
+;;; ------------------------------------------------------------------------------------
+;;; Environments
+
+(def ^:private recur-marker (gensym "recur"))
+
+(defn- recur-of
+  "If x is the marker of a recur to target, its values."
+  [x target]
+  (when (and (vector? x) (= (count x) 3) (identical? (first x) recur-marker)
+             (= (second x) target))
+    (nth x 2)))
+
+(def ^:private empty-env {:vals {} :boxed #{} :blocks {}})
+
+(defn- bind
+  "env with local bound to value: in an atom if the local is ^:mutable."
+  [env local value]
+  (let [id (:local/id local)]
+    (if (:local/mutable? local)
+      (-> env (assoc-in [:vals id] (atom value)) (update :boxed conj id))
+      (-> env (assoc-in [:vals id] value) (update :boxed disj id)))))
+
+(defn- bind-box
+  "env with local bound to the atom box (a letfn function)."
+  [env local box]
+  (let [id (:local/id local)]
+    (-> env (assoc-in [:vals id] box) (update :boxed conj id))))
+
+(defn- local-value [env local]
+  (let [id (:local/id local)
+        v (get (:vals env) id)]
+    (if (contains? (:boxed env) id) @v v)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Evaluation
+
+(def ^:private ev)
+(def ^:private ev-mv)
+
+(defn- format-location [loc]
+  (if loc (str (or (:file loc) "<input>") ":" (:line loc) ":" (:column loc)) "<unknown location>"))
+
+(defn- var-value
+  "The value of var, which phase-1 code reads at node."
+  [node var]
+  (%check-phase var)
+  (if (%var-defined? var)
+    (%var-value var)
+    (error (str "var " (%var-qualified-name var) " is unbound at "
+                (format-location (:loc node))))))
+
+(defn- choose-arity
+  "The arity of the fn node that takes argc arguments, or nil."
+  [node argc]
+  (let [arities (:arities node)]
+    (or (some (fn [a] (when (and (nil? (:rest a)) (= (count (:params a)) argc)) a)) arities)
+        (some (fn [a] (when (and (:rest a) (>= argc (count (:params a)))) a)) arities))))
+
+(defn- subvec* [v from]
+  (loop [i from out []]
+    (if (< i (count v)) (recur (inc i) (conj out (nth v i))) out)))
+
+(defn- bind-params
+  "env with the arity's parameters bound to args (a vector)."
+  [env arity args]
+  (let [params (:params arity)
+        n (count params)
+        env (reduce (fn [e [p v]] (bind e p v)) env (map vector params args))]
+    (if (:rest arity)
+      (bind env (:rest arity) (when (> (count args) n) (apply list (subvec* args n))))
+      env)))
+
+(defn- call-fn
+  "Call the interpreted function of fn node with args (a vector); self is the function."
+  [self closure-env node args]
+  (let [argc (count args)
+        arity (or (choose-arity node argc)
+                  (%arity-error (%function-name self) argc
+                                (str "wrong number of arguments (" argc ") passed to "
+                                     (%function-name self) " (defined at "
+                                     (format-location (:loc node)) ")")))
+        env (if (:self node) (bind closure-env (:self node) self) closure-env)]
+    (loop [args args]
+      (let [result (ev-mv (bind-params env arity args) (:body arity))
+            again (recur-of (first result) (:id arity))]
+        (cond again (recur (vec again))
+              (= (count result) 1) (first result)
+              :else (%apply-values result))))))
+
+(defn- make-fn
+  "The function that the fn node denotes in env."
+  [env node]
+  (let [cell (atom nil)
+        f (%named-fn (or (:name node) "fn")
+                     (fn [& args] (call-fn @cell env node (vec args))))]
+    (reset! cell f)
+    f))
+
+(defn- bind-sequentially
+  "env with each [local init] of bindings bound in turn."
+  [env bindings]
+  (reduce (fn [e [local init]] (bind e local (ev e init))) env bindings))
+
+(defn- bind-letfn [env bindings]
+  (let [boxes (mapv (fn [_] (atom nil)) bindings)
+        env (reduce (fn [e [[local] box]] (bind-box e local box)) env (map vector bindings boxes))]
+    (doseq [[[_ f] box] (map vector bindings boxes)]
+      (reset! box (make-fn env f)))
+    env))
+
+(defn- bind-let-values [env bindings]
+  (reduce (fn [e [locals init]]
+            (let [vs (ev-mv e init)]
+              (reduce (fn [e2 [i l]] (bind e2 l (nth vs i nil))) e (map-indexed vector locals))))
+          env bindings))
+
+(defn- run-loop
+  "loop*: its value, or with mv? a vector of its values."
+  [env node mv?]
+  (let [locals (mapv first (:bindings node))]
+    (loop [env (bind-sequentially env (:bindings node))]
+      (let [result (if mv? (ev-mv env (:body node)) (ev env (:body node)))
+            again (recur-of (if mv? (first result) result) (:id node))]
+        (if again
+          (recur (reduce (fn [e [l v]] (bind e l v)) env (map vector locals again)))
+          result)))))
+
+(defn- run-block
+  "block*: its value, or with mv? a vector of its values. A return-from* to it passes
+its value, or its values when they matter here."
+  [env node mv?]
+  (block* b
+    (let [env (assoc-in env [:blocks (:tag/id (:tag node))]
+                        {:mv? mv? :return (fn [v] (return-from* b v))})]
+      (if mv? (ev-mv env (:body node)) (ev env (:body node))))))
+
+(defn- run-return-from [env node]
+  (let [{:keys [mv? return]} (get (:blocks env) (:tag/id (:tag node)))]
+    (return (if mv? (ev-mv env (:value node)) (ev env (:value node))))))
+
+(defn- run-handler-bind [env node mv?]
+  (let [pairs (mapv (fn [[t h]] [(ev env t) (ev env h)]) (:bindings node))]
+    (%call-with-handlers (mapv first pairs) (mapv second pairs)
+                         (fn [] (if mv? (ev-mv env (:body node)) (ev env (:body node)))))))
+
+(defn- run-restart-bind [env node mv?]
+  (let [triples (mapv (fn [[nm f r]] [nm (ev env f) (ev env r)]) (:bindings node))]
+    (%call-with-restarts (mapv first triples) (mapv second triples)
+                         (mapv (fn [t] (nth t 2)) triples)
+                         (fn [] (if mv? (ev-mv env (:body node)) (ev env (:body node)))))))
+
+(defn- ev*
+  "The value of node in env."
+  [env node]
+  (case (:op node)
+    :const (:value node)
+    :local-ref (local-value env (:local node))
+    :var-ref (var-value node (:var node))
+    :if (if (ev env (:test node)) (ev env (:then node)) (ev env (:else node)))
+    :do (loop [forms (seq (:forms node)) value nil]
+          (if forms (recur (next forms) (ev env (first forms))) value))
+    :def (do (when (:init node) (%set-var-value! (:var node) (ev env (:init node))))
+             (:var node))
+    :fn (make-fn env node)
+    :let (ev (bind-sequentially env (:bindings node)) (:body node))
+    :letfn (ev (bind-letfn env (:bindings node)) (:body node))
+    :let-values (ev (bind-let-values env (:bindings node)) (:body node))
+    :loop (run-loop env node false)
+    :recur [recur-marker (:target node) (mapv (fn [a] (ev env a)) (:args node))]
+    :set (let [v (ev env (:value node))]
+           (reset! (get (:vals env) (:local/id (:local node))) v)
+           v)
+    :call (let [f (ev env (:fn node))]
+            (apply f (mapv (fn [a] (ev env a)) (:args node))))
+    :the (ev env (:expr node))
+    :locally (ev env (:body node))
+    :unwind-protect (try (ev env (:body node)) (finally (ev env (:cleanup node))))
+    :block (run-block env node false)
+    :return-from (run-return-from env node)
+    :values (let [vs (mapv (fn [a] (ev env a)) (:args node))] (first vs))
+    :throw-condition (throw-condition (ev env (:condition node)))
+    :handler-bind (run-handler-bind env node false)
+    :restart-bind (run-restart-bind env node false)))
+
+(def ^:private ev ev*)
+
+(defn- ev-mv*
+  "The values of node in env, as a vector, for a position where they all matter."
+  [env node]
+  (case (:op node)
+    :values (mapv (fn [a] (ev env a)) (:args node))
+    :call (let [f (ev env (:fn node))]
+            (%call-with-values f (mapv (fn [a] (ev env a)) (:args node))))
+    :if (if (ev env (:test node)) (ev-mv env (:then node)) (ev-mv env (:else node)))
+    :do (if (empty? (:forms node))
+          [nil]
+          (do (doseq [f (butlast (:forms node))] (ev env f))
+              (ev-mv env (last (:forms node)))))
+    :let (ev-mv (bind-sequentially env (:bindings node)) (:body node))
+    :letfn (ev-mv (bind-letfn env (:bindings node)) (:body node))
+    :let-values (ev-mv (bind-let-values env (:bindings node)) (:body node))
+    :the (ev-mv env (:expr node))
+    :locally (ev-mv env (:body node))
+    :loop (run-loop env node true)
+    :block (run-block env node true)
+    :unwind-protect (try (ev-mv env (:body node)) (finally (ev env (:cleanup node))))
+    :handler-bind (run-handler-bind env node true)
+    :restart-bind (run-restart-bind env node true)
+    [(ev env node)]))
+
+(def ^:private ev-mv ev-mv*)
+
+;;; ------------------------------------------------------------------------------------
+;;; Entry points
+
+(defn evaluate
+  "The value of a top-level Core IR node (as analyze-toplevel makes it)."
+  [node]
+  (ev empty-env node))

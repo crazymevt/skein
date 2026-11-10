@@ -354,6 +354,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%copy-symbol" "%identity-table" "%identity-get" "%identity-put!" "%f64-bits" "%f32-bits"
     "%decimal-to-float" "%generic?" "%arity-error-details" "%function-name" "%skein-error?"
     "%error-has-location?" "%core-function-names" "%core-function" "%registered-core-vars"
+    "%call-with-handlers" "%call-with-restarts" "%apply-values" "%call-with-values"
+    "%named-fn" "%arity-error" "%add-method"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -1043,18 +1045,25 @@ and register it with the runtime as a macro, for skein.compiler.env (D-060)."
   (emit-toplevel (make-def-node :location (node-location fn-node) :var var :init fn-node))
   (setf (unit-core-macros *unit*) (append (unit-core-macros *unit*) (list (var-c-name var)))))
 
+(defun registered-library-var-p (ns-name var-name)
+  "True if the program registers NS-NAME/VAR-NAME as a skein.core function for
+skein.compiler.env: a public var of skein.core.native, or a public % function of
+skein.compiler.env (D-060, D-061)."
+  (let* ((ns (and (member ns-name *library-namespaces* :test #'string=)
+                  (skein.runtime:find-namespace ns-name)))
+         (var (and ns (skein.runtime:find-own-var ns var-name))))
+    (and var (not (skein.runtime:var-private-p var))
+         (or (string= ns-name "skein.core.native") (char= (char var-name 0) #\%)))))
+
 (defun core-registrations (unit)
   "The C statements that register, for skein.compiler.env, the core macros the program
-compiled and the public vars of skein.core.native."
+compiled and the skein.core functions written in Skein."
   (when (unit-env-p unit)
     (append (mapcar (lambda (c) (format nil "sk_register_core_var(~A, 1);" c))
                     (unit-core-macros unit))
-            (let ((ns (skein.runtime:find-namespace "skein.core.native")))
-              (loop for (name ns-name var-name) in (unit-var-decls unit)
-                    for var = (and ns (string= ns-name "skein.core.native")
-                                   (skein.runtime:find-own-var ns var-name))
-                    when (and var (not (skein.runtime:var-private-p var)))
-                      collect (format nil "sk_register_core_var(~A, 0);" name))))))
+            (loop for (name ns-name var-name) in (unit-var-decls unit)
+                  when (registered-library-var-p ns-name var-name)
+                    collect (format nil "sk_register_core_var(~A, 0);" name)))))
 
 (defun emit-toplevel (node)
   "Emit a top-level form into the program body."

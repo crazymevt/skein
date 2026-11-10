@@ -780,3 +780,32 @@ Date: 2026-11-09 · Status: Accepted
   - The work found two native bugs, now fixed with tests: `quot`, `rem` and `mod` on bignums went through floats, and `apply` was limited to 256 arguments.
   - Phase rules aren't checked natively yet; the interpreter (step 4) will check them.
 
+## D-061: The interpreter of phase-1 code
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 4 of M1.9. The native compiler must run a program's own macros, and the functions they call, while it compiles the program (D-050, D-058). skein.core's macros are compiled in (D-060); the rest is Core IR that only the expander has produced.
+- **Decision:**
+  - **`skein.compiler.interp`** (`lib/skein/compiler/interp.skn`) evaluates Core IR maps directly. Its entry point is `evaluate`, for a top-level node.
+    - Interpreted functions are Skein closures named after their `fn` (`%named-fn`), so compiled code, such as the expander calling a macro, calls them like any function.
+    - A local's value is in the environment map; a `^:mutable` local or a `letfn` function is in an atom.
+    - `recur` returns a marker to its loop or arity.
+    - `block*` is Skein's own `block*`, with a closure that returns from it.
+    - `unwind-protect` is `try`/`finally`.
+    - Multiple values are carried as vectors in the positions where the C backend passes them on (`emit-tail`).
+    - Declared types are not checked.
+  - **New skein.core functions, internal to the compiler,** in Phase 0 and natively:
+    - `%call-with-handlers` and `%call-with-restarts`, because restart names are unevaluated symbols in `restart-bind*`;
+    - `%apply-values` and `%call-with-values`;
+    - `%named-fn` and `%arity-error`, so that a macro called with the wrong number of arguments is reported as in Phase 0;
+    - `%set-var-value!`, `%var-defined?` and `%check-phase`.
+  - Natively, the model also gets `%define-method`, on a new runtime function `%add-method`.
+  - **Phase rules** (DESIGN §4.4): while a macro runs, a var read by interpreted code is checked as Phase 0 checks it. A violation is warned about with Phase 0's message and the expansion goes on; Jessie chose warning over an error. Phase 0 no longer checks reads by the compiler's own namespaces (`skein.compiler.*`), which run while macros expand but aren't the macros' code.
+  - The programs that include `skein.compiler.env` also register its `%` functions as skein.core functions, so interpreted code finds `%set-macro!`, `%in-ns` and the rest natively.
+- **Alternatives:**
+  - Compiling a program's macros to C and loading them during the build (rejected by D-050).
+  - Closure conversion of the IR before interpreting. Faster, but not needed yet.
+  - Errors for phase violations, as DESIGN §4.4 first said. Programs that Phase 0 builds with a warning would then stop building natively.
+- **Consequences:**
+  - On the host, every example and native fixture (all but the typed one) prints the same when the Skein expander and the interpreter run it as under `skein run`.
+  - Natively, the native-compiler test program runs samples' own macros, with helpers, several arities, recursion, an arity error and a phase warning, and prints the same C as under `skein run`.
+  - A program's own structs aren't available to its macros natively yet.
+

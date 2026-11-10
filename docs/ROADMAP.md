@@ -212,7 +212,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   1. ✅ `skein.io`: `read-file`, `write-file`, `file-exists?` and `run-process`, in Phase 0 and natively.
   2. ✅ The C backend in Skein, running on the host on the Skein expander's IR: the same C as the Lisp backend for every example and native fixture.
   3. ✅ The compile-time environment natively: namespaces and vars at run time, symbol copies, identity tables, calling macros, and skein.core's macros compiled into the compiler.
-  4. A Core IR interpreter in Skein for phase-1 code: a program's macros and the functions they call.
+  4. ✅ A Core IR interpreter in Skein for phase-1 code: a program's macros and the functions they call.
   5. The driver in Skein (`skeinc build`): finding namespaces, running phase 1, writing C and running zig. On the host it gives the same C as `skein build`.
   6. Bootstrapping: Phase 0 builds `skeinc`, which builds itself twice; the two builds' C is identical, and `skeinc` builds every example to the same output. CI runs it on all three platforms.
 
@@ -282,10 +282,10 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - `skein build` loads a program's required namespaces on the host, running their top-level code, because their macros must exist to expand the program. Self-hosting (M1.9) should load them for syntax only (phase 1).
 - C backend in Skein (D-059): the lists of native skein.core functions and condition types are written in both backends until the Lisp one retires.
 - The native compiler's environment (D-060), for the next steps of M1.9:
-  - Phase rules (DESIGN §4.4) aren't checked natively yet: the interpreter (step 4) should check them where phase-1 code reads vars.
-  - `%struct-def-name` finds no structs until phase-1 code defines them (step 4), and `%require` needs the driver's loader (step 5).
+  - `%struct-def-name` finds no structs, and `%define-struct`/`%define-soa` have no function at phase 1 natively yet, so a program's own structs can't be used by its macros natively. `%require` needs the driver's loader (step 5).
   - `declaim` and `defonce` don't compile natively yet (`%declaim`, `%var-bound?`).
   - A program that includes `skein.compiler.env` registers every public var of skein.core.native at startup, and the model copies them into its skein.core.
+- The interpreter (D-061): declared types aren't checked in phase-1 code, and a handler or restart cluster holds at most 64 entries. Its speed hasn't been measured; macros are usually small.
 - Native concurrency (D-057):
   - Tasks, nurseries and channels share one lock, and waiters poll every 20 ms; fine for Phase 1's thread pool, replaced by the fiber scheduler in Phase 2.
   - Tasks, nurseries and channels are of class `any` natively, and print as in Phase 0.

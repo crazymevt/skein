@@ -183,10 +183,17 @@ namespace that is not available for syntax."))
       (mapc #'visit (namespace-syntax-requires ns))
       seen)))
 
+(defun compiler-namespace-p (ns)
+  "True if NS is part of the compiler written in Skein (skein.compiler.*), whose code runs
+while macros expand but is not theirs: the interpreter running a macro, say (D-061)."
+  (let ((name (namespace-name ns)))
+    (and (> (length name) 15) (string= "skein.compiler." name :end2 15))))
+
 (defun check-phase (var)
   (destructuring-bind (macro . location) *expansion-context*
     (let ((macro-ns (var-namespace macro)))
-      (unless (member (var-namespace var) (syntax-namespaces macro-ns))
+      (unless (or (member (var-namespace var) (syntax-namespaces macro-ns))
+                  (compiler-namespace-p (var-namespace var)))
         (let ((key (cons (var-qualified-name macro) (var-qualified-name var))))
           (unless (gethash key **phase-warned**)
             (setf (gethash key **phase-warned**) t)

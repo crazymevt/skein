@@ -669,6 +669,8 @@ is the Lisp backend's list."
     "%copy-symbol" "%identity-table" "%identity-get" "%identity-put!" "%f64-bits" "%f32-bits"
     "%decimal-to-float" "%generic?" "%arity-error-details" "%function-name" "%skein-error?"
     "%error-has-location?" "%core-function-names" "%core-function" "%registered-core-vars"
+    "%call-with-handlers" "%call-with-restarts" "%apply-values" "%call-with-values"
+    "%named-fn" "%arity-error" "%add-method"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -1466,19 +1468,26 @@ register it with the runtime as a macro, for skein.compiler.env."
   (let [st {:unit unit}]
     (swap! unit update :core-macros conj (var-c-name st var))))
 
+(defn- registered-library-var?
+  "True if the program registers ns-name/var-name as a skein.core function for
+skein.compiler.env: a public var of skein.core.native, or a public % function of
+skein.compiler.env (D-060, D-061)."
+  [ns-name var-name]
+  (let [ns (when (some #{ns-name} library-namespaces) (%find-namespace ns-name))
+        var (when ns (%find-own-var ns var-name))]
+    (boolean (and var (not (%var-private? var))
+                  (or (= ns-name "skein.core.native") (= (subs var-name 0 1) "%"))))))
+
 (defn- core-registrations
   "The C statements that register, for skein.compiler.env, the core macros the program
-compiled and the public vars of skein.core.native."
+compiled and the skein.core functions written in Skein."
   [u]
   (when (:env u)
-    (let [ns (%find-namespace "skein.core.native")]
-      (concat (map (fn [c] (str "sk_register_core_var(" c ", 1);")) (:core-macros u))
-              (keep (fn [[nm ns-name var-name]]
-                      (let [var (when (and ns (= ns-name "skein.core.native"))
-                                  (%find-own-var ns var-name))]
-                        (when (and var (not (%var-private? var)))
-                          (str "sk_register_core_var(" nm ", 0);"))))
-                    (:var-decls u))))))
+    (concat (map (fn [c] (str "sk_register_core_var(" c ", 1);")) (:core-macros u))
+            (keep (fn [[nm ns-name var-name]]
+                    (when (registered-library-var? ns-name var-name)
+                      (str "sk_register_core_var(" nm ", 0);")))
+                  (:var-decls u)))))
 
 (defn program-text
   "The C text of the program in unit, made from the file source-name. If main-var (the

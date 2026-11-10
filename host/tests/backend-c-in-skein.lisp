@@ -131,7 +131,9 @@ c-backend-error, or (:other text) for another failure of the Lisp side."
                     (asdf:system-relative-pathname "skein" (format nil "../examples/~A.skn" name)))
                   '("hello" "fib" "conditions" "collections" "macros" "objects" "particles"
                     "jobs"))
-          (directory (asdf:system-relative-pathname "skein" "tests/fixtures/native-*.skn"))
+          ;; merge-pathnames parses the wildcard; system-relative-pathname would escape it.
+          (directory (merge-pathnames "native-*.skn"
+                                      (asdf:system-relative-pathname "skein" "tests/fixtures/")))
           (list (asdf:system-relative-pathname "skein" "../bench/nbody/main.skn"))))
 
 (test c-backend-in-skein-matches-on-native-programs

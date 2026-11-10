@@ -238,6 +238,117 @@ fn coreFunctionNames() Value {
 }
 
 // ---------------------------------------------------------------------------------------
+// For the interpreter of phase-1 code (lib/skein/compiler/interp.skn, M1.9 step 4,
+// D-061): handlers and restarts given as data, multiple values, named functions and
+// arity errors.
+
+extern fn sk_mv_set(count: u32, values: [*]const Value) Value;
+extern fn sk_mv_buffer() [*]Value;
+extern fn sk_mv_count_get() i32;
+extern fn sk_mv_clear() void;
+
+const max_cluster = 64;
+
+fn vectorItems(v: Value, buf: []Value, comptime what: []const u8) []Value {
+    if (!coll.isVector(v)) rt.raise(.type_error, what ++ " needs a vector, not {s}", .{readable(v)});
+    const n = coll.vectorCount(v);
+    if (n > buf.len) rt.raise(.unsupported_operation_error, what ++ " with more than {d} items", .{buf.len});
+    for (0..n) |i| buf[i] = coll.vectorNth(v, i).?;
+    return buf[0..n];
+}
+
+/// Call `thunk` with a handler cluster of `types` (condition types or their names) and
+/// `handlers`, as handler-bind* does.
+fn callWithHandlers(types: Value, handlers: Value, thunk: Value) Value {
+    var tbuf: [max_cluster]Value = undefined;
+    var hbuf: [max_cluster]Value = undefined;
+    const ts = vectorItems(types, &tbuf, "%call-with-handlers");
+    const hs = vectorItems(handlers, &hbuf, "%call-with-handlers");
+    if (ts.len != hs.len) rt.raise(.@"error", "%call-with-handlers needs as many handlers as types", .{});
+    if (ts.len == 0) return func.call(thunk, 0, &.{});
+    var frame: cond.Frame = undefined;
+    cond.pushHandlers(&frame, ts, hs.ptr);
+    const v = func.call(thunk, 0, &.{});
+    cond.popFrame(&frame);
+    return v;
+}
+
+/// Call `thunk` with a restart cluster of `names` (symbols), `fns` and `reports`, as
+/// restart-bind* does.
+fn callWithRestarts(restart_names: Value, fns: Value, reports: Value, thunk: Value) Value {
+    var nbuf: [max_cluster]Value = undefined;
+    var fbuf: [max_cluster]Value = undefined;
+    var rbuf: [max_cluster]Value = undefined;
+    const ns = vectorItems(restart_names, &nbuf, "%call-with-restarts");
+    const fs = vectorItems(fns, &fbuf, "%call-with-restarts");
+    const rs = vectorItems(reports, &rbuf, "%call-with-restarts");
+    if (ns.len != fs.len or ns.len != rs.len) rt.raise(.@"error", "%call-with-restarts needs a function and a report per name", .{});
+    if (ns.len == 0) return func.call(thunk, 0, &.{});
+    var frame: cond.Frame = undefined;
+    cond.pushRestarts(&frame, ns, fs.ptr, rs.ptr);
+    const v = func.call(thunk, 0, &.{});
+    cond.popFrame(&frame);
+    return v;
+}
+
+/// Return the items of the vector `vs` as multiple values (the first, or nil).
+fn applyValues(vs: Value) Value {
+    var buf: [64]Value = undefined;
+    const items = vectorItems(vs, &buf, "%apply-values");
+    return sk_mv_set(@intCast(items.len), items.ptr);
+}
+
+/// Call `f` with the arguments in `args` (a vector); return a vector of all its values.
+fn callWithValues(f: Value, args: Value) Value {
+    var buf: [256]Value = undefined;
+    const items = vectorItems(args, &buf, "%call-with-values");
+    sk_mv_clear();
+    const first = func.call(f, @intCast(items.len), items.ptr);
+    const n = sk_mv_count_get();
+    if (n < 0) return coll.vectorOf(&.{first});
+    const values = sk_mv_buffer();
+    var out = coll.vectorOf(&.{});
+    for (0..@intCast(n)) |i| out = coll.vectorConj(out, values[i]);
+    sk_mv_clear();
+    return out;
+}
+
+var fn_names_lock: @import("platform").Mutex = .{};
+var fn_names: std.StringHashMapUnmanaged([:0]const u8) = .empty;
+
+/// A permanent C string for `name`, made once per name.
+fn internedName(name: []const u8) [*:0]const u8 {
+    fn_names_lock.lock();
+    defer fn_names_lock.unlock();
+    if (fn_names.get(name)) |n| return n.ptr;
+    const copy = std.heap.c_allocator.dupeSentinel(u8, name, 0) catch rt.fatal("out of memory", .{});
+    fn_names.put(std.heap.c_allocator, copy, copy) catch rt.fatal("out of memory", .{});
+    return copy.ptr;
+}
+
+fn namedCode(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
+    return func.call(func.capturedOf(self, 0), argc, argv);
+}
+
+/// `f` as a function whose name (in errors, %function-name) is `name`.
+fn namedFn(name: Value, f: Value) Value {
+    const s = @import("string.zig");
+    if (!s.isString(name)) rt.raise(.type_error, "%named-fn needs a name, not {s}", .{readable(name)});
+    return func.closure(namedCode, internedName(s.bytes(name)), &.{f});
+}
+
+/// An arity error about the function named `name`, called with `argc` arguments.
+fn arityError(name: Value, argc: Value, message: Value) noreturn {
+    const s = @import("string.zig");
+    const c = cond.makeBuiltin(.arity_error, if (s.isString(message)) s.bytes(message) else "wrong number of arguments");
+    coll.set(c, 2, coll.mapOf(&.{
+        names.symbol(null, "function-name"),  name,
+        names.symbol(null, "argument-count"), argc,
+    }));
+    cond.signalError(c);
+}
+
+// ---------------------------------------------------------------------------------------
 // skein.core functions (core.zig's table includes these)
 
 const Args = []const Value;
@@ -328,6 +439,42 @@ pub const entries = [_]Entry{
     .{ .name = "%registered-core-vars", .min = 0, .max = 0, .impl = struct {
         fn f(_: Args) Value {
             return registeredCoreVars();
+        }
+    }.f },
+    .{ .name = "%call-with-handlers", .min = 3, .max = 3, .impl = struct {
+        fn f(a: Args) Value {
+            return callWithHandlers(a[0], a[1], a[2]);
+        }
+    }.f },
+    .{ .name = "%call-with-restarts", .min = 4, .max = 4, .impl = struct {
+        fn f(a: Args) Value {
+            return callWithRestarts(a[0], a[1], a[2], a[3]);
+        }
+    }.f },
+    .{ .name = "%apply-values", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return applyValues(a[0]);
+        }
+    }.f },
+    .{ .name = "%call-with-values", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return callWithValues(a[0], a[1]);
+        }
+    }.f },
+    .{ .name = "%named-fn", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return namedFn(a[0], a[1]);
+        }
+    }.f },
+    .{ .name = "%add-method", .min = 5, .max = 5, .impl = struct {
+        fn f(a: Args) Value {
+            if (objects.genericOf(a[0]) == null) rt.raise(.type_error, "%add-method needs a generic function, not {s}", .{readable(a[0])});
+            return objects.defineMethod(a[0], a[1], a[2], a[3], a[4]);
+        }
+    }.f },
+    .{ .name = "%arity-error", .min = 3, .max = 3, .impl = struct {
+        fn f(a: Args) Value {
+            arityError(a[0], a[1], a[2]);
         }
     }.f },
 };

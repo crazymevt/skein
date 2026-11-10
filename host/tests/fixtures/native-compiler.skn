@@ -2,11 +2,13 @@
   (:require [skein.compiler.reader :as reader]
             [skein.compiler.expander :as expander]
             [skein.compiler.c :as c]
+            [skein.compiler.interp :as interp]
             [skein.core.native]))
 
-;; The compiler written in Skein, natively (M1.9 step 3): the reader, the expander, the
-;; C backend and skein.core's macros, with the compile-time environment of
-;; skein.compiler.env. This program translates sample programs to C. Under `skein run`
+;; The compiler written in Skein, natively (M1.9 steps 3 and 4): the reader, the
+;; expander, the C backend and skein.core's macros, with the compile-time environment of
+;; skein.compiler.env, and the interpreter running each sample's own macros (phase 1).
+;; This program translates sample programs to C. Under `skein run`
 ;; the % functions reach Phase 0's image; natively they reach the model. The C backend
 ;; tests check that both print the same, with local and gensym numbers renumbered.
 
@@ -42,8 +44,40 @@ expander's id counter starts wherever earlier use left it."
               (recur end true (assoc names id nm) (conj out nm)))
             (recur (inc i) (ident-char? ch) names (conj out (str ch)))))))))
 
+(defn- form-head [form]
+  (when (and (= :list (:kind form)) (seq (:datum form)))
+    (let [h (:datum (first (:datum form)))]
+      (when (and (symbol? h) (nil? (namespace h))) (name h)))))
+
+(defn- defining-call?
+  "True if ir calls one of skein.core's %define- functions."
+  [ir]
+  (and (= :call (:op ir)) (= :var-ref (:op (:fn ir)))
+       (= "skein.core" (%namespace-name (%var-namespace (:var (:fn ir)))))
+       (= "%define-" (subs (str (%var-name (:var (:fn ir))) "         ") 0 8))))
+
+(defn- phase-1?
+  "Whether a compiled top-level form also runs at phase 1 (D-058): a def of a function,
+or a definition of a struct, class, generic function or condition type."
+  [ir]
+  (or (and (= :def (:op ir)) (:init ir) (= :fn (:op (:init ir))))
+      (defining-call? ir)
+      (and (= :def (:op ir)) (:init ir) (defining-call? (:init ir)))))
+
+(defn- each-toplevel
+  "Call (f ir) for each top-level form that form expands to, in namespace ns."
+  [form ns f]
+  (loop [forms [form]]
+    (when (seq forms)
+      (let [expanded (expander/macroexpand (first forms) (expander/make-env ns))]
+        (if (expander/toplevel-do? expanded)
+          (recur (into (vec (rest (:datum expanded))) (rest forms)))
+          (do (f (expander/analyze-toplevel expanded ns))
+              (recur (rest forms))))))))
+
 (defn translate
-  "The C program for source, translated in the namespace ns-name."
+  "The C program for source, translated in the namespace ns-name. ns and defmacro forms
+run at phase 1 only; other forms are compiled, and defs of functions run at phase 1 too."
   [ns-name source]
   (let [saved (%current-namespace-name)
         ns (%in-ns (symbol ns-name))
@@ -53,13 +87,11 @@ expander's id counter starts wherever earlier use left it."
       (loop []
         (let [form (reader/read-form r false ::eof)]
           (when-not (= form ::eof)
-            (loop [forms [form]]
-              (when (seq forms)
-                (let [expanded (expander/macroexpand (first forms) (expander/make-env ns))]
-                  (if (expander/toplevel-do? expanded)
-                    (recur (into (vec (rest (:datum expanded))) (rest forms)))
-                    (do (c/emit-toplevel unit (expander/analyze-toplevel expanded ns) ns)
-                        (recur (rest forms)))))))
+            (if (contains? #{"ns" "defmacro"} (form-head form))
+              (each-toplevel form ns interp/evaluate)
+              (each-toplevel form ns (fn [ir]
+                                       (when (phase-1? ir) (interp/evaluate ir))
+                                       (c/emit-toplevel unit ir ns))))
             (recur))))
       (canonical-gensyms (canonical-locals (c/program-text unit "sample.skn" nil)))
       (catch error e (str "error: " (condition-message e)))
@@ -81,7 +113,8 @@ expander's id counter starts wherever earlier use left it."
     (doseq [i (range 3) :when (odd? i)] (prn i))
     (prn (for [i (range 3) j [:a :b] :when (pos? i)] [i j]))
     (dotimes [i 2] (prn i))
-    (letfn [(ev? [n] (if (zero? n) true (od? (dec n)))) (od? [n] (if (zero? n) false (ev? (dec n))))]
+    (letfn [(ev? [n] (if (zero? n) true (od? (dec n))))
+            (od? [n] (if (zero? n) false (ev? (dec n))))]
       (prn (ev? 10)))"
    "(defcondition oops [error] (code :reader oops-code))
     (prn (try (error 'oops :code 4) (catch oops e (oops-code e)) (finally (prn :done))))
@@ -112,6 +145,30 @@ expander's id counter starts wherever earlier use left it."
     (handler-bind [error (fn [c] (prn :seen))] (try (error \"x\") (catch error e :caught)))
     (prn (with-timeout 1.0 :fast) (on-main-thread :main) @(spawn-pinned :main 1))
     (let [a (make-array fixnum 4)] (pdotimes [k 4] (aset! a k k)) (prn (seq a)))"
+   ;; A program's own macros, run by the interpreter (step 4): one calls a helper defined
+   ;; earlier in the file.
+   "(defn- twice-form [x] (list 'do x x))
+    (defmacro twice [x] (twice-form x))
+    (defmacro unless [test & body] `(if ~test nil (do ~@body)))
+    (defmacro with-log [label & body] `(let [r# (do ~@body)] (prn ~label r#) r#))
+    (defmacro swap-args ([f a b] `(~f ~b ~a)) ([f a b & more] `(~f ~b ~a ~@more)))
+    (defmacro defconst [nm v] `(def ~nm ~(* 2 v)))
+    (defmacro my-cond [& clauses]
+      (when (seq clauses)
+        (let [[t e & more] clauses] `(if ~t ~e (my-cond ~@more)))))
+    (twice (prn :hi))
+    (unless false (prn :ok))
+    (with-log :sum (+ 1 2))
+    (prn (swap-args - 1 10) (swap-args list 1 2 3))
+    (defconst k 21)
+    (prn k (my-cond false 1 nil 2 :else 3))"
+   "(defmacro twice [x] `(do ~x ~x))
+    (twice)"
+   ;; A macro using another namespace's function at phase 1, without :require-for-syntax:
+   ;; a warning, as in Phase 0.
+   "(defn helper [x] (list 'inc x))"
+   "(defmacro uses-helper [x] (sample10/helper x))
+    (prn (uses-helper 1))"
    ;; Not supported natively yet; both fail the same way.
    "(declaim (ftype (fn [fixnum] fixnum) twice))"
    "(defonce once 1)"
@@ -120,4 +177,7 @@ expander's id counter starts wherever earlier use left it."
 
 (doseq [[i source] (map-indexed vector samples)]
   (println "=== sample" i)
-  (println (translate (str "sample" i) source)))
+  (println (handler-bind [warning (fn [w]
+                                    (println "warning:" (condition-message w))
+                                    (invoke-restart 'muffle-warning))]
+             (translate (str "sample" i) source))))

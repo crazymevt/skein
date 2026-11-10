@@ -135,6 +135,7 @@ Following Racket, code runs either at **compile time (phase 1)**, which is macro
 - **Why:** when cross-compiling, phase 1 runs on the build machine and phase 0 code is compiled for the target. Mixing them, as Common Lisp's `eval-when` does, causes subtle cross-compilation bugs.
 - **Phase 0 implementation note:** the SBCL host runs both phases in one image. It must still *record* phase information and *warn* when phase-0 code is called during expansion without `:require-for-syntax`. Phase 1 of the roadmap (the native compiler) enforces the rule.
 - **Native compiler (D-058):** at phase 1, the native compiler runs only a namespace's `ns` form, its `defmacro`s, its `def`s whose value is a function, and its struct, class and condition-type definitions, in every namespace it compiles, the program's and the ones it requires. Other top-level forms, such as a `println` or a `def` of computed data, run only at phase 0, in the built program. Phase-1 code runs in an interpreter (D-050).
+- The native compiler warns about a phase violation as Phase 0 does, with the same message, and the macro still runs (D-061).
 
 ## 5. Special forms and core macros
 
@@ -727,6 +728,7 @@ Backend
   - The expander is `skein.compiler.expander` (`lib/skein/compiler/expander.skn`, D-049). It produces Core IR as maps (`docs/CORE-IR.md`), and reaches the image's namespaces and vars, and calls macros, through internal `%` functions of skein.core (`host/src/runtime/compile-env.lisp` in Phase 0).
   - The C backend is `skein.compiler.c` (`lib/skein/compiler/c.skn`, D-059). It turns those maps into the same C as the Lisp backend, keeping its state in a map passed down each call rather than in dynamic vars.
   - Natively, the compiler's namespaces and vars are a model in `skein.compiler.env` (`lib/skein/compiler/env.skn`, D-060), separate from the vars of the compiler itself, so compiling a program never changes the running compiler. Its skein.core holds the runtime's functions, the library's, and the macros of `core.skn`, which are compiled into any program that includes the model.
+  - Phase-1 code, a program's own macros and the functions they call, runs in `skein.compiler.interp` (`lib/skein/compiler/interp.skn`, D-061), which evaluates the expander's Core IR maps. Interpreted functions are ordinary functions, so compiled code calls them directly.
 - **Compilation unit:** the namespace. Compiled output is cached per namespace, keyed by a source hash plus the hashes of its macro dependencies.
 
 ## 17. Runtime architecture (Phase 1+)

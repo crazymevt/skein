@@ -84,3 +84,8 @@ sk_value sk_try_call(sk_value fn, uint32_t argc, const sk_value *argv, uint32_t 
     }
     return result;
 }
+
+/* For the interpreter's %call-with-values (runtime/src/compiler.zig): the registers'
+ * count, and starting a call from one value. */
+int32_t sk_mv_count_get(void) { return sk_mv_count; }
+void sk_mv_clear(void) { sk_mv_count = SK_MV_SINGLE; }

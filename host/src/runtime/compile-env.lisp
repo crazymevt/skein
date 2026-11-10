@@ -118,3 +118,68 @@ received to that form's metadata (as data), for %syntax-meta.")
 (defcore "%namespace-requires" (ns)
   ;; The namespaces NS requires at run time, in the order its ns form requires them.
   (vector-from-list (reverse (namespace-requires ns))))
+
+;;; For the interpreter of phase-1 code (lib/skein/compiler/interp.skn, M1.9 step 4,
+;;; D-061). The native runtime has the same functions (runtime/src/compiler.zig), and
+;;; skein.compiler.env the ones about vars.
+
+(defun sapply (f args)
+  (if (functionp f) (apply f args) (apply #'invoke-other f nil args)))
+
+(defcore "%call-with-handlers" (types handlers thunk)
+  ;; Call THUNK with handlers established as handler-bind* does: one cluster, tried in
+  ;; order.
+  (let ((entries (mapcar (lambda (type handler)
+                           (cons (condition-type-class (find-condition-type type)) handler))
+                         (seq-to-cl types) (seq-to-cl handlers))))
+    (handler-bind ((condition (lambda (c)
+                                (loop for (class . handler) in entries
+                                      when (typep c class) do (scall handler c)))))
+      (scall thunk))))
+
+(defcore "%call-with-restarts" (names fns reports thunk)
+  ;; Call THUNK with restarts established as restart-bind* does; NAMES are symbols.
+  (let ((sb-kernel:*restart-clusters*
+          (cons (mapcar (lambda (name f report)
+                          (let ((cl-name (restart-cl-name name)))
+                            (sb-kernel:make-restart
+                             cl-name
+                             (lambda (&rest args) (sapply f args))
+                             (lambda (stream)
+                               (write-string (if report
+                                                 (display-string report)
+                                                 (symbol-name cl-name))
+                                             stream)))))
+                        (seq-to-cl names) (seq-to-cl fns) (seq-to-cl reports))
+                sb-kernel:*restart-clusters*)))
+    (scall thunk)))
+
+(defcore "%apply-values" (vs) (values-list (seq-to-cl vs)))
+
+(defcore "%call-with-values" (f args)
+  ;; Call F with the vector ARGS; return a vector of all its values.
+  (vector-from-list (multiple-value-list (sapply f (seq-to-cl args)))))
+
+(defcore "%named-fn" (name f)
+  ;; F (a closure) under the name NAME, for %function-name, printing and arity errors.
+  (if (sb-kernel:closurep f) (sb-int:set-closure-name f t name) f))
+
+(defcore "%arity-error" (name argc message)
+  (error 'arity-error :function-name name :argument-count argc :location nil
+                      :message message))
+
+(defcore "%set-var-value!" (var value) (def-var var value) value)
+
+(defcore "%var-defined?" (var) (bool (var-bound-p var)))
+
+(defcore "%check-phase" (var)
+  ;; While a macro written in Skein runs, warn if it uses VAR against DESIGN §4.4.
+  (when *expansion-context* (check-phase var))
+  nil)
+
+(defcore "%add-method" (gf qualifier specializers rest-p fn)
+  ;; Natively, skein.compiler.env's %define-method adds methods through this. In Phase 0
+  ;; %define-method does it itself.
+  (declare (ignore gf qualifier specializers rest-p fn))
+  (skein-error 'skein-error nil "%add-method is only used by the native compiler"))
+

@@ -99,7 +99,8 @@
                (:file "math")
                (:file "io")
                (:file "backend-c-in-skein")
-               (:file "backend-c"))
+               (:file "backend-c")
+               (:file "interp"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run!
                                        (uiop:find-symbol* :all :skein.tests))
