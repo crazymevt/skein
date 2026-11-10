@@ -732,8 +732,9 @@ as skein.core functions named skein.ffi/<name>. Phase 0 defines them in CL."
       (let [nm (str "skein.ffi/" (%var-name var))]
         (startup-constant st [:core nm] (str "sk_core(" (c-string-literal nm) ")")))
       (and (ffi-var? var) (contains? #{"%define-function" "%define-callback"} (%var-name var)))
-      (unsupported node (if (= (%var-name var) "%define-function") "defcfun" "defcallback")
-                   " isn't supported natively yet (M1.10)")
+      (unsupported node "skein.ffi/" (%var-name var) " is supported natively only as "
+                   (if (= (%var-name var) "%define-function") "defcfun" "defcallback")
+                   " expands it")
       :else (emit-var-ref* st node var))))
 
 (defn- emit-var-ref* [st node var]
@@ -1356,29 +1357,30 @@ qualified name of an enum}."
         :else (unsupported node "unsupported foreign type " (pr-str t))))
 
 (defn- ffi-argument
-  "The C expression converting argument i (an sk_value) to a C value as described."
-  [desc i]
-  (let [arg (str "argv[" i "]")]
-    (case (:kind desc)
-      :int (str "(" (:c desc) ")sk_ffi_to_int(" arg ")")
-      :enum (str "(" (:c desc) ")sk_ffi_enum(" (c-string-literal (:enum desc)) ", " arg ")")
-      :float (str "(" (:c desc) ")sk_ffi_to_f64(" arg ")")
-      :bool (str "SK_TRUTHY(" arg ")")
-      :c-string (str "sk_ffi_to_cstring(" arg ")")
-      :ptr (str "(void*)sk_ffi_to_address(" arg ")"))))
+  "The C expression converting arg (a C expression giving an sk_value) to a C value as
+described."
+  [desc arg]
+  (case (:kind desc)
+    :int (str "(" (:c desc) ")sk_ffi_to_int(" arg ")")
+    :enum (str "(" (:c desc) ")sk_ffi_enum(" (c-string-literal (:enum desc)) ", " arg ")")
+    :float (str "(" (:c desc) ")sk_ffi_to_f64(" arg ")")
+    :bool (str "SK_TRUTHY(" arg ")")
+    :c-string (str "sk_ffi_to_cstring(" arg ")")
+    :ptr (str "(void*)sk_ffi_to_address(" arg ")")))
 
 (defn- ffi-result
-  "The C expression converting the C result r to an sk_value."
-  [desc owned]
+  "The C expression converting r (a C expression giving a value as described) to an
+sk_value."
+  [desc owned r]
   (case (:kind desc)
     :void "SK_NIL"
     (:int :enum) (if (= "u" (subs (:name desc) 0 1))
-                   "sk_ffi_from_u64((uint64_t)r)"
-                   "sk_ffi_from_i64((int64_t)r)")
-    :float (if (= (:name desc) "f32") "sk_from_f32(r)" "sk_f64(r)")
-    :bool "SK_BOOL(r)"
-    :c-string "sk_ffi_from_cstring(r)"
-    :ptr (if owned "sk_ffi_owned((uintptr_t)r)" "sk_ffi_pointer((uintptr_t)r)")))
+                   (str "sk_ffi_from_u64((uint64_t)" r ")")
+                   (str "sk_ffi_from_i64((int64_t)" r ")"))
+    :float (if (= (:name desc) "f32") (str "sk_from_f32(" r ")") (str "sk_f64(" r ")"))
+    :bool (str "SK_BOOL(" r ")")
+    :c-string (str "sk_ffi_from_cstring(" r ")")
+    :ptr (str (if owned "sk_ffi_owned" "sk_ffi_pointer") "((uintptr_t)" r ")")))
 
 (defn- emit-define-function
   "(skein.ffi/%define-function 'name \"c_name\" 'return '[[param type]...] blocking owned):
@@ -1417,7 +1419,7 @@ C type (looked up on the first call) and converts the result, as Phase 0's defcf
     (line "  if (argc != " n ") return sk_arity_error(self, argc, " (location-literal node) ");")
     (line "  if (!sym) sym = sk_ffi_symbol(" (c-string-literal c-name) ");")
     (doseq [[i d] (map-indexed vector pdescs)]
-      (line "  " (:c d) " a" i " = " (ffi-argument d i) ";"))
+      (line "  " (:c d) " a" i " = " (ffi-argument d (str "argv[" i "]")) ";"))
     (if blocking
       (do (line "  struct " code "_call c = {sym"
                 (concat-strings (map (fn [i] (str ", a" i)) (range n))) "};")
@@ -1428,7 +1430,7 @@ C type (looked up on the first call) and converts the result, as Phase 0's defcf
           (line "  sk_ffi_check_slow(start, &warned, " (c-string-literal c-name) ");")))
     (doseq [[i d] (map-indexed vector pdescs)]
       (when (= (:kind d) :c-string) (line "  sk_ffi_free_cstring(a" i ");")))
-    (line "  return " (ffi-result rdesc owned) ";")
+    (line "  return " (ffi-result rdesc owned "r") ";")
     (line "}")
     (swap! (:unit st) (fn [u] (-> u
                                   (update :prototypes conj
@@ -1441,12 +1443,81 @@ C type (looked up on the first call) and converts the result, as Phase 0's defcf
       (stmt st "sk_var_set(" (var-c-name st var) ", " fobj ");")
       (single-value st "SK_NIL"))))
 
+(def ^:private callback-zeros
+  {:int "0" :enum "0" :bool "0" :float "0.0" :c-string "nil" :ptr "nil" :void ""})
+
+(defn- emit-define-callback
+  "(skein.ffi/%define-callback 'ns/name 'return '[[param type]...] f): a C function of
+the C type that the parameter and return types describe. It converts its arguments,
+calls f and converts the result, as Phase 0's defcallback does (D-068). An error, in f
+or in converting its result, warns and returns zero. The var named name in this
+namespace is set to a pointer to the C function."
+  [st node args]
+  (let [[nm ret params] (mapv :value (take 3 args))
+        qualified (str (namespace nm) "/" (name nm))
+        _ (when (some (fn [[_ t]] (nil? t)) params)
+            (unsupported node "every parameter of " qualified " needs a type"))
+        pdescs (mapv (fn [[_ t]] (ffi-type-desc st node t qualified)) params)
+        rdesc (ffi-type-desc st node ret qualified)
+        void? (= (:kind rdesc) :void)
+        code (fresh st "cb")
+        body (fresh st "fobj")
+        target (startup-constant st [:callback code] "SK_NIL")
+        n (count params)
+        out (atom [])
+        line (fn [& parts] (swap! out conj (str (concat-strings parts) "\n")))
+        formals (if (seq pdescs)
+                  (join ", " (map-indexed (fn [i d] (str (:c d) " a" i)) pdescs))
+                  "void")
+        signature (str "static " (:c rdesc) " " code "(" formals ")")]
+    ;; The C function puts its arguments in a frame and calls the body, a Skein function,
+    ;; which converts them and the result inside the runtime's error handler.
+    (line "struct " code "_frame { int unused;"
+          (concat-strings (map-indexed (fn [i d] (str " " (:c d) " a" i ";")) pdescs))
+          (if void? "" (str " " (:c rdesc) " r;")) " };")
+    (line "static sk_value " code "_body(sk_value self, uint32_t argc, const sk_value *argv) {")
+    (line "  struct " code "_frame *c = (struct " code "_frame *)sk_ffi_to_address(argv[0]);")
+    (line "  (void)self;")
+    (line "  (void)argc;")
+    (if (zero? n)
+      (line "  sk_value v = sk_call(" target ", 0, NULL);")
+      (do (line "  const sk_value args[] = {"
+                (join ", " (map-indexed (fn [i d] (ffi-result d false (str "c->a" i))) pdescs))
+                "};")
+          (line "  sk_value v = sk_call(" target ", " n ", args);")))
+    (if void?
+      (line "  (void)v;")
+      (line "  c->r = " (ffi-argument rdesc "v") ";"))
+    (line "  return SK_NIL;")
+    (line "}")
+    (line signature " {")
+    (line "  struct " code "_frame c = {0"
+          (concat-strings (map (fn [i] (str ", a" i)) (range n))) "};")
+    (line "  sk_ffi_callback(" body ", (uintptr_t)&c, " (c-string-literal qualified) ", "
+          (c-string-literal (get callback-zeros (:kind rdesc))) ");")
+    (when-not void? (line "  return c.r;"))
+    (line "}")
+    (swap! (:unit st) (fn [u] (-> u
+                                  (update :prototypes conj (str signature ";"))
+                                  (update :prototypes conj
+                                          (str "static sk_value " code "_body(sk_value self, "
+                                               "uint32_t argc, const sk_value *argv);"))
+                                  (update :functions conj (concat-strings @out))
+                                  (update :fn-objects conj [body (str code "_body")
+                                                            qualified]))))
+    (let [fv (emit st (nth args 3))
+          var (%intern-var (:ns st) (name nm))]
+      (stmt st target " = " fv ";")
+      (stmt st "sk_var_set(" (var-c-name st var) ", sk_ffi_pointer((uintptr_t)" code "));")
+      (single-value st "SK_NIL"))))
+
 (defn- emit-call [st node]
   (let [f (:fn node)
         args (qualify-condition-type-call f (:args node))]
     (cond (or (ffi-call? f "%define-struct" args 3) (ffi-call? f "%define-enum" args 3))
           (emit-ffi-definition st node f args)
           (ffi-call? f "%define-function" args 6) (emit-define-function st node args)
+          (ffi-call? f "%define-callback" args 4) (emit-define-callback st node args)
           (core-call? f "%define-struct" args 3) (emit-define-struct st node args)
           (core-call? f "%define-soa" args 2) (emit-define-soa st node args)
           :else

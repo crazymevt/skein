@@ -27,7 +27,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.7 Expander and Core IR in Skein | ✅ |
 | M1.8 Native `skein.core` | ✅ |
 | M1.9 Self-hosting | ✅ |
-| M1.10 Native FFI | ⬜ |
+| M1.10 Native FFI | 🟨 |
 | M1.11 `skein build` and `skein package` | ⬜ |
 | M1.12 Driftrock native | ⬜ |
 
@@ -225,7 +225,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order:
   1. ✅ The runtime's FFI: foreign pointers, loading libraries and finding symbols, structs, unions and enums with C layouts, memory access, handles, and owned pointers freed by the GC. skein.ffi's functions natively.
   2. ✅ `defcfun` in `skeinc`: typed C calls with Phase 0's conversions (C strings, enums, `nil` as NULL), arrays pinned for the call, `^:owned` results, `^:blocking` calls that let the GC run, and the slow-call warning.
-  3. `defcallback`: C functions that call Skein; an error warns and returns zero, as in Phase 0.
+  3. ✅ `defcallback`: C functions that call Skein; an error warns and returns zero, as in Phase 0.
   4. `examples/sdl/window.skn`, built by `skeinc`, runs natively on all three platforms in CI.
 
 **Exit:** `examples/sdl/window.skn` runs natively on all three platforms.
@@ -315,4 +315,4 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - No top-level `abort`/`continue`/`exit` restarts exist natively; Phase 0's come from `skein run` and SBCL.
   - A condition type named by a symbol at run time (`(error 'foo)`) is found by its unique unqualified name, until namespaces exist at run time (M1.8).
   - Some native messages differ from Phase 0's, where Phase 0 shows CL's wording (index errors, returning to an exited block).
-  - M1.10 (native FFI) must decide what unwinding through foreign C frames does, as in a Skein callback that signals into a `handler-case` outside the C call. longjmp skips foreign cleanups on POSIX and needs unwind tables on Windows.
+  - Unwinding through foreign C frames: decided in M1.10 (D-068). No non-local exit leaves a callback.

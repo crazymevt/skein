@@ -632,10 +632,10 @@ Phase 0 details (D-038):
 - C `NULL` is `nil`, both as a result and as an argument (including `c-string`).
 - `(ptr T)` documents the pointee; all pointers are passed alike. Function pointers are `ptr`; `defcallback` makes one.
 - Structs and unions are passed to and from functions by pointer only; by-value struct arguments and results are not supported yet. Inside structs they are stored inline. Reading a field that holds a struct, union or array returns its address.
-- C code runs with float traps masked. A callback that signals an error warns and returns zero, since errors cannot unwind through C.
+- C code runs with float traps masked. A callback that signals an error warns and returns zero, since errors cannot unwind through C. No other non-local exit can leave a callback either: invoking a restart or returning from a block established outside the C call, or a handler outside that unwinds, is stopped where C called the callback, which warns and returns zero (D-068).
 - Libraries are searched in `SKEIN_LIBRARY_PATH` (`:`-separated, `;` on Windows), then `/opt/homebrew/lib` and `/usr/local/lib` on macOS, `/usr/local/lib` on Linux, then the OS search path.
 
-Native details (Phase 1, D-064, D-065): the same API and rules. `deflibrary` loads the library when the program runs, a C function is looked up when first called (in the loaded libraries, then the whole process), and the C backend compiles each call to a typed C call. Struct and union layouts follow C's alignment rules. Native FFI programs are built by `skeinc`; `./skein build` doesn't compile them.
+Native details (Phase 1, D-064, D-065): the same API and rules. `deflibrary` loads the library when the program runs, a C function is looked up when first called (in the loaded libraries, then the whole process), and the C backend compiles each call to a typed C call. Struct and union layouts follow C's alignment rules. Native FFI programs are built by `skeinc`; `./skein build` doesn't compile them. A callback is a C function of the exact C type; it converts its arguments, calls the Skein function and converts the result inside an error handler, so an error warns (naming the callback and the zero it returns) and never unwinds through C (D-068). On Linux the process's symbols include libm's (D-067).
 
 ### 14.2 Ownership and memory
 Return-value annotations:
@@ -651,7 +651,7 @@ Further rules:
 ### 14.3 Blocking calls and threads
 - A call marked `^:blocking` releases its worker thread to the scheduler, which starts a replacement if needed. Unmarked calls are assumed to be short. In dev mode, unmarked calls that take longer than 10 ms produce a warning.
 - Phase 0 (D-038) has no scheduler to hand the thread to, so `^:blocking` only silences the warning; unmarked calls warn once per function.
-- **Callbacks from foreign threads:** a C thread entering Skein through a callback is attached to the runtime on first entry and runs the callback as a temporary fiber.
+- **Callbacks from foreign threads:** a C thread entering Skein through a callback is attached to the runtime on first entry and runs the callback as a temporary fiber. Phase 1 has no fibers: natively such a thread is attached for each callback and detached when it returns to C, and a callback made during a `^:blocking` call takes its thread out of the blocking state while it runs (D-068).
 
 ### 14.4 Binding generator
 

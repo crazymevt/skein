@@ -908,3 +908,20 @@ Date: 2026-11-10 · Status: Accepted
   - Making the fixture load libm with `deflibrary`. Programs would then find math functions under `skein run` but not natively.
   - Keeping libm linked by naming a function only libm has. That depends on what compiler_rt provides.
 - **Consequences:** C math functions are found natively on every platform, as in Phase 0. A runtime test checks `strlen`, `exp` and `cbrt`.
+
+## D-068: Native callbacks
+Date: 2026-11-10 · Status: Accepted
+- **Context:** Step 3 of M1.10: `defcallback` natively. C calls the callback with C values, on any thread, sometimes during a `^:blocking` call. Natively, non-local exits unwind with `longjmp`, which skips C's cleanups (SDL could be left holding a lock) and on Windows depends on every frame's unwind tables. Phase 0 let exits other than errors unwind through C. Jessie chose to stop them at the boundary instead, in both phases.
+- **Decision:**
+  - **`skeinc` compiles each `defcallback`** (`skein.ffi/%define-callback` with constant name and types) into a C function of the exact C type, and sets the var named after it to a pointer to that function, as Phase 0 does. The Skein function is kept in a global.
+  - **The C function** puts its arguments in a frame on its stack and calls `sk_ffi_callback` with a body: a compiled Skein function that converts the arguments, calls the Skein function and stores the converted result in the frame. Conversions are Phase 0's: an enum argument arrives as an integer, `nil` returns NULL, and a returned `c-string` is a copy C must free.
+  - **Errors:** the body runs under a handler for `error` (`sk_try_call`), so an error in the function or in converting its result warns `callback ns/name signaled MSG; returning 0` (or `0.0` or `nil`; nothing for `void`) and C gets zero. Phase 0's warning names the zero the same way now, instead of printing a Lisp form.
+  - **No exit crosses C:** the call runs inside a barrier, a new kind of frame (`SK_FRAME_BARRIER`). An unwind that reaches one stops there, as at an unwind-protect, but goes no further. So invoking a restart established outside the C call, returning from a block outside, or a handler outside that unwinds is stopped: the callback warns `callback ns/name tried to exit through C; returning 0` and C gets zero. Handlers outside still run. The warning is signaled inside a barrier too, so a handler that tries to exit for it is stopped silently. Phase 0 does the same with an `unwind-protect` whose cleanup returns from a block inside the callback, which abandons the exit.
+  - **Threads and the GC:** on entry, a thread in a `^:blocking` call leaves the blocking state, waiting for any collection to finish, and goes back to it on return. A thread the runtime doesn't know is attached for the callback and detached when it returns, since it may exit while in C. A thread already running Skein (an unmarked call) just runs.
+- **Alternatives:**
+  - Keeping a foreign thread attached after its first callback, as DESIGN §14.3 describes with fibers. The collector would scan a stack that may no longer exist once the thread exits. Phase 2's fibers revisit this.
+  - libffi closures. They need a dependency, and the C backend knows every callback's type.
+  - Letting exits unwind through C, as Phase 0 did. It skips C's cleanups and may break with some libraries.
+- **Consequences:**
+  - The native FFI fixture sorts with `qsort` (directly and as a blocking call) and searches with `bsearch` using Skein comparators, one of them allocating enough to collect while C's frames are on the stack, and one that errors. A restart invoked from a callback and a handler outside catching a callback's warning are stopped at the boundary. Callbacks of the other types are compiled; the C library can't call them. `host/tools/bootstrap.sh` checks the warnings a fixture's `;; stderr:` comments give.
+  - A runtime test enters callbacks from a blocking call and from threads the runtime doesn't know, collecting meanwhile.

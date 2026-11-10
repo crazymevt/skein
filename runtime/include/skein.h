@@ -69,6 +69,9 @@ sk_value sk_ffi_from_cstring(uintptr_t p);
 void sk_ffi_blocking(void (*f)(void *), void *arg);
 uint64_t sk_ffi_now(void);
 void sk_ffi_check_slow(uint64_t start, int *warned, const char *c_name);
+/* Compiled callbacks (defcallback, M1.10, D-068): call body with a pointer to the C call's
+ * frame; an error warns, naming the callback and the zero it returns (none if ""). */
+void sk_ffi_callback(sk_value body, uintptr_t frame, const char *name, const char *zero);
 sk_value sk_unbound(const char *name, const char *location);
 
 sk_value sk_add_slow(sk_value a, sk_value b);
@@ -101,14 +104,16 @@ void sk_closure_set(sk_value f, size_t i, sk_value value);
  * unwinds with longjmp to the frame's jmp_buf, so a function that pushes a block or
  * unwind-protect frame calls SK_SETJMP itself and keeps its locals volatile.
  * runtime/src/cond.zig mirrors every field before jb. */
-/* SK_FRAME_SCOPE frames hold cancellation scopes (tasks, nurseries, deadlines); only the
+/* SK_FRAME_SCOPE frames hold cancellation scopes (tasks, nurseries, deadlines);
+ * SK_FRAME_BARRIER frames stop non-local exits where C called Skein (D-068). Only the
  * runtime pushes them. */
 enum {
     SK_FRAME_BLOCK = 1,
     SK_FRAME_UNWIND = 2,
     SK_FRAME_HANDLERS = 3,
     SK_FRAME_RESTARTS = 4,
-    SK_FRAME_SCOPE = 5
+    SK_FRAME_SCOPE = 5,
+    SK_FRAME_BARRIER = 6
 };
 
 typedef struct sk_frame {
@@ -136,6 +141,10 @@ _Noreturn void sk_return_from(sk_value token, sk_value value);
  * [i condition] for a condition of types[i]. */
 sk_value sk_try_call(sk_value fn, uint32_t argc, const sk_value *argv, uint32_t ntypes,
                      sk_value *types);
+/* sk_try_call inside a barrier (callbacks, D-068): a non-local exit that would leave it is
+ * stopped there, and then the result is nil. */
+sk_value sk_try_call_stopping_exits(sk_value fn, uint32_t argc, const sk_value *argv,
+                                    uint32_t ntypes, sk_value *types);
 _Noreturn void sk_continue_unwind(sk_frame *f);
 _Noreturn void sk_throw_condition(sk_value condition);
 sk_value sk_builtin_condition_type(const char *name);

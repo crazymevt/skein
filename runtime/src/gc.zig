@@ -455,6 +455,41 @@ fn blockingInner(arg: ?*anyopaque) callconv(.c) void {
     world.unlock();
 }
 
+/// How a thread was when C called Skein (a callback, M1.10): what `leaveToC` restores.
+pub const Entry = enum { running, native, attached };
+
+/// Make the calling thread a running mutator for a callback from C. It may already be
+/// running (C called from Skein without ^:blocking), in a blocking call (collections go
+/// on without it, so it waits for any to finish), or a thread the runtime doesn't know.
+pub fn enterFromC() Entry {
+    const m = current orelse {
+        _ = attachThread();
+        return .attached;
+    };
+    if (m.state != .native) return .running;
+    world.lock();
+    defer world.unlock();
+    while (sk_gc_pending != 0) world_cond.wait(&world);
+    m.state = .running;
+    return .native;
+}
+
+/// Undo `enterFromC` when the callback returns to C. A blocking call's thread goes back
+/// to it: its stack above the saved position is still what the collector must scan. A
+/// thread that wasn't the runtime's is detached, since it may exit while in C.
+pub fn leaveToC(e: Entry) void {
+    switch (e) {
+        .running => {},
+        .attached => detachThread(),
+        .native => {
+            world.lock();
+            defer world.unlock();
+            current.?.state = .native;
+            world_cond.broadcast();
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Roots and the write barrier
 

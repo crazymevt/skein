@@ -665,6 +665,48 @@ export fn sk_ffi_check_slow(start: u64, warned: *c_int, c_name: [*:0]const u8) v
     cond.warn(cond.makeBuiltin(.warning, text));
 }
 
+extern fn sk_try_call_stopping_exits(f: Value, argc: u32, argv: [*]const Value, ntypes: u32, types: [*]Value) Value;
+
+fn warnCode(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
+    _ = self;
+    _ = argc;
+    @import("cond.zig").warn(argv[0]);
+    return Value.nil;
+}
+
+/// For the C backend's callbacks (defcallback, M1.10 step 3, D-068): call `body` with a
+/// pointer to `frame`, the C call's arguments and result, which body converts. Neither an
+/// error nor any other non-local exit can unwind through C: one is caught or stopped
+/// here, and C gets the zero the frame holds. That warns, naming the callback `name` and
+/// `zero` (none if it's empty), as in Phase 0. The warning is signaled inside a barrier
+/// too, so a handler outside that tries to exit is stopped silently.
+export fn sk_ffi_callback(body: Value, frame: usize, name: [*:0]const u8, zero: [*:0]const u8) void {
+    const entry = gc.enterFromC();
+    defer gc.leaveToC(entry);
+    const cond = @import("cond.zig");
+    var types = [_]Value{cond.builtinType(.@"error")};
+    const args = [_]Value{makePointer(frame)};
+    const r = sk_try_call_stopping_exits(body, 1, &args, 1, &types);
+    const returned = r != Value.nil and coll.vectorNth(r, 0).?.toFixnum() == -1;
+    if (returned) return;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(rt.scratch);
+    print.put(&out, "callback ");
+    print.put(&out, std.mem.span(name));
+    if (r == Value.nil) {
+        print.put(&out, " tried to exit through C");
+    } else {
+        print.put(&out, " signaled ");
+        cond.writeReport(coll.vectorNth(r, 1).?, &out);
+    }
+    if (zero[0] != 0) {
+        print.put(&out, "; returning ");
+        print.put(&out, std.mem.span(zero));
+    }
+    const warning = [_]Value{cond.makeBuiltin(.warning, out.items)};
+    _ = sk_try_call_stopping_exits(@import("func.zig").make(warnCode, "warn"), 1, &warning, 0, &types);
+}
+
 /// [kind base name] for a C type (the C backend's %ctype-info): kind is :struct, :union
 /// or :enum, base an enum's integer type, name the qualified name. nil for anything else.
 fn ctypeInfo(t: Value) Value {

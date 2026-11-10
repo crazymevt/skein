@@ -85,6 +85,18 @@ sk_value sk_try_call(sk_value fn, uint32_t argc, const sk_value *argv, uint32_t 
     return result;
 }
 
+sk_value sk_try_call_stopping_exits(sk_value fn, uint32_t argc, const sk_value *argv,
+                                    uint32_t ntypes, sk_value *types) {
+    sk_frame barrier;
+    sk_frame_push(&barrier, SK_FRAME_BARRIER);
+    volatile sk_value result = SK_NIL;
+    if (SK_SETJMP(barrier.jb) == 0) result = sk_try_call(fn, argc, argv, ntypes, types);
+    /* After a stopped exit the unwind has already taken the frame off the chain; popping
+     * it again leaves the same chain. */
+    sk_frame_pop(&barrier);
+    return result;
+}
+
 /* For the interpreter's %call-with-values (runtime/src/compiler.zig): the registers'
  * count, and starting a call from one value. */
 int32_t sk_mv_count_get(void) { return sk_mv_count; }

@@ -132,6 +132,57 @@
 ;; (Arity and type errors in calls have SBCL's and CFFI's wording in Phase 0.)
 (prn (message (fn [] (color-abs :blue))))
 
+;; Callbacks (step 3): C calling Skein. The C library calls back only through qsort and
+;; bsearch, so callbacks of other types are compiled but not called.
+(ffi/defcfun qsort "qsort" void [base ptr, n u64, size u64, cmp ptr])
+(ffi/defcfun ^:blocking qsort-blocking "qsort" void [base ptr, n u64, size u64, cmp ptr])
+(ffi/defcfun bsearch "bsearch" ptr [key ptr, base ptr, n u64, size u64, cmp ptr])
+(ffi/defcallback compare-ints i32 [a ptr, b ptr]
+  (compare (ffi/get a i32) (ffi/get b i32)))
+(defn sorted-with [sort-fn cmp xs]
+  (let [a (make-array i32 (count xs))]
+    (doseq [[i v] (map-indexed vector xs)] (aset! a i v))
+    (sort-fn a (count xs) 4 cmp)
+    (vec a)))
+(prn (sorted-with qsort compare-ints [5 3 9 1 4]) (ffi/ptr? compare-ints))
+(prn (let [a (make-array i32 4)]
+       (doseq [i (range 4)] (aset! a i (* 10 i)))
+       (ffi/with-foreign [key (ffi/alloc i32)]
+         (ffi/put! key i32 20)
+         (let [found (bsearch key a 4 4 compare-ints)]
+           (ffi/put! key i32 25)
+           [(ffi/get found i32) (bsearch key a 4 4 compare-ints)]))))
+;; A comparator that allocates, so collections happen while C's frames are on the stack,
+;; called directly and from a blocking call
+(def comparisons (atom 0))
+(ffi/defcallback compare-allocating i32 [a ptr, b ptr]
+  (swap! comparisons inc)
+  (let [junk (vec (range 40))]
+    (compare (+ (ffi/get a i32) (count junk)) (+ (ffi/get b i32) (count junk)))))
+(let [xs (vec (map (fn [i] (mod (* i 7919) 1000)) (range 2000)))]
+  (prn [(= (sorted-with qsort compare-allocating xs) (vec (sort xs)))
+        (= (sorted-with qsort-blocking compare-allocating xs) (vec (sort xs)))
+        (> @comparisons 2000)]))
+;; An error can't unwind through C: the callback warns and returns zero.
+;; stderr: callback native-ffi/bad-compare signaled no; returning 0
+(ffi/defcallback bad-compare i32 [a ptr, b ptr] (error "no"))
+(prn (count (sorted-with qsort bad-compare [2 1])))
+;; Nor can any other non-local exit: invoking a restart established outside the C call
+;; is stopped where C called the callback, which warns and returns zero.
+;; stderr: callback native-ffi/leaving-compare tried to exit through C; returning 0
+(ffi/defcallback leaving-compare i32 [a ptr, b ptr] (invoke-restart 'skip-sort) 1)
+(prn (restart-case (count (sorted-with qsort leaving-compare [2 1])) (skip-sort [] :skipped)))
+;; A handler outside that catches a warning signaled in the callback is stopped too
+(ffi/defcallback warning-compare i32 [a ptr, b ptr] (warn "careful") 1)
+(prn (try (count (sorted-with qsort warning-compare [2 1])) (catch warning w :caught)))
+(ffi/defcallback many-types f64 [a f32, b f64, c bool, d c-string, e u64, f i8, g flags]
+  (+ a b))
+(ffi/defcallback no-arguments void [] nil)
+(ffi/defcallback gives-string c-string [] "hi")
+(ffi/defcallback gives-flag bool [x i32] (pos? x))
+(ffi/defcallback gives-enum flags [] :b)
+(prn (mapv ffi/ptr? [many-types no-arguments gives-string gives-flag gives-enum]))
+
 ;; Errors
 (prn (message (fn [] (ffi/with-foreign [p (ffi/alloc line)] (ffi/put-field! p line :to 0))))
      (message (fn [] (ffi/enum-value flags :zzz)))

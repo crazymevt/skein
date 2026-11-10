@@ -27,7 +27,7 @@ const print = @import("print.zig");
 const hash = @import("hash.zig");
 const Value = @import("value.zig").Value;
 
-pub const Kind = enum(u32) { block = 1, unwind = 2, handlers = 3, restarts = 4, scope = 5 };
+pub const Kind = enum(u32) { block = 1, unwind = 2, handlers = 3, restarts = 4, scope = 5, barrier = 6 };
 
 /// `sk_frame` up to its jmp_buf, which only C touches.
 pub const Frame = extern struct {
@@ -111,7 +111,8 @@ pub fn topFrame() ?*Frame {
 }
 
 /// Unwind to `target` (which must be on the chain), delivering `v`, running the cleanups
-/// of the unwind-protects on the way.
+/// of the unwind-protects on the way. A barrier (where C called Skein) stops the unwind:
+/// it is jumped to like an unwind-protect, but doesn't continue.
 pub fn unwindTo(target: *Frame, v: Value) noreturn {
     while (top) |f| {
         if (f == target) {
@@ -120,7 +121,7 @@ pub fn unwindTo(target: *Frame, v: Value) noreturn {
             sk_jump(f);
         }
         top = f.prev;
-        if (f.kind == @intFromEnum(Kind.unwind)) {
+        if (f.kind == @intFromEnum(Kind.unwind) or f.kind == @intFromEnum(Kind.barrier)) {
             f.target = target;
             f.value = v;
             skips = skipsOf(f);

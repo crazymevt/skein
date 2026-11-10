@@ -388,6 +388,36 @@ calls back with all traps masked, and restore the caller's modes afterwards."
            (funcall thunk))
       (apply #'sb-int:set-floating-point-modes saved))))
 
+(defun call-stopping-exits (thunk)
+  "Call THUNK. A non-local exit that would leave it is stopped here, since it must not
+unwind through C's frames (D-068). Returns true if THUNK returned."
+  (let ((returned nil))
+    (block barrier
+      (unwind-protect (progn (funcall thunk) (setf returned t))
+        (unless returned (return-from barrier))))
+    returned))
+
+(defun call-from-c (name zero zero-text thunk)
+  "Run THUNK, a callback's body, for C: return its value, or ZERO if it signals an error
+or tries to exit through C, which warns, naming the callback NAME and ZERO-TEXT. The
+warning is signaled inside a barrier too, so a handler that tries to exit is stopped."
+  (let* ((result zero)
+         (message nil)
+         (returned (call-stopping-exits
+                    (lambda ()
+                      (handler-case (setf result (funcall thunk))
+                        (error (e)
+                          (setf message (format nil "callback ~A signaled ~A~A" name
+                                                (let ((*print-pretty* nil))
+                                                  (princ-to-string e))
+                                                zero-text))))))))
+    (unless returned
+      (setf result zero
+            message (format nil "callback ~A tried to exit through C~A" name zero-text)))
+    (when message
+      (call-stopping-exits (lambda () (warn 'callback-error-warning :message message))))
+    result))
+
 (defun define-callback (name return-type params fn)
   "Make a C function pointer that calls the Skein function FN, and bind NAME to it."
   (let* ((qualified (format nil "~A/~A" (sym-namespace name) (sym-name name)))
@@ -397,22 +427,23 @@ calls back with all traps masked, and restore the caller's modes afterwards."
          (return-type (resolve-type return-type))
          (zero (if (member (mem-type return-type) '(:float :double))
                    (coerce 0 (if (eq (mem-type return-type) :float) 'single-float 'double-float))
-                   (if (eq (mem-type return-type) :pointer) '(cffi:null-pointer) 0))))
+                   (if (eq (mem-type return-type) :pointer) '(cffi:null-pointer) 0)))
+         ;; How the warning shows the zero (as the C backend's does, D-068).
+         (zero-text (case (mem-type return-type)
+                      ((:float :double) "; returning 0.0")
+                      ((:pointer :string) "; returning nil")
+                      (:void "")
+                      (t "; returning 0"))))
     (eval `(cffi:defcallback ,cffi-name ,(mem-type return-type)
                ,(loop for a in args for (nil type) in params collect (list a (mem-type type)))
              (call-with-skein-float-modes
               (lambda ()
-             (handler-case
-                 (to-c ',return-type
-                       (funcall ',fn ,@(loop for a in args for (nil type) in params
-                                             collect `(from-c ',type ,a))))
-               (error (e)
-                 (warn 'callback-error-warning
-                       :message (format nil "callback ~A signaled ~A; returning ~A"
-                                        ,qualified (let ((*print-pretty* nil))
-                                                     (princ-to-string e))
-                                        ',zero))
-                 ,zero))))))
+                (call-from-c ,qualified ,zero ,zero-text
+                             (lambda ()
+                               (to-c ',return-type
+                                     (funcall ',fn ,@(loop for a in args
+                                                           for (nil type) in params
+                                                           collect `(from-c ',type ,a))))))))))
     (def-var (intern-var *current-namespace* (sym-name name)) (cffi:get-callback cffi-name))))
 
 ;;; ------------------------------------------------------------------------------------

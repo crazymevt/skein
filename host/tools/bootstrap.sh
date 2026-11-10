@@ -45,12 +45,18 @@ test_compiler() {
     echo "skeinc: $name ok"
   done
   # Programs that only skeinc compiles (the FFI, D-064), built by skeinc, print what
-  # `skein run` prints.
+  # `skein run` prints, and every line a ";; stderr: " comment gives on standard error.
   for program in host/tests/fixtures/native-ffi*.skn; do
     name=$(basename "$program" .skn)
     ./skein run "$program" > "build/examples/$name.expected"
     "$skeinc" build "$program" -o "build/examples/$name$exe" > /dev/null
-    "build/examples/$name$exe" > "build/examples/$name.out"
+    "build/examples/$name$exe" > "build/examples/$name.out" 2> "build/examples/$name.err"
+    while IFS= read -r line; do
+      if ! grep -qF -- "$line" "build/examples/$name.err"; then
+        echo "skeinc: $name didn't print to stderr: $line"
+        exit 1
+      fi
+    done < <(sed -n 's/^;; stderr: //p' "$program" | tr -d '\r')
     if ! diff --strip-trailing-cr "build/examples/$name.expected" "build/examples/$name.out" \
          > /dev/null; then
       echo "skeinc: $name differs from skein run"

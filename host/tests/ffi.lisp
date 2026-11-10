@@ -188,7 +188,18 @@
                (let [a (make-array i32 2)] (qsort a 2 4 bad-compare) :survived)"
               ":survived"))
     (is (plusp (length warnings)))
-    (is (search "signaled" (first warnings)))))
+    (is (search "signaled" (first warnings))))
+  ;; Nor can another non-local exit (D-068): it's stopped where C called the callback.
+  (let ((warnings '()))
+    (handler-bind ((skein.ffi::callback-error-warning
+                     (lambda (w) (push (princ-to-string w) warnings) (muffle-warning w))))
+      (ffi-is "(ffi/defcallback leaving i32 [a ptr, b ptr] (invoke-restart 'skip) 1)
+               (ffi/defcfun qsort \"qsort\" void [base ptr, n u64, size u64, cmp ptr])
+               (restart-case (let [a (make-array i32 2)] (qsort a 2 4 leaving) :survived)
+                 (skip [] :skipped))"
+              ":survived"))
+    (is (plusp (length warnings)))
+    (is (search "tried to exit through C; returning 0" (first warnings)))))
 
 (test handles
   (ffi-is "(let [v [1 2]

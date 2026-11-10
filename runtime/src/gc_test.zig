@@ -345,3 +345,63 @@ test "finalizers run for objects that die, minor and major" {
     try testing.expect(roots[1].isObject());
 }
 
+
+test "callbacks from C enter and leave the runtime: from blocking calls and other threads" {
+    const Callback = struct {
+        /// What a callback does: build a list on the stack only, collecting meanwhile.
+        fn work(ok: *std.atomic.Value(bool)) void {
+            var head = Value.nil;
+            for (0..3000) |i| {
+                const n = node(i, 1);
+                slots(n)[1] = head;
+                head = n;
+                _ = tuple(16);
+                if (i % 1000 == 999) gc.collect(if (i % 2000 == 999) .minor else .major);
+            }
+            var count: usize = 0;
+            var it = head;
+            while (it != Value.nil) : (it = slots(it)[1]) {
+                if (idOf(it) != 2999 - count) return;
+                count += 1;
+            }
+            if (count == 3000) ok.store(true, .release);
+        }
+
+        /// C, called by Skein as a blocking call, calls back.
+        fn fromBlocking(arg: ?*anyopaque) void {
+            const ok: *std.atomic.Value(bool) = @ptrCast(@alignCast(arg));
+            const e = gc.enterFromC();
+            defer gc.leaveToC(e);
+            if (e != .native) return;
+            work(ok);
+        }
+
+        /// A thread the runtime doesn't know calls back, twice.
+        fn fromForeignThread(ok: *std.atomic.Value(bool)) void {
+            for (0..2) |_| {
+                var done: std.atomic.Value(bool) = .init(false);
+                const e = gc.enterFromC();
+                if (e == .attached) work(&done);
+                gc.leaveToC(e);
+                if (!done.load(.acquire)) return;
+            }
+            ok.store(true, .release);
+        }
+
+        fn join(arg: ?*anyopaque) void {
+            const t: *std.Thread = @ptrCast(@alignCast(arg));
+            t.join();
+        }
+    };
+    _ = gc.attachThread();
+    var foreign_ok: [2]std.atomic.Value(bool) = .{ .init(false), .init(false) };
+    var threads: [2]std.Thread = undefined;
+    for (&threads, 0..) |*t, i| t.* = try std.Thread.spawn(.{}, Callback.fromForeignThread, .{&foreign_ok[i]});
+    var blocking_ok: std.atomic.Value(bool) = .init(false);
+    gc.blocking(Callback.fromBlocking, &blocking_ok);
+    for (&threads) |*t| gc.blocking(Callback.join, t);
+    try testing.expect(blocking_ok.load(.acquire));
+    for (&foreign_ok) |*o| try testing.expect(o.load(.acquire));
+    // The foreign threads left: collections don't wait for them.
+    gc.collect(.major);
+}
