@@ -64,6 +64,8 @@ export fn sk_register_roots(slots: [*]Value, count: usize) void {
 /// Stop for a pending collection; compiled code calls this when `sk_gc_pending` is set.
 export fn sk_safepoint() void {
     gc.safepoint();
+    // A fiber that has run too long yields here (M2.3, D-075).
+    @import("sched.zig").preemptionPoint();
 }
 
 /// Collect now: a major collection if `major` is true, else a minor one.

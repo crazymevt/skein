@@ -189,69 +189,74 @@ test "a stack overflow is an error in the fiber, which it can handle again and a
 }
 
 // ---------------------------------------------------------------------------------------
-// The scheduler on one thread (step 4)
+// The scheduler (M2.2 step 4; worker threads and preemption, M2.3)
 
 const sched = @import("sched.zig");
 
-test "the scheduler runs ready fibers in turn" {
+test "the scheduler runs fibers on its workers" {
     setup();
     const Turns = struct {
-        id: u8,
-        log: *std.ArrayList(u8),
+        id: usize,
+        counts: *[3]std.atomic.Value(usize),
+        group: *sched.WaitGroup,
         fn job(arg: ?*anyopaque) void {
             const t: *@This() = @ptrCast(@alignCast(arg));
             for (0..3) |_| {
-                t.log.append(testing.allocator, t.id) catch unreachable;
+                _ = t.counts[t.id].fetchAdd(1, .acq_rel);
                 sched.yield();
             }
+            t.group.done();
         }
     };
-    var log: std.ArrayList(u8) = .empty;
-    defer log.deinit(testing.allocator);
-    var turns = [_]Turns{ .{ .id = 'a', .log = &log }, .{ .id = 'b', .log = &log }, .{ .id = 'c', .log = &log } };
-    for (&turns) |*t| sched.spawn(Turns.job, t);
-    try testing.expectEqual(@as(usize, 3), sched.runUntilIdle());
-    try testing.expectEqualStrings("abcabcabc", log.items);
+    var counts: [3]std.atomic.Value(usize) = @splat(.init(0));
+    var group = sched.WaitGroup.init(3);
+    var turns: [3]Turns = undefined;
+    for (&turns, 0..) |*t, i| {
+        t.* = .{ .id = i, .counts = &counts, .group = &group };
+        sched.spawn(Turns.job, t);
+    }
+    group.wait();
+    for (&counts) |*c| try testing.expectEqual(@as(usize, 3), c.load(.acquire));
 }
 
 test "a parked fiber runs again once it's woken" {
     setup();
     const Shared = struct {
-        sleeper: ?*fiber.Fiber = null,
-        log: [4]u8 = undefined,
-        n: usize = 0,
-        fn note(s: *@This(), c: u8) void {
-            s.log[s.n] = c;
-            s.n += 1;
-        }
+        sleeper: std.atomic.Value(?*fiber.Fiber) = .init(null),
+        flag: std.atomic.Value(bool) = .init(false),
+        woke: std.atomic.Value(bool) = .init(false),
+        group: sched.WaitGroup = sched.WaitGroup.init(2),
         fn sleepJob(arg: ?*anyopaque) void {
             const s: *@This() = @ptrCast(@alignCast(arg));
-            s.sleeper = sched.currentFiber();
-            s.note('p');
-            sched.park();
-            s.note('r');
+            s.sleeper.store(sched.currentFiber(), .release);
+            while (!s.flag.load(.acquire)) sched.park();
+            s.woke.store(true, .release);
+            s.group.done();
         }
         fn wakeJob(arg: ?*anyopaque) void {
             const s: *@This() = @ptrCast(@alignCast(arg));
-            s.note('w');
-            sched.wake(s.sleeper.?);
-            s.note('d');
+            while (s.sleeper.load(.acquire) == null) sched.yield();
+            s.flag.store(true, .release);
+            sched.wake(s.sleeper.load(.acquire).?);
+            s.group.done();
         }
     };
     var s: Shared = .{};
     sched.spawn(Shared.sleepJob, &s);
     sched.spawn(Shared.wakeJob, &s);
-    try testing.expectEqual(@as(usize, 2), sched.runUntilIdle());
-    try testing.expectEqualStrings("pwdr", s.log[0..s.n]);
+    s.group.wait();
+    try testing.expect(s.woke.load(.acquire));
 }
 
 /// The exit test of M2.2: 100,000 fibers, all alive at once, each building a list that
 /// only its stack holds while it yields, with garbage in between; collections happen as
-/// they allocate.
+/// they allocate. Since M2.3 they run on all the workers.
 const Worker = struct {
     ok: bool = false,
+    group: *sched.WaitGroup,
     fn job(arg: ?*anyopaque) void {
         const self: *Worker = @ptrCast(@alignCast(arg));
+        defer self.group.done();
         var head = Value.nil;
         for (0..8) |i| {
             head = Builder.node(i, head);
@@ -273,14 +278,84 @@ test "100,000 fibers that yield and allocate run under collections" {
     const count = 100_000;
     const workers = try testing.allocator.alloc(Worker, count);
     defer testing.allocator.free(workers);
+    var group = sched.WaitGroup.init(count);
     const before = gc.stats();
     for (workers) |*w| {
-        w.* = .{};
+        w.* = .{ .group = &group };
         sched.spawn(Worker.job, w);
     }
-    try testing.expectEqual(@as(usize, count), sched.runUntilIdle());
+    group.wait();
     for (workers) |w| try testing.expect(w.ok);
     const after = gc.stats();
     try testing.expect(after.minor_collections + after.major_collections >
         before.minor_collections + before.major_collections + 5);
+}
+
+extern fn sk_safepoint() void;
+
+test "busy fibers are preempted, so one more fiber than workers still runs" {
+    setup();
+    const Shared = struct {
+        stop: std.atomic.Value(bool) = .init(false),
+        group: sched.WaitGroup,
+        fn spin(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            // Busy, with a safepoint per iteration as compiled loops have.
+            while (!s.stop.load(.acquire)) {
+                if (@atomicLoad(u8, &gc.sk_gc_pending, .acquire) != 0) sk_safepoint();
+            }
+            s.group.done();
+        }
+        fn stopper(arg: ?*anyopaque) void {
+            const s: *@This() = @ptrCast(@alignCast(arg));
+            s.stop.store(true, .release);
+            s.group.done();
+        }
+    };
+    const n = sched.workerCount();
+    var s: Shared = .{ .group = sched.WaitGroup.init(n + 1) };
+    for (0..n) |_| sched.spawn(Shared.spin, &s);
+    sched.spawn(Shared.stopper, &s);
+    s.group.wait();
+    try testing.expect(s.stop.load(.acquire));
+}
+
+test "fibers move between workers and keep their own condition frames" {
+    setup();
+    const Mover = struct {
+        threads_seen: usize = 0,
+        ok: bool = false,
+        group: *sched.WaitGroup,
+        fn job(arg: ?*anyopaque) void {
+            const m: *@This() = @ptrCast(@alignCast(arg));
+            defer m.group.done();
+            var frame: cond.Frame = undefined;
+            cond.pushFrame(&frame, .block);
+            var last = std.Thread.getCurrentId();
+            m.threads_seen = 1;
+            for (0..300) |_| {
+                sched.yield();
+                if (cond.topFrame() != &frame) return;
+                const id = std.Thread.getCurrentId();
+                if (id != last) m.threads_seen += 1;
+                last = id;
+            }
+            cond.popFrame(&frame);
+            m.ok = cond.topFrame() == null;
+        }
+    };
+    var group = sched.WaitGroup.init(64);
+    var movers: [64]Mover = undefined;
+    for (&movers) |*m| {
+        m.* = .{ .group = &group };
+        sched.spawn(Mover.job, m);
+    }
+    group.wait();
+    var moved: usize = 0;
+    for (movers) |m| {
+        try testing.expect(m.ok);
+        if (m.threads_seen > 1) moved += 1;
+    }
+    // With several workers, yielded fibers come back on other threads.
+    try testing.expect(moved > 0);
 }

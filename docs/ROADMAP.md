@@ -32,7 +32,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.12 Driftrock native | ✅ |
 | M2.1 Phase 1 follow-ups | ✅ |
 | M2.2 Fibers | ✅ |
-| M2.3 Work-stealing scheduler | ⬜ |
+| M2.3 Work-stealing scheduler | 🟨 |
 | M2.4 Dynamic vars natively | ⬜ |
 | M2.5 Evaluating code in native programs | ⬜ |
 | M2.6 Native REPL and `skein dev` | ⬜ |
@@ -299,6 +299,12 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ### M2.3 Work-stealing scheduler
 - Worker threads with work-stealing deques and an injection queue (DESIGN §13.1).
 - Tasks, nurseries, channels, `sleep`, futures and nursery joins park fibers instead of OS threads; `^:blocking` C calls hand their worker off (§14.3); callbacks from foreign threads run as temporary fibers.
+
+- Steps, in order (D-075):
+  1. ✅ Worker threads (one per CPU) with work-stealing deques and an injection queue; fibers move between workers; a fiber that runs for about 10 ms yields at its next safepoint.
+  2. Waiting on fibers: wait queues per task and channel, a timer queue for sleeps and deadlines, cancellation that wakes a parked fiber; threads that aren't workers (the main thread, foreign threads) wait on a condition variable.
+  3. Tasks, nurseries, futures, channels, `alts!`, `sleep`, timeouts and the main thread's queue on fibers, with Phase 0's semantics.
+  4. `^:blocking` C calls hand their worker off; callbacks from foreign threads run as temporary fibers; Driftrock's job graph on fibers; the exit tests.
 
 **Exit:** the native concurrency fixtures pass on fibers, a million channel messages pass between 10,000 fibers, and Driftrock's job graph runs on fibers, on all three platforms.
 

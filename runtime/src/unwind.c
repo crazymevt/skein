@@ -35,8 +35,12 @@ void sk_warn_condition(sk_value condition) {
 }
 
 /* Multiple values: see skein.h. */
-_Thread_local int32_t sk_mv_count = SK_MV_SINGLE;
-_Thread_local sk_value sk_mv_values[SK_MV_MAX];
+static _Thread_local int32_t mv_count = SK_MV_SINGLE;
+static _Thread_local sk_value mv_values[SK_MV_MAX];
+
+/* Not inlined, so every use finds the running thread's registers (skein.h). */
+__attribute__((noinline)) int32_t *sk_mv_count_address(void) { return &mv_count; }
+__attribute__((noinline)) sk_value *sk_mv_values_address(void) { return mv_values; }
 
 _Noreturn void sk_too_many_values(uint32_t count);
 

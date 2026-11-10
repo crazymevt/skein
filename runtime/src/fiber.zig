@@ -19,6 +19,8 @@ pub const default_stack_size: usize = 256 * 1024;
 
 pub const Job = *const fn (?*anyopaque) void;
 
+pub const SchedState = enum(u8) { running, parking, parked, queued, wake_requested };
+
 pub const Fiber = struct {
     ctx: platform.FiberContext = .{},
     /// Running on some thread; suspended (its stack holds live values from `scan_low`
@@ -37,6 +39,9 @@ pub const Fiber = struct {
     done: bool = false,
     /// Set by a fiber that yields to be run again soon (sched.zig).
     runnable: bool = false,
+    /// Where the scheduler has it (sched.zig): running on a worker, switching away to
+    /// park, parked, in a run queue, or woken before it finished parking.
+    sched_state: std.atomic.Value(SchedState) = .init(.running),
     next_idle: ?*Fiber = null,
     /// Every fiber ever made, threads' own included, for the collector.
     next_all: ?*Fiber = null,
@@ -71,8 +76,9 @@ fn scanSuspended(visit: *const fn (usize, usize) void) void {
     }
 }
 
-/// The fiber running now (this thread's own, if no other).
-pub fn current() *Fiber {
+/// The fiber running now (this thread's own, if no other). Not inlined: a fiber can
+/// continue on another thread after a switch (D-075).
+pub noinline fn current() *Fiber {
     if (current_fiber) |f| return f;
     // Threads' fibers are never freed: the list of all fibers may point at them.
     _ = gc.attachThread();

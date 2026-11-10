@@ -47,15 +47,31 @@ pub const Frame = extern struct {
 /// was signaled) down to its cluster are skipped: the search resumes at `to`.
 const Skip = struct { from: ?*Frame, to: ?*Frame, next: ?*Skip };
 
-threadlocal var top: ?*Frame = null;
-threadlocal var skips: ?*Skip = null;
+threadlocal var top_tls: ?*Frame = null;
+threadlocal var skips_tls: ?*Skip = null;
+
+// The chain and the skips are reached through functions that aren't inlined: code here
+// calls handlers and restarts, which can switch fibers, and a fiber can continue on
+// another thread (M2.3, D-075), where a kept thread-local address would be wrong.
+noinline fn getTop() ?*Frame {
+    return top_tls;
+}
+noinline fn setTop(f: ?*Frame) void {
+    top_tls = f;
+}
+noinline fn getSkips() ?*Skip {
+    return skips_tls;
+}
+noinline fn setSkips(s: ?*Skip) void {
+    skips_tls = s;
+}
 threadlocal var next_serial: u64 = 0;
 
 /// Each thread numbers frames in a range of its own, so serials stay unique when fibers
 /// move between threads (M2.2).
 var thread_ranges = std.atomic.Value(u64).init(0);
 
-fn nextSerial() u64 {
+noinline fn nextSerial() u64 {
     if (next_serial == 0) next_serial = (thread_ranges.fetchAdd(1, .monotonic) + 1) << 40;
     next_serial += 1;
     return next_serial;
@@ -66,12 +82,12 @@ fn nextSerial() u64 {
 pub const FiberState = struct { top: ?*Frame = null, skips: ?*anyopaque = null };
 
 pub fn saveFiberState() FiberState {
-    return .{ .top = top, .skips = skips };
+    return .{ .top = getTop(), .skips = getSkips() };
 }
 
 pub fn restoreFiberState(s: FiberState) void {
-    top = s.top;
-    skips = @ptrCast(@alignCast(s.skips));
+    setTop(s.top);
+    setSkips(@ptrCast(@alignCast(s.skips)));
 }
 
 extern fn sk_jump(f: *Frame) noreturn;
@@ -84,8 +100,8 @@ fn skipsOf(f: *Frame) ?*Skip {
 fn push(f: *Frame, kind: Kind) void {
     const serial = nextSerial();
     f.* = .{
-        .prev = top,
-        .skips = skips,
+        .prev = getTop(),
+        .skips = getSkips(),
         .serial = serial,
         .kind = @intFromEnum(kind),
         .count = 0,
@@ -95,7 +111,7 @@ fn push(f: *Frame, kind: Kind) void {
         .c = null,
         .target = null,
     };
-    top = f;
+    setTop(f);
 }
 
 pub fn pushFrame(f: *Frame, kind: Kind) void {
@@ -126,28 +142,28 @@ pub fn pushRestarts(f: *Frame, restart_names: []Value, fns: [*]const Value, repo
 }
 
 pub fn popFrame(f: *Frame) void {
-    top = f.prev;
+    setTop(f.prev);
 }
 
 pub fn topFrame() ?*Frame {
-    return top;
+    return getTop();
 }
 
 /// Unwind to `target` (which must be on the chain), delivering `v`, running the cleanups
 /// of the unwind-protects on the way. A barrier (where C called Skein) stops the unwind:
 /// it is jumped to like an unwind-protect, but doesn't continue.
 pub fn unwindTo(target: *Frame, v: Value) noreturn {
-    while (top) |f| {
+    while (getTop()) |f| {
         if (f == target) {
             f.value = v;
-            skips = skipsOf(f);
+            setSkips(skipsOf(f));
             sk_jump(f);
         }
-        top = f.prev;
+        setTop(f.prev);
         if (f.kind == @intFromEnum(Kind.unwind) or f.kind == @intFromEnum(Kind.barrier)) {
             f.target = target;
             f.value = v;
-            skips = skipsOf(f);
+            setSkips(skipsOf(f));
             sk_jump(f);
         }
     }
@@ -157,7 +173,7 @@ pub fn unwindTo(target: *Frame, v: Value) noreturn {
 /// return-from* through a captured block token: the block's serial.
 pub fn returnFrom(token: Value, v: Value) noreturn {
     const serial: u64 = @intCast(token.toFixnum());
-    var f = top;
+    var f = getTop();
     while (f) |fr| : (f = fr.prev) {
         if (fr.serial == serial and fr.kind == @intFromEnum(Kind.block)) unwindTo(fr, v);
     }
@@ -531,9 +547,9 @@ fn readable(v: Value) []const u8 {
 pub fn signal(c: Value) void {
     if (!isCondition(c)) raise(.@"error", "signal needs a condition, not {s}", .{readable(c)});
     const t = conditionType(c);
-    var f = top;
+    var f = getTop();
     outer: while (f) |fr| {
-        var s = skips;
+        var s = getSkips();
         while (s) |sk| : (s = sk.next) {
             if (sk.from == fr) {
                 f = sk.to;
@@ -543,11 +559,11 @@ pub fn signal(c: Value) void {
         if (fr.kind == @intFromEnum(Kind.handlers)) {
             for (0..fr.count) |i| {
                 if (typeIsA(t, fr.a.?[i])) {
-                    var skip: Skip = .{ .from = top, .to = fr.prev, .next = skips };
-                    skips = &skip;
+                    var skip: Skip = .{ .from = getTop(), .to = fr.prev, .next = getSkips() };
+                    setSkips(&skip);
                     const args = [_]Value{c};
                     _ = func.call(fr.b.?[i], 1, &args);
-                    skips = skip.next;
+                    setSkips(skip.next);
                 }
             }
         }
@@ -582,7 +598,7 @@ fn unhandled(c: Value) noreturn {
     print.put(&out, "error: ");
     writeReport(c, &out);
     var first = true;
-    var f = top;
+    var f = getTop();
     while (f) |fr| : (f = fr.prev) {
         if (fr.kind != @intFromEnum(Kind.restarts)) continue;
         for (0..fr.count) |i| {
@@ -678,7 +694,7 @@ fn activeRestart(x: Value) ?Found {
     if (isRestart(x)) {
         const serial: u64 = @intCast(coll.get(x, 2).toFixnum());
         const i: usize = @intCast(coll.get(x, 3).toFixnum());
-        var f = top;
+        var f = getTop();
         while (f) |fr| : (f = fr.prev) {
             if (fr.serial == serial)
                 return if (fr.kind == @intFromEnum(Kind.restarts) and i < fr.count) .{ .frame = fr, .index = i } else null;
@@ -688,7 +704,7 @@ fn activeRestart(x: Value) ?Found {
     if (!names.isSymbol(x)) raise(.@"error", "{s} does not name a restart", .{readable(x)});
     // Restarts match by their plain name (D-041); the innermost wins.
     const name = names.nameOf(x);
-    var f = top;
+    var f = getTop();
     while (f) |fr| : (f = fr.prev) {
         if (fr.kind != @intFromEnum(Kind.restarts)) continue;
         for (0..fr.count) |i| {
@@ -715,7 +731,7 @@ pub fn findRestart(x: Value) Value {
 pub fn computeRestarts() Value {
     var buf: [256]Value = undefined;
     var n: usize = 0;
-    var f = top;
+    var f = getTop();
     while (f) |fr| : (f = fr.prev) {
         if (fr.kind != @intFromEnum(Kind.restarts)) continue;
         for (0..fr.count) |i| {

@@ -163,6 +163,15 @@ var initialized = false;
 /// it as `sk_gc_pending`.
 pub export var sk_gc_pending: u8 = 0;
 
+/// sk_gc_pending's bits: a collection is waiting for the threads to stop; or a fiber has
+/// run too long and should yield at its next safepoint (sched.zig, M2.3).
+pub const pending_collection: u8 = 1;
+pub const pending_preemption: u8 = 2;
+
+fn collecting() bool {
+    return @atomicLoad(u8, &sk_gc_pending, .acquire) & pending_collection != 0;
+}
+
 /// How many collections have finished. Objects move only during collections, so a table
 /// keyed by object addresses is valid while this stays the same (compiler.zig).
 pub var epoch = std.atomic.Value(u64).init(0);
@@ -176,6 +185,12 @@ var verify_mode = false;
 pub var verify_tables: ?*const fn (*const fn (Value, []const u8) void) void = null;
 
 threadlocal var current: ?*Mutator = null;
+
+/// This thread's mutator, attaching the thread if needed. Not inlined, so code that
+/// allocates on both sides of a fiber switch finds the right thread's (D-075).
+noinline fn currentMutator() *Mutator {
+    return current orelse attachThread();
+}
 
 fn fatal(comptime msg: []const u8) noreturn {
     platform.writeStderr("error: " ++ msg ++ "\n");
@@ -344,7 +359,7 @@ pub fn attachThread() *Mutator {
     defer world.unlock();
     ensureInit();
     // Don't join a collection in progress: wait until it's done.
-    while (sk_gc_pending != 0) world_cond.wait(&world);
+    while (collecting()) world_cond.wait(&world);
     const m = meta_alloc.create(Mutator) catch fatal("out of memory");
     m.* = .{ .stack_high = platform.currentStackBounds().high, .next = state.mutators };
     state.mutators = m;
@@ -382,7 +397,7 @@ const ParkRequest = struct { m: *Mutator, kind: ?CollectionKind };
 
 /// Stop at a safepoint if a collection is pending.
 pub fn safepoint() void {
-    if (@atomicLoad(u8, &sk_gc_pending, .acquire) == 0) return;
+    if (!collecting()) return;
     const m = current orelse return;
     var req: ParkRequest = .{ .m = m, .kind = null };
     sk_spill_registers_and_call(parkOrCollect, &req);
@@ -407,15 +422,15 @@ fn parkOrCollect(arg: ?*anyopaque) callconv(.c) void {
     world.lock();
     defer world.unlock();
     m.saved_sp = @intFromPtr(&marker);
-    if (sk_gc_pending != 0 or req.kind == null) {
+    if (collecting() or req.kind == null) {
         // Someone else is collecting: wait for them.
         m.state = .parked;
         world_cond.broadcast();
-        while (sk_gc_pending != 0) world_cond.wait(&world);
+        while (collecting()) world_cond.wait(&world);
         m.state = .running;
         return;
     }
-    @atomicStore(u8, &sk_gc_pending, 1, .release);
+    _ = @atomicRmw(u8, &sk_gc_pending, .Or, pending_collection, .acq_rel);
     m.state = .parked;
     // Wait until every other thread is parked or in a blocking call.
     while (!allStopped(m)) world_cond.wait(&world);
@@ -426,7 +441,7 @@ fn parkOrCollect(arg: ?*anyopaque) callconv(.c) void {
     state.stats.pause_ns_total += pause;
     state.stats.pause_ns_max = @max(state.stats.pause_ns_max, pause);
     _ = epoch.fetchAdd(1, .release);
-    @atomicStore(u8, &sk_gc_pending, 0, .release);
+    _ = @atomicRmw(u8, &sk_gc_pending, .And, ~pending_collection, .acq_rel);
     m.state = .running;
     world_cond.broadcast();
 }
@@ -465,7 +480,7 @@ fn blockingInner(arg: ?*anyopaque) callconv(.c) void {
     world.unlock();
     call.f(call.arg);
     world.lock();
-    while (sk_gc_pending != 0) world_cond.wait(&world);
+    while (collecting()) world_cond.wait(&world);
     call.m.state = .running;
     world.unlock();
 }
@@ -484,7 +499,7 @@ pub fn enterFromC() Entry {
     if (m.state != .native) return .running;
     world.lock();
     defer world.unlock();
-    while (sk_gc_pending != 0) world_cond.wait(&world);
+    while (collecting()) world_cond.wait(&world);
     m.state = .running;
     return .native;
 }
@@ -606,7 +621,7 @@ pub fn alloc(type_id: object.TypeId, len: usize) *Header {
     // At least one payload word, for the forwarding address.
     const payload = @max(len, 1);
     const words = 1 + payload;
-    const m = current orelse attachThread();
+    const m = currentMutator();
     const address = if (words >= large_words)
         allocLarge(m, words)
     else blk: {
@@ -693,7 +708,7 @@ pub fn allocPermanent(type_id: object.TypeId, len: usize) *Header {
     defer world.unlock();
     ensureInit();
     // Don't allocate in the middle of a collection.
-    while (sk_gc_pending != 0) world_cond.wait(&world);
+    while (collecting()) world_cond.wait(&world);
     const h = if (1 + payload >= large_words) blk: {
         const n = ((1 + payload) * 8 + segment_size - 1) / segment_size;
         break :blk @as(*Header, @ptrFromInt(segmentStart(acquireSegments(n, .large_head))));

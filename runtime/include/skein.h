@@ -183,8 +183,13 @@ sk_value sk_soa_field(sk_value def, uint32_t i);
  * evaluating its init. */
 #define SK_MV_SINGLE (-1)
 #define SK_MV_MAX 64
-extern _Thread_local int32_t sk_mv_count;
-extern _Thread_local sk_value sk_mv_values[SK_MV_MAX];
+/* The registers are thread-locals in unwind.c, reached through functions: a fiber can
+ * move to another thread at a safepoint (M2.3, D-075), and a compiler may keep a
+ * thread-local's address across one. */
+int32_t *sk_mv_count_address(void);
+sk_value *sk_mv_values_address(void);
+#define sk_mv_count (*sk_mv_count_address())
+#define sk_mv_values (sk_mv_values_address())
 sk_value sk_mv_set(uint32_t count, const sk_value *values);
 static inline void sk_mv_reset(void) { sk_mv_count = SK_MV_SINGLE; }
 /* Value i of an init whose primary value is primary, after it ran. */
