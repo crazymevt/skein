@@ -1025,3 +1025,19 @@ Date: 2026-11-10 · Status: Accepted
   - **Step 3** (`runtime/src/tasks.zig`): each task runs in a fiber of its own; a task waiting for one is kept reachable in a queue the collector scans. The waits of D-057 keep their lock and checks, but queue under what they wait for: a task's finishing, a channel's takers or putters (separately), or the main thread's queue. A task and a nursery record the fiber running them, and cancelling one wakes that fiber; the waiting code checks for cancellation and attaches its waiter under the tasks lock, and `cancel!` decides whether the task had finished under it too, so neither can slip between. Transients and `:unsynchronized` slots are owned by a fiber, not a thread.
   - **Step 4:** a `^:blocking` C call, and `skein.io`'s file and process functions, mark their worker as blocked (`sched.blocking`); when one has been blocked for a millisecond while fibers wait, the monitor starts a spare worker, up to 256 in all, and a spare that finds no work for a while exits once enough others are running. A C thread the runtime doesn't know that calls a callback hands it to the scheduler as a temporary fiber and waits for it, so the callback can wait like any fiber; the C code passes the address of the callback's global, read in the fiber, where the collector keeps it current (D-068's attach-for-the-call stays for threads the runtime knows). Driftrock's job graph runs on fibers through nurseries.
 - **Consequences:** a task that runs for a long time without calling anything still keeps its worker: safepoints are at function entries and loop back-edges, which compiled loops have. Runtime tests check preemption (one more busy fiber than workers still lets another run; it hangs with preemption off) and fibers moving between workers with their own condition frames.
+
+## D-076: Dynamic vars
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.4 brings DESIGN §4.3's dynamic vars to native code. Phase 0 records `^:dynamic` on a var but never implemented `binding`, and `set!` of a var is a compile error, so there were no host tests to pass natively.
+- **Decision** (Jessie chose the first three):
+  - **Both implementations** get `binding`: Phase 0, which runs `skein run` until M2.6, as well as native code. A native fixture must print what `skein run` prints.
+  - **A spawned task gets a copy** of the bindings in force where it's spawned: `set!` in it changes only what it, and the tasks it spawns afterwards, see.
+  - **Binding a var that isn't `^:dynamic` is an error**, at compile time when the var is known then, else when the `binding` runs. Reads of ordinary vars stay as they are.
+  - **Forms:** `binding` is a macro over `%with-bindings`, which takes the vars' qualified names, their values and a function of the body; `(set! *x* v)` on a `^:dynamic` var compiles to `%set-dynamic!`, and is an error outside a binding of it. A read of a var that's `^:dynamic` when the code is compiled finds the innermost binding, else the root value. The Core IR keeps its nodes; a var-ref of a dynamic var reads its binding (`docs/CORE-IR.md`).
+  - **Natively,** a binding is a frame on the condition chain (D-047), so non-local exits drop it and each fiber has its own (D-074); a task's copy is pushed as such a frame when it starts.
+  - **Steps:** Phase 0; native; a fixture compared with `skein run` (ROADMAP).
+- **Alternatives:**
+  - Native only, tested against expected output; programs with `binding` couldn't run under `skein run` until M2.6.
+  - Clojure's rule that a thread may only `set!` bindings it established; or one binding shared by the parent and its tasks, which needs synchronization and races by nature.
+  - Letting any var be bound dynamically: every var read would have to look for a binding.
+- **Consequences:** a var declared `^:dynamic` after code that reads it was compiled is read as an ordinary var by that code, as in Clojure.

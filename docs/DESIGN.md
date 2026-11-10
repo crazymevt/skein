@@ -125,7 +125,7 @@ Only `nil` and `false` are falsy. Everything else is truthy, including `0`, `""`
 - A top-level `def` creates a **var**: a named, mutable-by-redefinition cell. **References to global functions go through the var.** That is what makes live redefinition work (§15). Release builds may direct-link sealed vars (§12.5).
 - `(ns game.player (:require [skein.math :as m] [game.world :refer [spawn-at]]))`
 - Private definitions: `defn-` or `^:private`.
-- **Dynamic vars** with thread/fiber-local rebinding: `(def ^:dynamic *log-level* :info)` and `(binding [*log-level* :debug] ...)`. Bindings are inherited by fibers spawned inside the `binding` form.
+- **Dynamic vars** with thread/fiber-local rebinding: `(def ^:dynamic *log-level* :info)` and `(binding [*log-level* :debug] ...)`. Bindings are inherited by fibers spawned inside the `binding` form. Details (D-076): a task gets a copy of the bindings in force where it's spawned, so `set!` in it changes only what it (and the tasks it spawns later) sees; `(set! *x* v)` changes the innermost binding of `*x*` and is an error outside one; binding a var that isn't `^:dynamic` is an error. A var must be declared `^:dynamic` before code that reads it is compiled.
 
 ### 4.4 Phases
 Following Racket, code runs either at **compile time (phase 1)**, which is macro expansion, or at **run time (phase 0)**.

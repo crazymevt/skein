@@ -24,7 +24,7 @@ All nodes include `location`. "Body" fields hold one node; a multi-form body bec
 |---|---|---|---|
 | `const-node` | `value` | literals, `(quote x)`, `()` | a constant value. Quoting a collection builds it at compile time (metadata is dropped). A vector, map or set literal whose elements are all constants is built at compile time too; otherwise it becomes a `call-node` to `skein.core/vector`, `%map-literal` or `%set-literal` |
 | `local-ref-node` | `local` | `x` | read a local |
-| `var-ref-node` | `var` | `x`, `ns/x` | read a var's current value; an error if it is unbound |
+| `var-ref-node` | `var` | `x`, `ns/x` | read a var's current value; an error if it is unbound. For a var that is `^:dynamic` when the code is compiled, the innermost binding's value if there is one (D-076) |
 | `if-node` | `test`, `then`, `else` | `(if test then else?)` | `else` defaults to a `nil` constant. Only `nil` and `false` are falsy |
 | `do-node` | `forms` | `(do e1 e2 ...)` | evaluate in order, return the last. `(do)` becomes a `nil` constant |
 | `def-node` | `var`, `init` | `(def name value?)` | set the var's root value to `init` (if present) and return the var. The var is interned when the form is expanded, so the body can refer to it |

@@ -309,9 +309,13 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 **Exit:** the native concurrency fixtures pass on fibers, a million channel messages pass between 10,000 fibers, and Driftrock's job graph runs on fibers, on all three platforms.
 
 ### M2.4 Dynamic vars natively
-- `^:dynamic` vars and `binding`, fiber-local and inherited by fibers spawned inside the `binding` (DESIGN §4.3).
+- `^:dynamic` vars and `binding`, fiber-local and inherited by fibers spawned inside the `binding` (DESIGN §4.3). Phase 0 never had `binding`, so it comes to both (D-076).
+- Steps, in order (D-076):
+  1. Phase 0: `binding`, `set!` of a binding, bindings copied into the tasks spawned inside one, and the errors; host tests.
+  2. Native: binding frames on the condition chain, reads of dynamic vars, `set!`, and the copy a task gets; the C backend compiles them.
+  3. A native fixture (bindings, nested and in tasks, non-local exits, `set!`, the errors) prints what `skein run` prints.
 
-**Exit:** the host's dynamic-var tests pass natively.
+**Exit:** the new host tests pass, and the fixture prints the same natively as with `skein run`, on all three platforms.
 
 ### M2.5 Evaluating code in native programs
 - Dev builds include the compiler's front end and a closure-compiling interpreter (Core IR to closures), so a running native program can `eval`, load a file and `(reload 'ns)`.
