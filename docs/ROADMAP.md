@@ -220,6 +220,13 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M1.10 Native FFI
 - The C backend emits direct C calls for `defcfun`, callbacks as C functions, pinning, owned pointers and handles (DESIGN §14). `sdl3.raw` works unchanged.
+- Libraries are loaded when the program runs and each C function is looked up on its first call, as in Phase 0; the calls themselves are typed C calls (D-064).
+- Native FFI is added to the C backend written in Skein only. The Lisp C backend is frozen as the bootstrap compiler: `./skein build` reports FFI programs as unsupported and points to `skeinc` (D-064).
+- Steps, in order:
+  1. The runtime's FFI: foreign pointers, loading libraries and finding symbols, structs, unions and enums with C layouts, memory access, handles, and owned pointers freed by the GC. skein.ffi's functions natively.
+  2. `defcfun` in `skeinc`: typed C calls with Phase 0's conversions (C strings, enums, `nil` as NULL), arrays pinned for the call, `^:owned` results, `^:blocking` calls that let the GC run, and the slow-call warning.
+  3. `defcallback`: C functions that call Skein; an error warns and returns zero, as in Phase 0.
+  4. `examples/sdl/window.skn`, built by `skeinc`, runs natively on all three platforms in CI.
 
 **Exit:** `examples/sdl/window.skn` runs natively on all three platforms.
 

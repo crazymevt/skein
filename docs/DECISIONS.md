@@ -845,3 +845,16 @@ Date: 2026-11-09 · Status: Accepted
   - A separate CI step instead of `make test`. Keeping it in `make test` means the usual gate covers the native compiler too.
 - **Consequences:** the bootstrap takes about a minute: four compiler builds and eight example builds. The compiler is self-hosting: from `skeinc` on, it compiles its own source to the same C every time.
 
+## D-064: Native FFI: run-time loading, and only in skeinc
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M1.10 brings DESIGN §14 to native programs. Phase 0 loads libraries with `deflibrary` when a program runs and looks each C function up on its first call (D-038). Native code could instead link libraries at build time. Separately, `skeinc` now compiles itself (M1.9), and every native feature so far was written twice, in the Lisp C backend and in the one in Skein.
+- **Decision** (Jessie chose each):
+  - **Run-time loading:** natively, `deflibrary` loads the library when the program runs (dlopen, LoadLibrary), and a `defcfun` finds its symbol on the first call. The call is a direct C call through a function pointer of the right C type, compiled by the C backend: no libffi. A missing library or function is an error when it is used, as in Phase 0. Builds need neither the library nor, on Windows, an import library.
+  - **Only skeinc:** native FFI goes into the C backend written in Skein (`lib/skein/compiler/c.skn`) only. The Lisp C backend is frozen as the compiler that bootstraps `skeinc`: `./skein build` reports FFI programs as unsupported and points to `skeinc`. The Lisp-versus-Skein comparison tests skip programs that use the FFI, and native FFI is tested by building with `skeinc` and comparing with `skein run`.
+  - **M1.10 has four steps** (ROADMAP): the runtime's FFI, `defcfun`, `defcallback`, and the SDL example in CI.
+- **Alternatives:**
+  - Linking libraries at build time (`-lSDL3`). Errors would come at build or start-up time, but every build would need the library and, on Windows, an import library.
+  - Adding FFI to both backends, keeping byte-for-byte comparison for FFI code, at twice the work.
+- **Consequences:**
+  - Native features after M1.9 are written once. The Lisp backend still builds the first compiler, and its comparison tests keep checking everything up to M1.9.
+
