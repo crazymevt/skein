@@ -1,13 +1,26 @@
-/* Switching fiber stacks on macOS and Linux (M2.2, D-074), for arm64 and x86_64 System V.
- * In C with top-level assembly so every Zig backend links it: build.zig compiles this
- * file into the runtime for POSIX targets. platform.zig lays out a new fiber's first
- * frame to match.
+/* Fibers on macOS and Linux (M2.2, D-074): switching stacks, for arm64 and x86_64 System
+ * V, and turning a stack overflow into an error. In C (with top-level assembly) so every
+ * Zig backend links it: build.zig compiles this file into the runtime for POSIX targets.
+ * platform.zig lays out a new fiber's first frame to match.
  *
  * sk_switch_stacks(save, load): save the callee-saved registers on the current stack,
  * store the stack pointer in *save, load the stack pointer `load`, restore the registers
  * saved there and return into that context.
  *
  * sk_fiber_start: where a new fiber starts; calls entry(arg), which never returns. */
+
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#else
+#define _GNU_SOURCE
+#endif
+
+#include <pthread.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <sys/ucontext.h>
 
 #if defined(__APPLE__)
 #define SYM(name) "_" #name
@@ -87,3 +100,84 @@ __asm__(
 #else
 #error "fibers support arm64 and x86_64"
 #endif
+
+/* Stack overflow. Below each fiber's usable stack is a soft guard zone, and below that a
+ * hard guard page, both inaccessible. A fault in the running fiber's soft zone runs
+ * on_fault on the thread's alternate signal stack: it opens the zone, which gives the
+ * fiber room to signal the error, and makes the fiber continue in sk_stack_overflow as
+ * if it had called it. platform.zig closes the zone again once the fiber's stack is
+ * shallow, and keeps these thread-locals right for the running fiber. */
+
+/* The running fiber's soft zone [low, high); 0 when the thread runs on its own stack. */
+_Thread_local uintptr_t sk_fiber_soft_low, sk_fiber_soft_high;
+/* Set once its soft zone is open (until platform.zig closes it). */
+_Thread_local int sk_fiber_overflowed;
+
+void sk_stack_overflow(void); /* fiber.zig: signals stack-overflow, never returns */
+
+static struct sigaction previous_segv, previous_bus;
+
+static void on_fault(int sig, siginfo_t *info, void *context) {
+    uintptr_t address = (uintptr_t)info->si_addr;
+    if (sk_fiber_soft_high != 0 && !sk_fiber_overflowed && address >= sk_fiber_soft_low &&
+        address < sk_fiber_soft_high) {
+        mprotect((void *)sk_fiber_soft_low, sk_fiber_soft_high - sk_fiber_soft_low,
+                 PROT_READ | PROT_WRITE);
+        sk_fiber_overflowed = 1;
+        ucontext_t *uc = context;
+        /* Continue in sk_stack_overflow with the stack aligned as at a function's entry,
+         * the faulting code as its caller. */
+#if defined(__APPLE__) && defined(__aarch64__)
+        uc->uc_mcontext->__ss.__sp &= ~(uint64_t)15;
+        uc->uc_mcontext->__ss.__lr = uc->uc_mcontext->__ss.__pc;
+        uc->uc_mcontext->__ss.__pc = (uint64_t)(uintptr_t)sk_stack_overflow;
+#elif defined(__APPLE__) && defined(__x86_64__)
+        uc->uc_mcontext->__ss.__rsp = (uc->uc_mcontext->__ss.__rsp & ~(uint64_t)15) - 8;
+        uc->uc_mcontext->__ss.__rip = (uint64_t)(uintptr_t)sk_stack_overflow;
+#elif defined(__aarch64__)
+        uc->uc_mcontext.sp &= ~(uint64_t)15;
+        uc->uc_mcontext.regs[30] = uc->uc_mcontext.pc;
+        uc->uc_mcontext.pc = (uint64_t)(uintptr_t)sk_stack_overflow;
+#elif defined(__x86_64__)
+        uc->uc_mcontext.gregs[REG_RSP] = (uc->uc_mcontext.gregs[REG_RSP] & ~(greg_t)15) - 8;
+        uc->uc_mcontext.gregs[REG_RIP] = (greg_t)(uintptr_t)sk_stack_overflow;
+#endif
+        return;
+    }
+    /* Anything else: put the previous handling back, so the fault happens again and is
+     * handled as it would have been without this handler. */
+    sigaction(sig, sig == SIGSEGV ? &previous_segv : &previous_bus, NULL);
+}
+
+static void install_handler(void) {
+    struct sigaction action = {0};
+    action.sa_sigaction = on_fault;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGSEGV, &action, &previous_segv);
+    sigaction(SIGBUS, &action, &previous_bus);
+}
+
+static pthread_once_t handler_once = PTHREAD_ONCE_INIT;
+static _Thread_local int thread_prepared;
+
+/* Before a thread first runs fibers: give it an alternate signal stack, and install the
+ * fault handler once per process. */
+void sk_fiber_prepare_thread(void) {
+    if (thread_prepared) return;
+    thread_prepared = 1;
+    pthread_once(&handler_once, install_handler);
+    stack_t alt = {0};
+    alt.ss_size = 64 * 1024;
+    alt.ss_sp = malloc(alt.ss_size);
+    if (alt.ss_sp != NULL) sigaltstack(&alt, NULL);
+}
+
+/* platform.zig: the zone of the fiber about to run, and whether it's open. */
+void sk_fiber_set_zone(uintptr_t low, uintptr_t high, int overflowed) {
+    sk_fiber_soft_low = low;
+    sk_fiber_soft_high = high;
+    sk_fiber_overflowed = overflowed;
+}
+
+int sk_fiber_overflowed_now(void) { return sk_fiber_overflowed; }

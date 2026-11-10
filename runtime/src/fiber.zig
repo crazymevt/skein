@@ -74,6 +74,7 @@ pub fn current() *Fiber {
     if (current_fiber) |f| return f;
     // Threads' fibers are never freed: the list of all fibers may point at them.
     _ = gc.attachThread();
+    platform.prepareThreadForFibers();
     const f = alloc.create(Fiber) catch rt.fatal("out of memory (a fiber)", .{});
     f.* = .{ .state = .running };
     platform.initThreadFiber(&f.ctx);
@@ -155,6 +156,12 @@ pub fn yield() void {
     switchTo(current().resumer.?);
 }
 
+/// Where a fiber that overflowed its stack continues, in the room the platform opened
+/// below it (D-024): signal the error there, like any other.
+export fn sk_stack_overflow() callconv(.c) noreturn {
+    rt.raise(.stack_overflow, "stack overflow: the fiber used all of its {d} KB stack", .{default_stack_size / 1024});
+}
+
 const Switch = struct { from: *Fiber, to: *Fiber };
 
 extern fn sk_spill_registers_and_call(f: *const fn (?*anyopaque) callconv(.c) void, arg: ?*anyopaque) void;
@@ -172,11 +179,13 @@ fn switchSpilled(arg: ?*anyopaque) callconv(.c) void {
     const from = s.from;
     const to = s.to;
     from.scan_low = @intFromPtr(&marker);
+    platform.fiberSwitchingOut(&from.ctx, @intFromPtr(&marker));
     from.cond_state = cond.saveFiberState();
     from.state = if (from.done) .idle else .suspended;
     // Whoever switches back to `from` sets these for it.
     to.state = .running;
     cond.restoreFiberState(to.cond_state);
+    platform.fiberSwitchingIn(&to.ctx);
     current_fiber = to;
     gc.setStackHigh(to.ctx.high);
     platform.switchFiber(&from.ctx, &to.ctx);

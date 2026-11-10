@@ -145,3 +145,45 @@ test "errors unwind inside a fiber while others are switched in between" {
     runAll(&fibers, 7);
     for (catchers) |c| try testing.expectEqual(@as(usize, 5), c.caught);
 }
+
+fn recurseForever(depth: usize) usize {
+    var pad: [512]u8 = undefined;
+    std.mem.doNotOptimizeAway(&pad);
+    pad[0] = @truncate(depth);
+    return recurseForever(depth + 1) +% pad[0];
+}
+
+fn overflowStack(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
+    _ = self;
+    _ = argc;
+    _ = argv;
+    return Value.fromFixnum(@intCast(recurseForever(0) & 0xff));
+}
+
+const Overflower = struct {
+    caught: usize = 0,
+    fn job(arg: ?*anyopaque) void {
+        const self: *Overflower = @ptrCast(@alignCast(arg));
+        for (0..3) |_| {
+            var types = [_]Value{cond.builtinType(.stack_overflow)};
+            const r = sk_try_call(func.make(overflowStack, "overflow"), 0, &.{}, 1, &types);
+            if (coll.vectorNth(r, 0).?.toFixnum() == 0) self.caught += 1;
+            fiber.yield();
+        }
+    }
+};
+
+test "a stack overflow is an error in the fiber, which it can handle again and again" {
+    setup();
+    var a: Overflower = .{};
+    var b: Overflower = .{};
+    var fibers = [_]*fiber.Fiber{ fiber.spawn(Overflower.job, &a), fiber.spawn(Overflower.job, &b) };
+    runAll(&fibers, 0);
+    try testing.expectEqual(@as(usize, 3), a.caught);
+    try testing.expectEqual(@as(usize, 3), b.caught);
+    // The pooled stacks work as before.
+    var builder: Builder = .{ .n = 100 };
+    var more = [_]*fiber.Fiber{fiber.spawn(Builder.job, &builder)};
+    runAll(&more, 1);
+    try testing.expect(builder.ok);
+}

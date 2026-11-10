@@ -185,6 +185,8 @@ pub const Builtin = enum {
     cancelled,
     timeout,
     task_cancelled_error,
+    // A fiber ran out of stack (M2.2, D-024).
+    stack_overflow,
 
     fn parent(b: Builtin) ?Builtin {
         return switch (b) {

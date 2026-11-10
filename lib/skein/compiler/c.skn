@@ -684,7 +684,7 @@ is the Lisp backend's list."
   "The skein.core vars that hold built-in condition types."
   #{"arithmetic-error" "type-error" "index-error" "arity-error" "unbound-var-error"
     "not-callable-error" "unsupported-operation-error" "transient-error" "namespace-error"
-    "cancelled" "timeout" "task-cancelled-error"})
+    "cancelled" "timeout" "task-cancelled-error" "stack-overflow"})
 
 (def ^:private library-namespaces
   "The namespaces that define skein.core functions in Skein: the library (D-051) and the

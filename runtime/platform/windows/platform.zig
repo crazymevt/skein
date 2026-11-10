@@ -3,6 +3,7 @@
 //! declarations for macOS and Linux.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const page_size_min = std.heap.page_size_min;
 
@@ -262,6 +263,10 @@ pub const FiberContext = struct {
     high: usize = 0,
     entry: ?FiberEntry = null,
     arg: ?*anyopaque = null,
+    /// A thread's own stack, rather than a fiber's.
+    is_thread: bool = false,
+    /// Set after a stack overflow until Windows' guard page is back.
+    overflowed: bool = false,
 };
 
 /// The entry point of a new fiber: called with the argument given to createFiber, on the
@@ -273,10 +278,75 @@ pub fn fiberGuardSize() usize {
     return pageSize();
 }
 
+extern "kernel32" fn SetThreadStackGuarantee(size: *u32) callconv(.winapi) i32;
+extern "kernel32" fn AddVectoredExceptionHandler(first: u32, handler: std.os.windows.VECTORED_EXCEPTION_HANDLER) callconv(.winapi) ?*anyopaque;
+extern "c" fn _resetstkoflw() c_int;
+
+/// Room Windows keeps below a fiber's stack for handling its overflow: enough to signal
+/// the error.
+const overflow_guarantee: u32 = 64 * 1024;
+
 fn fiberStart(parameter: ?*anyopaque) callconv(.winapi) void {
     const ctx: *FiberContext = @ptrCast(@alignCast(parameter));
     ctx.high = currentStackBounds().high;
+    var guarantee = overflow_guarantee;
+    _ = SetThreadStackGuarantee(&guarantee);
     ctx.entry.?(ctx.arg);
+}
+
+// Stack overflow: Windows raises EXCEPTION_STACK_OVERFLOW when a fiber's guard page is
+// used up. In a fiber, the handler makes it continue in sk_stack_overflow (fiber.zig),
+// which signals the error in the space of the stack guarantee; Windows' guard page is
+// put back once the fiber's stack is shallow again (_resetstkoflw).
+
+extern fn sk_stack_overflow() callconv(.c) noreturn;
+
+/// Whether this thread runs a fiber now (not its own stack), and whether it overflowed.
+threadlocal var in_fiber = false;
+threadlocal var overflowed_now = false;
+
+fn onException(info: *std.os.windows.EXCEPTION_POINTERS) callconv(.winapi) c_long {
+    const EXCEPTION_CONTINUE_EXECUTION: c_long = -1;
+    const EXCEPTION_CONTINUE_SEARCH: c_long = 0;
+    if (info.ExceptionRecord.ExceptionCode != std.os.windows.EXCEPTION_STACK_OVERFLOW or
+        !in_fiber or overflowed_now) return EXCEPTION_CONTINUE_SEARCH;
+    overflowed_now = true;
+    const ctx = info.ContextRecord;
+    switch (builtin.cpu.arch) {
+        .x86_64 => {
+            ctx.Rsp = (ctx.Rsp & ~@as(u64, 15)) - 8;
+            ctx.Rip = @intFromPtr(&sk_stack_overflow);
+        },
+        .aarch64 => {
+            ctx.Sp &= ~@as(u64, 15);
+            ctx.DUMMYUNIONNAME.X[30] = ctx.Pc;
+            ctx.Pc = @intFromPtr(&sk_stack_overflow);
+        },
+        else => @compileError("fibers support arm64 and x86_64"),
+    }
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+var handler_installed = std.atomic.Value(bool).init(false);
+
+/// Before the calling thread first runs fibers: install the stack overflow handler (once
+/// per process).
+pub fn prepareThreadForFibers() void {
+    if (!handler_installed.swap(true, .acq_rel)) _ = AddVectoredExceptionHandler(1, onException);
+}
+
+/// The running fiber `ctx` is being switched away from, with its stack at `sp`: note an
+/// overflow, and put Windows' guard page back once the stack is shallow.
+pub fn fiberSwitchingOut(ctx: *FiberContext, sp: usize) void {
+    _ = sp;
+    if (overflowed_now) ctx.overflowed = true;
+    if (ctx.overflowed and _resetstkoflw() != 0) ctx.overflowed = false;
+}
+
+/// `ctx` is about to run on this thread.
+pub fn fiberSwitchingIn(ctx: *const FiberContext) void {
+    in_fiber = !ctx.is_thread;
+    overflowed_now = ctx.overflowed;
 }
 
 /// Make `ctx` a new fiber with a stack of at least `size` bytes, which runs `entry(arg)`
@@ -299,7 +369,7 @@ threadlocal var thread_fiber: ?*anyopaque = null;
 /// Make `ctx` stand for the calling thread's own stack, so a fiber can switch back to it.
 pub fn initThreadFiber(ctx: *FiberContext) void {
     if (thread_fiber == null) thread_fiber = ConvertThreadToFiberEx(null, FIBER_FLAG_FLOAT_SWITCH);
-    ctx.* = .{ .handle = thread_fiber, .high = currentStackBounds().high };
+    ctx.* = .{ .handle = thread_fiber, .high = currentStackBounds().high, .is_thread = true };
 }
 
 /// Save the running context into `from` and resume `to`. Returns when something switches

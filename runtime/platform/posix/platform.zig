@@ -257,7 +257,16 @@ pub const FiberContext = struct {
     stack: []align(page_size_min) u8 = &.{},
     /// The top of the stack (stacks grow down); 0 until known.
     high: usize = 0,
+    /// The soft guard zone above the hard guard page (fibers.c); empty for a thread's own
+    /// stack. `overflowed` while it's open after a stack overflow.
+    soft_low: usize = 0,
+    soft_high: usize = 0,
+    overflowed: bool = false,
 };
+
+/// Bytes between the hard guard page and the usable stack that a stack overflow opens,
+/// so the fiber has room to signal the error (fibers.c).
+const soft_zone_size: usize = 64 * 1024;
 
 /// The entry point of a new fiber: called with the argument given to createFiber, on the
 /// fiber's stack. It must never return.
@@ -273,12 +282,44 @@ pub fn fiberGuardSize() usize {
 /// fiber touches them.
 pub fn createFiber(ctx: *FiberContext, size: usize, entry: FiberEntry, arg: ?*anyopaque) MemoryError!void {
     const guard = fiberGuardSize();
+    const soft = std.mem.alignForward(usize, soft_zone_size, pageSize());
     const usable = std.mem.alignForward(usize, size, pageSize());
-    const mem = try reserve(guard + usable);
+    const mem = try reserve(guard + soft + usable);
     errdefer release(mem);
-    try commit(@alignCast(mem[guard..]));
-    ctx.* = .{ .stack = mem, .high = @intFromPtr(mem.ptr) + mem.len };
+    try commit(@alignCast(mem[guard + soft ..]));
+    const low = @intFromPtr(mem.ptr);
+    ctx.* = .{
+        .stack = mem,
+        .high = low + mem.len,
+        .soft_low = low + guard,
+        .soft_high = low + guard + soft,
+    };
     ctx.sp = initialFrame(ctx.high, entry, arg);
+}
+
+extern fn sk_fiber_prepare_thread() void;
+extern fn sk_fiber_set_zone(low: usize, high: usize, overflowed: c_int) void;
+extern fn sk_fiber_overflowed_now() c_int;
+
+/// Before the calling thread first runs fibers (fibers.c): an alternate signal stack, and
+/// the stack overflow handler.
+pub fn prepareThreadForFibers() void {
+    sk_fiber_prepare_thread();
+}
+
+/// The running fiber `ctx` is being switched away from, with its stack at `sp`: note an
+/// overflow, and close its soft zone again once nothing on the stack is in it.
+pub fn fiberSwitchingOut(ctx: *FiberContext, sp: usize) void {
+    if (sk_fiber_overflowed_now() != 0) ctx.overflowed = true;
+    if (ctx.overflowed and sp > ctx.soft_high) {
+        _ = c.mprotect(@ptrFromInt(ctx.soft_low), ctx.soft_high - ctx.soft_low, .{});
+        ctx.overflowed = false;
+    }
+}
+
+/// `ctx` is about to run on this thread: the fault handler watches its soft zone.
+pub fn fiberSwitchingIn(ctx: *const FiberContext) void {
+    sk_fiber_set_zone(ctx.soft_low, ctx.soft_high, @intFromBool(ctx.overflowed));
 }
 
 /// Free a fiber's stack. It must not be running.
@@ -299,7 +340,7 @@ pub fn switchFiber(from: *FiberContext, to: *FiberContext) void {
 }
 
 /// Save the callee-saved registers on the current stack, store its pointer in `save`, and
-/// resume the stack at `load` (fiber_switch.c).
+/// resume the stack at `load` (fibers.c).
 extern fn sk_switch_stacks(save: *usize, load: usize) void;
 
 fn switchStacks(save: *usize, load: usize) void {
@@ -337,5 +378,5 @@ fn initialFrame(high: usize, entry: FiberEntry, arg: ?*anyopaque) usize {
     }
 }
 
-/// The first code a new fiber runs (fiber_switch.c): it calls `entry(arg)`.
+/// The first code a new fiber runs (fibers.c): it calls `entry(arg)`.
 extern fn sk_fiber_start() callconv(.c) void;
