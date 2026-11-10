@@ -1171,3 +1171,13 @@ Date: 2026-11-10 · Status: Accepted
 - **Alternatives:** argument lists as metadata on the def's name (only `defn` and `defmacro` would give them); asking the runtime for function parameters (compiled functions don't keep names).
 - **Consequences:** the registry of an `--eval` build is larger by its docstrings. The inspector has no actions yet, and printing a small collection that holds an infinite lazy seq doesn't end.
 
+## D-087: skein-slime.el and the scripted SLIME session
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.7 step 4 (D-082): the Emacs helper, `docs/EDITORS.md`, and a scripted SLIME session in CI. Running SLIME 2.32 against the server showed what SLIME expects that steps 1–3 had guessed.
+- **Decision:**
+  - **`editors/skein-slime.el`** opens `.skn` files in `skein-slime-source-mode`: `clojure-mode` if it's installed, else `lisp-mode`, with `slime-mode` on and `slime-find-buffer-package-function` reading the buffer's `ns` form. `.skn` buffers that another setting opens in `clojure-mode` get the same. It skips SLIME's version question for a connection whose `:lisp-implementation` type is `"Skein"`, by advising `slime-set-connection-info` and `slime-check-version`, so the server's `:version` needn't match any SLIME's. `M-x skein-slime-connect` connects to `127.0.0.1:4005` (the server listens on IPv4 only); `M-x skein-slime` runs `skein dev --no-server --swank-port 0` on the file in `*skein-dev*` and connects once the program prints its port.
+  - **What SLIME expects:** autodoc's raw form has the argument being typed (`""` if none yet) before the cursor marker, so the argument's index is the marker's position minus 2. SLIME sends a region's column from 1 but reads the columns it receives from 0 (it uses `move-to-column`), so the server sends locations' columns minus one. A request unwound by a restart answers `(:abort nil)`, as Swank does. slime-fancy's presentations and REPL contribs send `init-presentations`, `clear-repl-results` and `clear-repl-variables`, which the server answers without presentations.
+  - **The session** (`editors/tests/slime-session.el`, on `editors/tests/demo.skn`) runs in batch Emacs with SLIME 2.32 and slime-fancy: `M-x skein-slime`, the REPL, `C-x C-e`, `C-c C-c` on an edited function, completion, autodoc, describe, `M-.`, SLDB with abort, SLDB for the program's error with a restart that resumes it, and the inspector. CI's Linux job runs it, with SLIME cloned at its tag.
+- **Alternatives:** setting `slime-protocol-version` to `ignore`, which would hide the question for every Lisp; a major mode of Skein's own.
+- **Consequences:** SLIME's version is pinned in CI; a new SLIME release is tried by changing `SLIME_VERSION`.
+

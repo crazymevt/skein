@@ -157,7 +157,7 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
       (let ((m (swank-request s "(swank:compile-string-for-emacs \"
 (let [y] y)\" \"*scratch*\" '((:position 1) (:line 7 1)) nil 'nil)" "\"serve\"" "t" 7)))
         (is (swank-has m "(:return (:ok (:compilation-result ((:message \"a binding vector"
-                       ":severity :error :location (:location (:buffer \"*scratch*\") (:line 8 1)"
+                       ":severity :error :location (:location (:buffer \"*scratch*\") (:line 8 0)"
                        ") nil 0.0 nil nil)) 7)")
             "~S" m))
       ;; C-c C-k: the file loaded, with what it prints going to Emacs.
@@ -213,7 +213,7 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
                    "(:return (:ok ((1 \"outer\") (2 \"safe\"))) 2)"))
     (is (swank-has (swank-request s "(swank:frame-source-location 0)" "\"serve\"" "1" 3)
                    ;; An absolute path, which Emacs needs.
-                   "(:return (:ok (:location (:file \"" "serve.skn\") (:line 3 1) nil)) 3)"))
+                   "(:return (:ok (:location (:file \"" "serve.skn\") (:line 3 0) nil)) 3)"))
     ;; Evaluating in the debugger's thread; a compile error is only an answer; a runtime
     ;; error opens level 2, whose abort returns to level 1.
     (is (swank-has (swank-request s "(swank:eval-string-in-frame \"(greet 3)\" 0 \"serve\")"
@@ -296,15 +296,15 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
                      "(:return (:ok ((\"mapcat\") \"mapcat\")) 3)"))
       ;; Argument lists, with the argument at the cursor marked, from compiled code: a
       ;; function, a rest parameter, a macro (without &form and &env) and skein.core.
-      (is (swank-has (ask (concatenate 'string "(swank:autodoc '(\"greet\" swank::%cursor-marker%)"
-                                       " :print-right-margin 80)")
+      (is (swank-has (ask (concatenate 'string "(swank:autodoc '(\"greet\" \"\" "
+                                       "swank::%cursor-marker%) :print-right-margin 80)")
                           4)
                      "(:return (:ok (\"(greet ===> n <===)\" t)) 4)"))
-      (is (swank-has (ask "(swank:autodoc '(\"sum\" \"1\" \"2\" \"3\" swank::%cursor-marker%))" 5)
+      (is (swank-has (ask "(swank:autodoc '(\"sum\" \"1\" \"2\" \"\" swank::%cursor-marker%))" 5)
                      "(:return (:ok (\"(sum a b & ===> more <===)\" t)) 5)"))
-      (is (swank-has (ask "(swank:autodoc '(\"twice\" swank::%cursor-marker%))" 6)
+      (is (swank-has (ask "(swank:autodoc '(\"twice\" \"\" swank::%cursor-marker%))" 6)
                      "(:return (:ok (\"(twice ===> x <===)\" t)) 6)"))
-      (is (swank-has (ask "(swank:autodoc '(\"map\" \"inc\" swank::%cursor-marker%))" 7)
+      (is (swank-has (ask "(swank:autodoc '(\"map\" \"inc\" \"\" swank::%cursor-marker%))" 7)
                      "(:return (:ok (\"(map f & ===> colls <===)\" t)) 7)"))
       (is (swank-has (ask "(swank:autodoc '(\"no-such\" swank::%cursor-marker%))" 8)
                      "(:return (:ok (:not-available t)) 8)"))
@@ -318,7 +318,7 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
       (let* ((m (ask "(swank:find-definitions-for-emacs \"greet\")" 12))
              (reply (ignore-errors (read-from-string (car (last m)))))
              (location (second (first (second (second reply))))))
-        (is (swank-has m "((\"(def serve/greet)\" (:location (:file \"" "(:line 2 1) nil)))")
+        (is (swank-has m "((\"(def serve/greet)\" (:location (:file \"" "(:line 2 0) nil)))")
             "~S" m)
         ;; The file's absolute path, which Emacs needs.
         (is (equal (truename (merge-pathnames "serve.skn" dir))

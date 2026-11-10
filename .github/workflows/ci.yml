@@ -190,6 +190,19 @@ jobs:
           skein.cmd run examples\hello.skn
           skein.cmd host run examples\hello.skn
 
+      # M2.7: SLIME, with editors/skein-slime.el, drives native skein dev through a scripted
+      # session (D-082).
+      - name: SLIME session (Linux)
+        if: runner.os == 'Linux'
+        env:
+          SLIME_VERSION: v2.32
+        run: |
+          sudo apt-get install -y --no-install-recommends emacs-nox
+          git clone --depth 1 --branch "$SLIME_VERSION" https://github.com/slime/slime.git \
+            "$RUNNER_TEMP/slime"
+          timeout 900 emacs --batch -Q -L "$RUNNER_TEMP/slime" -L editors \
+            -l editors/tests/slime-session.el
+
       - name: SDL3 window example
         if: runner.os != 'Linux'
         run: ./skein run examples/sdl/window.skn

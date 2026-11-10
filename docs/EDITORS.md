@@ -1,9 +1,10 @@
-# Editor setup (Phase 0)
+# Editor setup
 
-Skein's Phase 0 tools are editor-neutral (D-039):
+Skein's tools are editor-neutral (D-039):
 
 - `./skein dev game.skn` runs a program, **reloads each source file when you save it**,
-  and serves a REPL on the terminal and on `localhost:5555`.
+  and serves a REPL on the terminal and on `localhost:5555`, and Swank, SLIME's
+  protocol, on `localhost:4005` (D-082).
 - `./skein repl` starts a REPL without a program.
 
 So the basic loop needs no editor support at all: edit, save, watch the change appear. An
@@ -14,7 +15,65 @@ The REPL protocol is plain text: you send forms, and it prints each result after
 `namespace=> ` prompt, like a Clojure socket REPL. Skein syntax is close enough to Clojure
 that Clojure editor modes highlight and indent it well.
 
+## Emacs: SLIME
+
+`skein dev` serves Swank, so SLIME works with a running Skein program: evaluating and
+compiling code, the REPL, the debugger (SLDB) with Skein's restarts and backtrace,
+completion, argument lists as you type, documentation, `M-.` and the inspector.
+`editors/skein-slime.el` sets SLIME up for Skein.
+
+Install SLIME (from MELPA, or a checkout on `load-path`) and, for highlighting,
+`clojure-mode`. Then add:
+
+```elisp
+(add-to-list 'load-path "/path/to/skein/editors")
+(require 'skein-slime)
+(slime-setup '(slime-fancy))
+```
+
+`skein-slime.el` opens `.skn` files in `clojure-mode` (or `lisp-mode` without it) with
+`slime-mode` on, gives SLIME each buffer's namespace from its `ns` form, and connects to
+Skein without SLIME's "Versions differ" question.
+
+Start the program from Emacs with **`M-x skein-slime`** in its source buffer: it runs
+`skein dev` on the file in the buffer `*skein-dev*` (the program's terminal and text REPL)
+and connects SLIME once the program is running. Or run `./skein dev game.skn` in a
+terminal and **`M-x skein-slime-connect`** (port 4005; with `C-u`, ask for another). It
+connects to `127.0.0.1`, as the server listens on IPv4 only. Set `skein-slime-program`
+if the `skein` launcher isn't in the file's directory, one above it, or on the `PATH`.
+
+| Key | Does |
+|---|---|
+| `C-c C-c` | compile and load the top-level form at point; errors appear as notes at their place |
+| `C-c C-k` | load the file |
+| `C-x C-e`, `C-M-x` | evaluate the form before point, or the top-level form |
+| `C-c C-z` | switch to the REPL |
+| `TAB`, `M-TAB` | complete a name: the namespace's own, `skein.core`'s, `alias/name` |
+| `C-c C-d d` | describe a var: argument lists, docstring and where it's defined |
+| `M-.` | go to a definition (`M-,` goes back) |
+| `C-c I` | inspect a value |
+
+The argument list of the call around the cursor shows in the echo area as you type.
+
+**Debugger.** An error in code you evaluate opens SLDB with the error, Skein's restarts
+and the Skein functions on the stack. So does an error in the running program that nothing
+handles: the program's thread waits in SLDB, as it would at the terminal. In SLDB, a number
+or `RET` on a restart invokes it, `a` aborts, `q` returns to the top level, `v` on a frame
+shows its function's definition, `e` evaluates a form in the failing thread and `C`
+inspects the condition. If Emacs isn't connected, or disconnects first, the program's error
+goes to the text REPL as before.
+
+**What isn't there yet** (ROADMAP's notes, D-084, D-086): restarts that take arguments
+can't be chosen; `C-c C-c` in the REPL doesn't interrupt a running evaluation; frames
+show no local variables; the runtime's functions written in Zig (`str`, `count`, ...)
+have no argument lists or docstrings; and the inspector has no actions.
+
+SLY (Slynk) isn't supported yet.
+
 ## Emacs: clojure-mode and inf-clojure
+
+inf-clojure speaks to the plain-text REPL on port 5555, without SLIME's debugger and
+documentation.
 
 Install `clojure-mode` and `inf-clojure` from MELPA, then add:
 
@@ -92,7 +151,12 @@ In the debugger (the prompt starts with `debug[...]`):
 | `:quit` | abort to the top level |
 | a form | evaluate it in the failing thread, where its restarts are active |
 
-## Later
+## Testing the SLIME setup
 
-From Phase 2 the native runtime speaks Swank, so SLIME and SLY connect to it directly
-(D-018).
+CI's Linux job runs a scripted SLIME session against native `skein dev`
+(`editors/tests/slime-session.el`, with `editors/tests/demo.skn`). To run it locally, with
+SLIME checked out somewhere:
+
+```sh
+emacs --batch -Q -L /path/to/slime -L editors -l editors/tests/slime-session.el
+```

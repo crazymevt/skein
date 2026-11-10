@@ -292,6 +292,12 @@ if there are none. file, line and column say where text starts, for locations."
   [value]
   (if (= value ::none) "; No value" (str "=> " (dev/show value))))
 
+(defn- emacs-line
+  "SLIME's (:line line column) for a 1-based line and column: SLIME reads the column from 0
+(it moves there with move-to-column), though it sends regions' columns from 1."
+  [line column]
+  (list :line line (max 0 (dec (or column 1)))))
+
 (defn- location
   "A source location (from the reader) as SLIME takes one; buffer is the name of the
 Emacs buffer for text with no file of its own."
@@ -301,7 +307,7 @@ Emacs buffer for text with no file of its own."
           (if (and buffer (or (nil? (:file loc)) (= (:file loc) file)))
             (list :buffer buffer)
             (list :file (:file loc)))
-          (list :line (:line loc) (:column loc))
+          (emacs-line (:line loc) (:column loc))
           nil)
     (list :error "no location")))
 
@@ -436,7 +442,7 @@ the file's absolute path, which Emacs needs, or an error if there's no such file
         column (when b (parse-long (subs loc (inc b))))]
     (if (and line column)
       (if-let [path (%absolute-path (subs loc 0 a))]
-        (list :location (list :file path) (list :line line column) nil)
+        (list :location (list :file path) (emacs-line line column) nil)
         (list :error (str "defined at " loc ", which isn't a file")))
       (list :error "no source location"))))
 
@@ -547,9 +553,10 @@ skein.core.native var."
     (str "(" (apply str (interpose " " (cons op shown))) ")")))
 
 (defn- choose-arglist
-  "The parameter vector that a call with an argument at index i fits, or the last."
+  "The parameter vector that a call with an argument at index i (or nil) fits, or the
+last."
   [lists i]
-  (or (first (filter (fn [ps] (or (some #{"&"} ps) (> (count ps) i))) lists))
+  (or (first (filter (fn [ps] (or (some #{"&"} ps) (> (count ps) (or i 0)))) lists))
       (last lists)))
 
 (defn- describe-text
@@ -779,7 +786,10 @@ indexes parts."
 (defn- autodoc [c pkg [raw]]
   (let [form (cursor-form raw)
         op (when form (first form))
-        i (when form (dec (count (take-while (complement marker?) form))))
+        ;; SLIME puts the argument being typed ("" if none yet) before the marker:
+        ;; ("f" "" marker) is at argument 0, ("f" "1" "" marker) at argument 1.
+        at (when form (- (count (take-while (complement marker?) form)) 2))
+        i (when (and at (>= at 0)) at)
         var (when (string? op) (find-var-named (model-ns c pkg) op))
         lists (when var (arglists-of var))]
     (if (seq lists)
@@ -882,6 +892,10 @@ swank-repl:)."
    "eval-string-in-frame" eval-string-in-frame
    "pprint-eval-string-in-frame" pprint-eval-string-in-frame
    "sldb-print-condition" (fn [c pkg args] (condition-message (:condition *sldb*)))
+   ;; slime-fancy's presentations and REPL contribs; Skein has no presentations.
+   "init-presentations" (fn [c pkg args] nil)
+   "clear-repl-results" (fn [c pkg args] true)
+   "clear-repl-variables" (fn [c pkg args] (doseq [v [nil nil nil]] (dev/record-value! v)))
    ;; Names
    "simple-completions" completions
    "completions" completions
@@ -954,8 +968,8 @@ its abort restart answers (:abort message)."
                           (str "Return to sldb level " (:level *sldb*) ".")
                           "Return to SLIME's top level.")
                 (list :abort (if @failure (condition-message @failure) "aborted"))))))
-          ;; A restart of an outer level unwound this request.
-          (finally (when-not @replied (reply (list :abort "aborted")))))))))
+          ;; A restart of an outer level unwound this request: no condition, as Swank says.
+          (finally (when-not @replied (reply (list :abort nil)))))))))
 
 (def ^:private answer answer*)
 
