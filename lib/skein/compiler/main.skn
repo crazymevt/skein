@@ -138,11 +138,16 @@ condition type."
       (doseq [sub (rest (:datum expanded))] (run-phase-1 sub))
       (interp/evaluate (expander/analyze-toplevel expanded ns)))))
 
+(def ^:private files-read
+  "The source files the translation going on has read, for the run cache (D-081)."
+  (atom []))
+
 (defn- read-file-forms
   "Call (f form) for each top-level form of the file at path, starting in namespace
 user; the reader follows the namespace each form leaves current. Returns the namespace
 current at the end. The namespace current before is restored."
   [path f]
+  (swap! files-read conj path)
   (let [saved (%current-namespace-name)
         text (io/read-file path)
         r (reader/make-reader text {:file path :namespace "user"
@@ -325,6 +330,7 @@ project's :main), that function of the program's namespace must exist, and is ca
 instead."
   ([path source-paths] (translate-file path source-paths nil false))
   ([path source-paths main-name eval?]
+   (reset! files-read [])
    (let [build (make-build source-paths eval?)
          library (or (find-namespace-file build "skein.core.native")
                      (fail "cannot find skein.core.native"))]
@@ -617,14 +623,134 @@ earlier package there is replaced. Returns the package's path."
     top))
 
 ;;; ------------------------------------------------------------------------------------
+;;; Running programs: skeinc run, dev and repl (M2.6, D-081). A program is built into
+;;; .skein-cache/run/, with a manifest of the files it was built from and their dates, and
+;;; skeinc's own; it's built again only when one of those changed.
+
+(defn- exe-suffix [] (if (windows?) ".exe" ""))
+
+(defn- skeinc-path [home] (str home "build/skeinc" (exe-suffix)))
+
+(defn- split-on
+  "The non-empty parts of the string s between the characters ch."
+  [s ch]
+  (loop [i 0 start 0 out []]
+    (cond (= i (count s)) (if (< start i) (conj out (subs s start i)) out)
+          (= (nth s i) ch) (recur (inc i) (inc i) (if (< start i) (conj out (subs s start i)) out))
+          :else (recur (inc i) start out))))
+
+(defn- manifest-text
+  "skeinc's date, then each file's date and path, a line each."
+  [skeinc-date files]
+  (apply str (str skeinc-date "\n")
+         (map (fn [f] (str (%file-mtime f) " " f "\n")) (distinct files))))
+
+(defn- built-from-current?
+  "True if the executable exists and its manifest's dates are still the files' and
+skeinc's."
+  [exe manifest skeinc-date]
+  (and (io/file-exists? exe) (io/file-exists? manifest)
+       (let [[first-line & lines] (split-on (io/read-file manifest) \newline)]
+         (and (= first-line (str skeinc-date))
+              (every? (fn [line]
+                        (let [space (count (take-while (fn [c] (not= c \space)) line))]
+                          (= (subs line 0 space)
+                             (str (%file-mtime (subs line (inc space)))))))
+                      lines)))))
+
+(defn- cached-program
+  "The executable for the program at path built with opts (:profile, :eval): from
+.skein-cache/run/ if nothing it was built from has changed since, else built now."
+  [home path opts]
+  (let [kind (if (:eval opts) "dev" (:profile opts))
+        exe (str home ".skein-cache/run/" (stem path) "-" (path-hash path) "-" kind (exe-suffix))
+        manifest (str exe ".sources")
+        skeinc-date (%file-mtime (skeinc-path home))]
+    (when-not (built-from-current? exe manifest skeinc-date)
+      (make-directories! (directory-of exe))
+      (build-program path (assoc opts :output exe))
+      (io/write-file manifest (manifest-text skeinc-date @files-read)))
+    exe))
+
+(defn- run-program
+  "Build (or reuse) the program at path with opts, run it with args and the environment
+variables in env, and exit with its status."
+  [path opts args env]
+  (when-not (io/file-exists? path) (fail "skein: file not found: " path))
+  (let [exe (cached-program (find-home) path opts)]
+    (%exit (or (%run-attached (vec (cons exe args)) env)
+               (fail "skein: cannot start " exe)))))
+
+(defn- run-command
+  "skein run [--release] <file.skn> [args...]: with --eval, so eval and reload work, as
+in Phase 0; --release builds with the release profile, without the evaluator."
+  [args]
+  (let [release (= (first args) "--release")
+        args (if release (rest args) args)]
+    (when (empty? args) (fail "skein run: expected a file, e.g. `skein run hello.skn`"))
+    (run-program (first args) (if release {:profile "release"} {:profile "dev" :eval true})
+                 (rest args) nil)))
+
+(defn- dev-command
+  "skein dev [--port N | --no-server] <file.skn> [args...]: the program run with
+SKEIN_DEV set, which starts the REPL, the server and the file watcher (skein.dev)."
+  [args]
+  (loop [args (seq args) port "5555"]
+    (let [arg (first args)]
+      (cond (= arg "--no-server") (recur (next args) "none")
+            (= arg "--port")
+            (if-let [n (second args)]
+              (if (parse-long n) (recur (nnext args) n) (fail "skein dev: bad port " n))
+              (fail "skein dev: --port needs a number"))
+            (and arg (= (first arg) \-)) (fail "skein dev: unknown option " arg)
+            (nil? arg) (fail "skein dev: expected a file, e.g. `skein dev game.skn`")
+            :else (run-program arg {:profile "dev" :eval true} (rest args)
+                               {"SKEIN_DEV" port})))))
+
+(defn- repl-command
+  "skein repl: the REPL program, skein.dev.repl."
+  []
+  (let [home (find-home)]
+    (run-program (str home "lib/skein/dev/repl.skn") {:profile "dev" :eval true} [] nil)))
+
+(defn- source-files
+  "The files under dir (ending with /) whose names end with one of suffixes."
+  [dir suffixes]
+  (mapcat (fn [n]
+            (cond (= (last n) \/) (source-files (str dir n) suffixes)
+                  (some (fn [s] (and (>= (count n) (count s))
+                                     (= s (subs n (- (count n) (count s))))))
+                        suffixes)
+                  [(str dir n)]
+                  :else []))
+          (or (%list-directory dir) [])))
+
+(defn- compiler-current?
+  "True if build/skeinc is newer than every file it's built from (as the launcher's
+bootstrap checks: lib/'s Skein and the runtime's Zig, C and headers)."
+  [home]
+  (let [built (%file-mtime (skeinc-path home))]
+    (boolean (and built
+                  (every? (fn [f] (<= (or (%file-mtime f) 0) built))
+                          (concat (source-files (str home "lib/") [".skn"])
+                                  (source-files (str home "runtime/src/") [".zig" ".c"])
+                                  (source-files (str home "runtime/include/") [".h"])
+                                  (source-files (str home "runtime/platform/") [".zig" ".c"])))))))
+
+;;; ------------------------------------------------------------------------------------
 ;;; The command line
 
 (def ^:private usage
   (str "Usage: skeinc build [file.skn] [-o output] [--target T] [--profile dev|release]"
        " [--release] [--keep-c] [--eval]\n"
        "       skeinc package [--target T] [--profile dev|release]\n"
+       "       skeinc run [--release] <file.skn> [args...]\n"
+       "       skeinc dev [--port N | --no-server] <file.skn> [args...]\n"
+       "       skeinc repl\n"
+       "       skeinc current\n"
        "With no file, build builds the project that ./project.skn describes; package puts it"
-       " in dist/."))
+       " in dist/. run, dev and repl build the program (cached in .skein-cache/run/) and run"
+       " it; current exits with 0 if skeinc is newer than its sources."))
 
 (defn- parse-build-args [args]
   (loop [args (seq args) opts {}]
@@ -647,9 +773,16 @@ earlier package there is replaced. Returns the package's path."
 (defn -main
   "skeinc build [file.skn] [-o output] [--target T] [--profile dev|release] [--keep-c]
 [--eval]: with no file, the project in the current directory. --eval includes the
-evaluator (D-078)."
+evaluator (D-078). Also skeinc run, dev and repl, which `skein` runs (D-081), and skeinc
+current, which exits with 0 if skeinc is newer than its sources."
   [& args]
   (let [[command & more] args]
+    (case command
+      "run" (run-command more)
+      "dev" (dev-command more)
+      "repl" (repl-command)
+      "current" (%exit (if (compiler-current? (find-home)) 0 1))
+      nil)
     (when-not (contains? #{"build" "package"} command) (fail usage))
     (let [opts (parse-build-args more)
           file (:file opts)]

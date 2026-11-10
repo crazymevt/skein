@@ -367,7 +367,7 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%backtrace"
     ;; The REPL and skein dev (M2.6, D-081; runtime/src/devio.zig)
     "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen" "%tcp-accept" "%tcp-port"
-    "%tcp-close" "%set-output-var!" "%exit" "%main-thread?"
+    "%tcp-close" "%set-output-var!" "%exit" "%main-thread?" "%run-attached"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

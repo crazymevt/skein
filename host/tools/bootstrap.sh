@@ -109,11 +109,11 @@ test_compiler() {
     echo "skeinc: package for $target ok"
   done
   # Every native fixture, built by skeinc (with the options of its ";; build: " comment, if
-  # it has one), prints what `skein run` prints, and every line a ";; stderr: " comment
-  # gives on standard error.
+  # it has one), prints what `skein host run` (Phase 0) prints, and every line that a
+  # ";; stderr: " comment gives on standard error.
   for program in host/tests/fixtures/native-*.skn; do
     name=$(basename "$program" .skn)
-    ./skein run "$program" > "build/examples/$name.expected"
+    ./skein host run "$program" > "build/examples/$name.expected"
     options=$(sed -n 's/^;; build: //p' "$program" | tr -d '\r')
     # shellcheck disable=SC2086 # the options are words
     "$skeinc" build "$program" $options -o "build/examples/$name$exe" > /dev/null
@@ -126,7 +126,7 @@ test_compiler() {
     done < <(sed -n 's/^;; stderr: //p' "$program" | tr -d '\r')
     if ! diff --strip-trailing-cr "build/examples/$name.expected" "build/examples/$name.out" \
          > /dev/null; then
-      echo "skeinc: $name differs from skein run"
+      echo "skeinc: $name differs from skein host run"
       diff --strip-trailing-cr "build/examples/$name.expected" "build/examples/$name.out" \
         | head -20
       exit 1

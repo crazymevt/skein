@@ -230,6 +230,67 @@ fn serverPort(h: Value) Value {
 }
 
 // ---------------------------------------------------------------------------------------
+// Running a program on this terminal (skeinc run, dev and repl, M2.6 step 4)
+
+const AttachedCall = struct { argv: []const []const u8, env: []const [2][]const u8, code: ?i64 = null };
+
+fn attachedBlocking(arg: ?*anyopaque) void {
+    const c: *AttachedCall = @ptrCast(@alignCast(arg));
+    var map = platform.processEnviron().createMap(alloc) catch return;
+    defer map.deinit();
+    for (c.env) |kv| map.put(kv[0], kv[1]) catch return;
+    var child = std.process.spawn(io.stdIo(), .{ .argv = c.argv, .environ_map = &map }) catch return;
+    const term = child.wait(io.stdIo()) catch return;
+    c.code = switch (term) {
+        .exited => |n| n,
+        .signal, .stopped => |sig| 128 + @as(i64, @intFromEnum(sig)),
+        .unknown => |n| n,
+    };
+}
+
+/// Run `argv` (a vector of strings) with this process's standard input, output and error,
+/// and the variables of the map `env` added to its environment; wait for it, and return
+/// its exit status (128 plus the signal that ended it), or nil if it can't be started.
+fn runAttached(argv: Value, env: Value) Value {
+    var args: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (args.items) |a| alloc.free(a);
+        args.deinit(alloc);
+    }
+    var vars: std.ArrayList([2][]const u8) = .empty;
+    defer {
+        for (vars.items) |kv| {
+            alloc.free(kv[0]);
+            alloc.free(kv[1]);
+        }
+        vars.deinit(alloc);
+    }
+    const coll = @import("coll.zig");
+    for (0..coll.vectorCount(argv)) |i| {
+        const a = coll.vectorNth(argv, i).?;
+        if (!string.isString(a)) rt.raise(.type_error, "%run-attached needs a vector of strings", .{});
+        args.append(alloc, alloc.dupe(u8, string.bytes(a)) catch rt.fatal("out of memory", .{})) catch rt.fatal("out of memory", .{});
+    }
+    if (env != Value.nil) {
+        const seq = @import("seq.zig");
+        var s = seq.seq(env);
+        while (s != Value.nil) : (s = seq.seqNext(s)) {
+            const e = seq.seqFirst(s);
+            const k = coll.vectorNth(e, 0).?;
+            const v = coll.vectorNth(e, 1).?;
+            if (!string.isString(k) or !string.isString(v)) rt.raise(.type_error, "%run-attached needs a map of strings", .{});
+            vars.append(alloc, .{
+                alloc.dupe(u8, string.bytes(k)) catch rt.fatal("out of memory", .{}),
+                alloc.dupe(u8, string.bytes(v)) catch rt.fatal("out of memory", .{}),
+            }) catch rt.fatal("out of memory", .{});
+        }
+    }
+    var call: AttachedCall = .{ .argv = args.items, .env = vars.items };
+    sched.blocking(attachedBlocking, &call);
+    return if (call.code) |c| Value.fromFixnum(c) else Value.nil;
+}
+
+// ---------------------------------------------------------------------------------------
 // skein.core functions (core.zig's table includes these)
 
 const Args = []const Value;
@@ -242,6 +303,11 @@ pub const entries = [_]CoreEntry{
             if (!a[0].isObjectOf(.@"var")) rt.raise(.type_error, "%set-output-var! needs a var", .{});
             @import("print.zig").output_var = a[0];
             return Value.nil;
+        }
+    }.f },
+    .{ .name = "%run-attached", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return runAttached(a[0], a[1]);
         }
     }.f },
     // (%exit status): end the program now.

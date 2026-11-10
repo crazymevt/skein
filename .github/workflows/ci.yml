@@ -182,6 +182,14 @@ jobs:
         shell: cmd
         run: skein.cmd --version
 
+      # M2.6: run, dev and repl run natively through build\skeinc (D-081).
+      - name: Launcher (cmd), native run and host run
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          skein.cmd run examples\hello.skn
+          skein.cmd host run examples\hello.skn
+
       - name: SDL3 window example
         if: runner.os != 'Linux'
         run: ./skein run examples/sdl/window.skn

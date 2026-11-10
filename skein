@@ -1,7 +1,39 @@
 #!/usr/bin/env bash
-# Run the `skein` command line on the Phase 0 SBCL host.
+# The `skein` command line (D-081). build, package, run, dev and repl run natively,
+# through build/skeinc, which the Phase 0 SBCL host bootstraps when it's missing or older
+# than its sources. `skein host run|dev|repl ...` runs Phase 0 itself, as a reference;
+# everything else (bootstrap, bindgen, help, version) runs on SBCL too.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "${SBCL:-sbcl}" --noinform --no-userinit --non-interactive \
-  --load "$here/host/tools/launch.lisp" --eval "(skein.cli:toplevel)" \
-  --end-toplevel-options "$@"
+
+on_sbcl() {
+  exec "${SBCL:-sbcl}" --noinform --no-userinit --non-interactive \
+    --load "$here/host/tools/launch.lisp" --eval "(skein.cli:toplevel)" \
+    --end-toplevel-options "$@"
+}
+
+case "${1:-}" in
+  build|package|run|dev|repl)
+    exe=""
+    home="$here"
+    if [ "${OS:-}" = "Windows_NT" ]; then
+      exe=".exe"
+      home="$(cygpath -m "$here")"
+    fi
+    skeinc="$here/build/skeinc$exe"
+    if [ ! -x "$skeinc" ] || ! SKEIN_HOME="$home" "$skeinc" current; then
+      # Bootstrapping prints what it builds; keep standard output for the program.
+      "${SBCL:-sbcl}" --noinform --no-userinit --non-interactive \
+        --load "$here/host/tools/launch.lisp" --eval "(skein.cli:toplevel)" \
+        --end-toplevel-options bootstrap >&2
+    fi
+    SKEIN_HOME="$home" exec "$skeinc" "$@"
+    ;;
+  host)
+    shift
+    on_sbcl "$@"
+    ;;
+  *)
+    on_sbcl "$@"
+    ;;
+esac

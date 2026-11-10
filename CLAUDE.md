@@ -72,14 +72,16 @@ These are defined in M0.1; update this section if they change.
 |---|---|
 | `make test` | run all tests: the host's (`make test-host`), the Zig runtime's (`make test-runtime`) and the native compiler's bootstrap (`make test-compiler`) |
 | `make repl` | SBCL with Skein loaded |
-| `./skein run <file.skn> [args]` | run a Skein program (calls its `-main` with the args) |
-| `./skein repl` | start a Skein REPL |
+| `./skein run [--release] <file.skn> [args]` | run a Skein program natively (calls its `-main` with the args): skeinc builds it with `--eval` into `.skein-cache/run/`, rebuilding only when a source changed (D-081) |
+| `./skein repl` | start a Skein REPL (natively) |
+| `./skein host run\|dev\|repl ...` | the same on the Phase 0 SBCL host, the reference for native fixtures |
 | `./skein build [file.skn] [--target T] [--profile P]` | compile a program natively: runs `build/skeinc build` (needs Zig), bootstrapping skeinc first if it's out of date |
 | `./skein package [--target T]` | package the project in the current directory into `dist/` (runs `build/skeinc package`) |
 | `make compiler` | bootstrap the native compiler, `build/skeinc` (`./skein bootstrap`: Phase 0's C backend builds a first compiler, which builds it) |
 | `build/skeinc build [file.skn] [-o out] [--target T] [--profile dev\|release] [--eval]` | compile a program natively with the compiler written in Skein, for any §19.1 target; with no file, the `project.skn` in the current directory; `--eval` (dev only) includes the evaluator (D-078) |
 | `build/skeinc package [--target T] [--profile P]` | package the project in the current directory: `dist/<target>/<name>/`, or `<name>.app` for macOS |
-| `./skein dev <file.skn> [args]` | run with file reloading and a REPL (terminal and localhost:5555) |
+| `build/skeinc run\|dev\|repl ...`, `build/skeinc current` | what `./skein run`, `dev` and `repl` run; `current` exits with 0 if skeinc is newer than its sources (the launcher bootstraps it otherwise) |
+| `./skein dev [--port N \| --no-server] <file.skn> [args]` | run natively with file reloading and a REPL (terminal and localhost:5555) |
 | `make bench` | run the benchmarks in `bench/` |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |
 | `make sdl3-bindings` | regenerate `lib/sdl3/raw.skn` |
