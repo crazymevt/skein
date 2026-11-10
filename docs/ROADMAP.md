@@ -32,8 +32,8 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.12 Driftrock native | ✅ |
 | M2.1 Phase 1 follow-ups | ✅ |
 | M2.2 Fibers | ✅ |
-| M2.3 Work-stealing scheduler | 🟨 |
-| M2.4 Dynamic vars natively | ⬜ |
+| M2.3 Work-stealing scheduler | ✅ |
+| M2.4 Dynamic vars natively | ✅ |
 | M2.5 Evaluating code in native programs | ⬜ |
 | M2.6 Native REPL and `skein dev` | ⬜ |
 | M2.7 Swank server | ⬜ |
@@ -313,7 +313,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order (D-076):
   1. ✅ Phase 0: `binding`, `set!` of a binding, bindings copied into the tasks spawned inside one, and the errors; host tests.
   2. ✅ Native: binding frames on the condition chain, reads of dynamic vars, `set!`, and the copy a task gets; the C backend compiles them.
-  3. A native fixture (bindings, nested and in tasks, non-local exits, `set!`, the errors) prints what `skein run` prints.
+  3. ✅ A native fixture (bindings, nested and in tasks, non-local exits, `set!`, the errors) prints what `skein run` prints.
 
 **Exit:** the new host tests pass, and the fixture prints the same natively as with `skein run`, on all three platforms.
 
