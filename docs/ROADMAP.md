@@ -359,7 +359,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order (D-088):
   1. ✅ The debugger for tasks: in `skein dev`, an error that no handler in a task (spawned or `future`) handles opens the debugger in the task's fiber before the task fails, in the text REPL or SLDB as the main fiber's errors do, with an `abort` restart that fails the task. Fixing the code and choosing another restart resumes the task. Native dev fixtures and a Swank host test.
   2. ✅ Policies: `(with-nursery [n {:on-error p}] ...)`, where `p` is `:cancel-siblings` (the default, as today), `:ignore` (the task fails alone, with one line on stderr), `:crash` (report the error as an unhandled one and exit with status 1) or `:restart-fiber` (run the task's function again from the start, at most `:max-restarts` 3 times within `:within` 5 seconds, then fail as `:cancel-siblings`). In `skein dev` a policy applies once the debugger's `abort` fails the task. Native fixtures for each policy, on all three platforms.
-  3. DESIGN §10 and §13 brought up to date with what was built; `skein.jobs` and `skein.game` checked against the policies.
+  3. ✅ DESIGN §10 and §13 brought up to date with what was built; `skein.jobs` and `skein.game` checked against the policies.
 
 **Exit:** each policy is tested natively.
 

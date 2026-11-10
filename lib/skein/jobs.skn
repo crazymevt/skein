@@ -29,14 +29,18 @@ named in :after has finished."
 (defn graph
   "Run a map of name -> job. Each job starts as soon as the jobs it comes after have
 finished; independent jobs run in parallel. Returns a map of name -> result. If a job
-fails, the others are cancelled and the failure is re-signaled."
-  [jobs]
-  (let [order (check-graph jobs)]
-    (with-nursery [n]
-      (let [tasks (reduce (fn [tasks k]
-                            (let [{:keys [after run]} (get jobs k)
-                                  deps (mapv tasks after)]
-                              (assoc tasks k (spawn n (doseq [d deps] @d) (run)))))
-                          {}
-                          order)]
-        (into {} (map (fn [[k t]] [k @t]) tasks))))))
+fails, the others are cancelled and the failure is re-signaled. options is with-nursery's
+map for the jobs' nursery (D-088): {:on-error :restart-fiber} runs a failed job again. A
+job that comes after a failed one fails too, so the graph re-signals a failure under
+:ignore as well."
+  ([jobs] (graph jobs nil))
+  ([jobs options]
+   (let [order (check-graph jobs)]
+     (with-nursery [n options]
+       (let [tasks (reduce (fn [tasks k]
+                             (let [{:keys [after run]} (get jobs k)
+                                   deps (mapv tasks after)]
+                               (assoc tasks k (spawn n (doseq [d deps] @d) (run)))))
+                           {}
+                           order)]
+         (into {} (map (fn [[k t]] [k @t]) tasks)))))))

@@ -1,4 +1,6 @@
-(ns policies)
+(ns policies
+  (:require [skein.jobs :as jobs :refer [job]]
+            [skein.game :as game]))
 
 ;; Built natively and compared with policies.expected (M2.8 step 2, D-088): a nursery's
 ;; supervision policy, its option map's :on-error. Phase 0 has only :cancel-siblings, so
@@ -43,6 +45,27 @@
          @(spawn n (let [k (swap! tries inc)]
                      (when (< k 4) (sleep 0.1) (error "slow failure"))
                      k)))))
+
+;; A job graph takes the same options: a flaky job runs again, and the graph completes.
+;; stderr: error in task (restarting it): flaky job
+(let [tries (atom 0)
+      results (jobs/graph {:load (job :level)
+                           :flaky (job {:after [:load]}
+                                    (when (< (swap! tries inc) 2) (error "flaky job"))
+                                    :built)
+                           :draw (job {:after [:flaky]} :drawn)}
+                          {:on-error :restart-fiber})]
+  (prn (mapv results [:load :flaky :draw]) @tries))
+
+;; A game loop in a task under :restart-fiber goes on after a frame's error.
+;; stderr: error in task (restarting it): bad frame
+(let [frames (atom 0)
+      frame (fn [] (let [n (swap! frames inc)]
+                     (when (= n 2) (error "bad frame"))
+                     (println "frame" n)))]
+  (with-nursery [n {:on-error :restart-fiber}]
+    (spawn n (game/run-loop {:frame frame :running? (fn [] (< @frames 3))})))
+  (prn @frames))
 
 ;; Options that aren't a policy are errors.
 (prn (message-of (fn [] (with-nursery [n {:on-error :explode}] 1))))

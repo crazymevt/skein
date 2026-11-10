@@ -3,6 +3,10 @@
 [:ok 3]
 "always" 3
 4
+[:level :built :drawn] 2
+frame 1
+frame 3
+3
 "with-nursery's :on-error must be :cancel-siblings, :ignore, :crash or :restart-fiber, not :explode"
 "with-nursery's options are :on-error, :max-restarts and :within, not {:on-eror :ignore}"
 "with-nursery's :max-restarts must be a count, not -1"

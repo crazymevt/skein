@@ -531,6 +531,9 @@ Behavior at each safety level:
   (spawn n (load-textures))
   (spawn n (load-audio)))        ; waits for all children; the first error cancels siblings
 
+(with-nursery [n {:on-error :restart-fiber}]   ; a supervision policy (§10)
+  (spawn n (serve-clients)))
+
 (let [f (future (expensive))]    ; detached task, joined with deref
   @f)
 
@@ -575,9 +578,11 @@ Phase 0 details (D-037):
 - Channels: `(chan)` is unbuffered, `(chan n)` buffered; nil cannot be put. `>!` returns false on a closed channel, `<!` returns nil once a closed channel is empty. `alts!` takes channels and `[channel value]` puts, tries them in random order, and returns `[value channel]`. `(timeout-chan seconds)` closes after that long.
 - `pmap` is eager and returns a list. `preduce` reduces chunks from `init` and combines the results with the same function, so the function must be associative and `init` its identity. `pdotimes` splits the range across CPUs.
 - The main thread runs work queued by `on-main-thread` and `(spawn-pinned :main ...)` whenever it waits, and when it calls `drain-main-thread!`.
-- `skein.jobs`: `(job {:after [names]} body...)` and `(graph {name job ...})`, which returns a map of results; a missing dependency or a cycle is an error before anything runs.
+- `skein.jobs`: `(job {:after [names]} body...)` and `(graph {name job ...})`, which returns a map of results; a missing dependency or a cycle is an error before anything runs. `(graph jobs options)` gives the jobs' nursery `with-nursery`'s option map (M2.8, D-088): `{:on-error :restart-fiber}` runs a failed job again. A job after a failed one fails too.
 
-Native details (Phase 1, D-057; fibers since M2.3, D-075): the runtime has Phase 0's model and messages. Each task runs in a fiber on the work-stealing scheduler; waiting for a task, a channel, a nursery's tasks or a sleep parks the fiber, and the task, channel or timer wakes it, as does a cancellation, at once. Code that isn't in a fiber (the main thread's `-main`) blocks instead, waking at least every 20 ms to run the main thread's queue. Tasks and channels share one lock. The running code's cancellation scopes are frames on the condition chain (§10), so a non-local exit leaves them as it leaves handlers. Native code has no special variables, so a task inherits nothing from its spawner but its cancellation scopes.
+Native details (Phase 1, D-057; fibers since M2.3, D-075): the runtime has Phase 0's model and messages. Each task runs in a fiber on the work-stealing scheduler; waiting for a task, a channel, a nursery's tasks or a sleep parks the fiber, and the task, channel or timer wakes it, as does a cancellation, at once. Code that isn't in a fiber (the main thread's `-main`) blocks instead, waking at least every 20 ms to run the main thread's queue. Tasks and channels share one lock. The running code's cancellation scopes are frames on the condition chain (§10), so a non-local exit leaves them as it leaves handlers. A task starts with its spawner's cancellation scopes and dynamic bindings (D-076).
+
+Supervisors natively (M2.8, D-088): a task's failure is handled by its nursery's policy where the task ends (§10). In a program with the debugger (`skein dev`, `skein repl`) an error that no handler in the task handles first opens the debugger in the task's fiber, through a task runner the runtime calls every task's function with; its `abort` restart, "Fail the task", hands the failure to the policy. The REPL's and Swank's own fibers aren't wrapped.
 
 ### 13.3 STM (Deferred)
 Clojure-style refs with `dosync`/`alter`/`commute` are planned once the native runtime exists. The `:cell :ref` slot kind and the `ref` name are reserved.
