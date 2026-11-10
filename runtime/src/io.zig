@@ -68,6 +68,28 @@ fn decoded(bytes: []const u8) ?Value {
     return string.make(bytes);
 }
 
+/// Run `f(arg)`, a call that works with paths, as a blocking call. On Windows, std.Io
+/// turns a path into a wide-character one in stack buffers of about 64 KB each, more than
+/// a fiber's 256 KB stack holds (D-074), so from a fiber it runs on a short-lived thread
+/// with a big stack (M2.6: skein dev's file watcher overflowed).
+pub fn pathBlocking(f: *const fn (?*anyopaque) void, arg: ?*anyopaque) void {
+    if (builtin.os.tag != .windows or !sched.inFiber()) return sched.blocking(f, arg);
+    var call: OnThread = .{ .f = f, .arg = arg };
+    sched.blocking(onThread, &call);
+}
+
+const OnThread = struct { f: *const fn (?*anyopaque) void, arg: ?*anyopaque };
+
+fn onThread(arg: ?*anyopaque) void {
+    const c: *OnThread = @ptrCast(@alignCast(arg));
+    const t = std.Thread.spawn(.{ .stack_size = 4 << 20 }, runOnThread, .{c}) catch return c.f(c.arg);
+    t.join();
+}
+
+fn runOnThread(c: *OnThread) void {
+    c.f(c.arg);
+}
+
 // ---------------------------------------------------------------------------------------
 // Files
 
@@ -83,7 +105,7 @@ fn readFile(path: Value) Value {
     const p = copyPath(path);
     defer alloc.free(p);
     var call: ReadCall = .{ .path = p };
-    sched.blocking(readBlocking, &call);
+    pathBlocking(readBlocking, &call);
     const data = call.data orelse return Value.nil;
     defer alloc.free(data);
     return decoded(data) orelse Value.nil;
@@ -104,7 +126,7 @@ fn writeFile(path: Value, text: Value) Value {
     const p = copyPath(path);
     defer alloc.free(p);
     var call: WriteCall = .{ .path = p, .text = t };
-    sched.blocking(writeBlocking, &call);
+    pathBlocking(writeBlocking, &call);
     return Value.fromBool(call.ok);
 }
 
@@ -121,7 +143,7 @@ fn fileExists(path: Value) Value {
     const p = copyPath(path);
     defer alloc.free(p);
     var call: ExistsCall = .{ .path = p };
-    sched.blocking(existsBlocking, &call);
+    pathBlocking(existsBlocking, &call);
     return Value.fromBool(call.exists);
 }
 
@@ -155,7 +177,7 @@ fn pathCall(f: *const fn (?*anyopaque) void, a: Value, b: ?Value) Value {
     const pb = if (b) |v| copyPath(v) else "";
     defer if (b != null) alloc.free(pb);
     var call: PathCall = .{ .a = pa, .b = pb };
-    sched.blocking(f, &call);
+    pathBlocking(f, &call);
     return Value.fromBool(call.ok);
 }
 
@@ -191,7 +213,7 @@ fn listDirectory(path: Value) Value {
         for (call.names.items) |n| alloc.free(n);
         call.names.deinit(alloc);
     }
-    sched.blocking(listBlocking, &call);
+    pathBlocking(listBlocking, &call);
     if (!call.ok) return Value.nil;
     std.mem.sort([]u8, call.names.items, {}, lessThan);
     var out = coll.vectorOf(&.{});
@@ -251,7 +273,7 @@ fn runProcess(argv: Value, dir: Value) Value {
     const d: ?[]u8 = if (dir == Value.nil) null else copyPath(dir);
     defer if (d) |x| alloc.free(x);
     var call: RunCall = .{ .argv = args.items, .dir = d };
-    sched.blocking(runBlocking, &call);
+    pathBlocking(runBlocking, &call);
     const r = call.result orelse return Value.nil;
     defer alloc.free(r.stdout);
     defer alloc.free(r.stderr);

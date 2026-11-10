@@ -392,7 +392,13 @@ BODY with *SOURCE-PATHS* set to it."
                          (write-string contents s))))
             (let ((skein.runtime:*source-paths* (list ,dir)))
               ,@body))
-       (uiop:delete-directory-tree ,dir :validate t :if-does-not-exist :ignore))))
+       ;; Windows may keep a program that just exited locked for a moment; try for a few
+       ;; seconds, then leave the directory.
+       (loop repeat 20
+             until (ignore-errors
+                    (uiop:delete-directory-tree ,dir :validate t :if-does-not-exist :ignore)
+                    t)
+             do (sleep 0.25)))))
 
 (test require
   (let ((lib (fresh-ns)))

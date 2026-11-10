@@ -37,7 +37,7 @@ fn fileMtime(path: Value) Value {
     const p = alloc.dupe(u8, string.bytes(path)) catch rt.fatal("out of memory", .{});
     defer alloc.free(p);
     var call: StatCall = .{ .path = p };
-    sched.blocking(statBlocking, &call);
+    io.pathBlocking(statBlocking, &call);
     const t = call.mtime orelse return Value.nil;
     return Value.fromFixnum(@intCast(t));
 }
@@ -286,7 +286,7 @@ fn runAttached(argv: Value, env: Value) Value {
         }
     }
     var call: AttachedCall = .{ .argv = args.items, .env = vars.items };
-    sched.blocking(attachedBlocking, &call);
+    io.pathBlocking(attachedBlocking, &call);
     return if (call.code) |c| Value.fromFixnum(c) else Value.nil;
 }
 
