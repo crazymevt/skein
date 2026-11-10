@@ -77,6 +77,7 @@ test {
     _ = compiler;
     _ = ffi;
     _ = fiber;
+    _ = @import("fiber_test.zig");
     _ = @import("cond_test.zig");
     _ = @import("platform_test.zig");
 }

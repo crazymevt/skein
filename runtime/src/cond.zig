@@ -51,6 +51,29 @@ threadlocal var top: ?*Frame = null;
 threadlocal var skips: ?*Skip = null;
 threadlocal var next_serial: u64 = 0;
 
+/// Each thread numbers frames in a range of its own, so serials stay unique when fibers
+/// move between threads (M2.2).
+var thread_ranges = std.atomic.Value(u64).init(0);
+
+fn nextSerial() u64 {
+    if (next_serial == 0) next_serial = (thread_ranges.fetchAdd(1, .monotonic) + 1) << 40;
+    next_serial += 1;
+    return next_serial;
+}
+
+/// The running fiber's chain of frames and skipped handler clusters, which a fiber switch
+/// saves and restores (M2.2, D-074).
+pub const FiberState = struct { top: ?*Frame = null, skips: ?*anyopaque = null };
+
+pub fn saveFiberState() FiberState {
+    return .{ .top = top, .skips = skips };
+}
+
+pub fn restoreFiberState(s: FiberState) void {
+    top = s.top;
+    skips = @ptrCast(@alignCast(s.skips));
+}
+
 extern fn sk_jump(f: *Frame) noreturn;
 extern fn sk_warn_condition(c: Value) void;
 
@@ -59,11 +82,11 @@ fn skipsOf(f: *Frame) ?*Skip {
 }
 
 fn push(f: *Frame, kind: Kind) void {
-    next_serial += 1;
+    const serial = nextSerial();
     f.* = .{
         .prev = top,
         .skips = skips,
-        .serial = next_serial,
+        .serial = serial,
         .kind = @intFromEnum(kind),
         .count = 0,
         .value = Value.nil,

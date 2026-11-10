@@ -707,7 +707,26 @@ pub fn allocPermanent(type_id: object.TypeId, len: usize) *Header {
 // ---------------------------------------------------------------------------------------
 // Minor collection
 
+/// Calls its argument with the [low, high) range of every suspended fiber's stack
+/// (fiber.zig, M2.2): the collector scans them like the running ones.
+pub var scan_suspended_fibers: ?*const fn (*const fn (usize, usize) void) void = null;
+
+/// Set the top of the stack the calling thread runs on: a fiber switch changes it.
+pub fn setStackHigh(high: usize) void {
+    if (current) |m| m.stack_high = high;
+}
+
+fn rangeVisitor(comptime visit: fn (usize) void) fn (usize, usize) void {
+    return struct {
+        fn f(low: usize, high: usize) void {
+            var p = std.mem.alignForward(usize, low, 8);
+            while (p + 8 <= high) : (p += 8) visit(@as(*const usize, @ptrFromInt(p)).*);
+        }
+    }.f;
+}
+
 fn scanStacks(comptime visit: fn (usize) void) void {
+    if (scan_suspended_fibers) |f| f(&rangeVisitor(visit));
     var it = state.mutators;
     while (it) |m| : (it = m.next) {
         var p = std.mem.alignForward(usize, m.saved_sp, 8);

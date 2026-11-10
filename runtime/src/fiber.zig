@@ -3,10 +3,16 @@
 //! A fiber runs one job at a time; when the job finishes the fiber goes back to a pool
 //! and is reused, stack and all, for a later job. Each OS thread also has a fiber that
 //! stands for its own stack, so fibers can switch back to it.
+//!
+//! The collector scans the stack each thread is running on, and every suspended fiber's
+//! from where it stopped; registers are spilled onto the stack before every switch. Each
+//! fiber has its own chain of condition frames, saved and restored by the switch.
 
 const std = @import("std");
 const platform = @import("platform");
 const rt = @import("rt.zig");
+const gc = @import("gc.zig");
+const cond = @import("cond.zig");
 
 /// The usable stack of a fiber, above its guard page (D-024).
 pub const default_stack_size: usize = 256 * 1024;
@@ -15,6 +21,12 @@ pub const Job = *const fn (?*anyopaque) void;
 
 pub const Fiber = struct {
     ctx: platform.FiberContext = .{},
+    /// Running on some thread; suspended (its stack holds live values from `scan_low`
+    /// up); or idle in the pool.
+    state: enum { running, suspended, idle } = .idle,
+    scan_low: usize = 0,
+    /// Its condition frames while it isn't running.
+    cond_state: cond.FiberState = .{},
     /// What the fiber runs next; null while it's idle in the pool.
     job: ?Job = null,
     job_arg: ?*anyopaque = null,
@@ -24,54 +36,77 @@ pub const Fiber = struct {
     /// Set when its job has returned.
     done: bool = false,
     next_idle: ?*Fiber = null,
+    /// Every fiber ever made, threads' own included, for the collector.
+    next_all: ?*Fiber = null,
 };
 
-/// The fiber of this OS thread's own stack.
-threadlocal var thread_fiber: Fiber = .{};
 /// The fiber running on this OS thread.
 threadlocal var current_fiber: ?*Fiber = null;
 
-/// The fiber running now (this thread's own, if no other).
-pub fn current() *Fiber {
-    if (current_fiber) |f| return f;
-    platform.initThreadFiber(&thread_fiber.ctx);
-    current_fiber = &thread_fiber;
-    return &thread_fiber;
-}
-
-// ---------------------------------------------------------------------------------------
-// The pool of idle fibers
-
 const alloc = std.heap.c_allocator;
 
-var pool_lock: platform.Mutex = .{};
+var lock: platform.Mutex = .{};
 var pool: ?*Fiber = null;
+var all: ?*Fiber = null;
 
 /// How many fibers have been made, and how many are idle in the pool (for tests).
 pub var made: usize = 0;
 pub var idle: usize = 0;
 
+fn register(f: *Fiber) void {
+    lock.lock();
+    defer lock.unlock();
+    f.next_all = all;
+    all = f;
+    gc.scan_suspended_fibers = scanSuspended;
+}
+
+/// For the collector, with the world stopped: each suspended fiber's live stack.
+fn scanSuspended(visit: *const fn (usize, usize) void) void {
+    var it = all;
+    while (it) |f| : (it = f.next_all) {
+        if (f.state == .suspended) visit(f.scan_low, f.ctx.high);
+    }
+}
+
+/// The fiber running now (this thread's own, if no other).
+pub fn current() *Fiber {
+    if (current_fiber) |f| return f;
+    // Threads' fibers are never freed: the list of all fibers may point at them.
+    _ = gc.attachThread();
+    const f = alloc.create(Fiber) catch rt.fatal("out of memory (a fiber)", .{});
+    f.* = .{ .state = .running };
+    platform.initThreadFiber(&f.ctx);
+    register(f);
+    current_fiber = f;
+    return f;
+}
+
+// ---------------------------------------------------------------------------------------
+// The pool of idle fibers
+
 fn take() *Fiber {
-    pool_lock.lock();
+    lock.lock();
     if (pool) |f| {
         pool = f.next_idle;
         idle -= 1;
-        pool_lock.unlock();
+        lock.unlock();
         f.next_idle = null;
         return f;
     }
     made += 1;
-    pool_lock.unlock();
+    lock.unlock();
     const f = alloc.create(Fiber) catch rt.fatal("out of memory (a fiber)", .{});
     f.* = .{};
     platform.createFiber(&f.ctx, default_stack_size, fiberMain, f) catch
         rt.fatal("out of memory (a fiber's stack)", .{});
+    register(f);
     return f;
 }
 
 fn give(f: *Fiber) void {
-    pool_lock.lock();
-    defer pool_lock.unlock();
+    lock.lock();
+    defer lock.unlock();
     f.next_idle = pool;
     pool = f;
     idle += 1;
@@ -80,6 +115,8 @@ fn give(f: *Fiber) void {
 /// A fiber's life: run each job it's given, then switch back to whoever ran it.
 fn fiberMain(arg: ?*anyopaque) callconv(.c) noreturn {
     const self: *Fiber = @ptrCast(@alignCast(arg));
+    // On Windows the stack's top is known only now that it runs.
+    gc.setStackHigh(self.ctx.high);
     while (true) {
         self.job.?(self.job_arg);
         self.job = null;
@@ -98,6 +135,7 @@ pub fn spawn(job: Job, arg: ?*anyopaque) *Fiber {
     f.job = job;
     f.job_arg = arg;
     f.done = false;
+    f.cond_state = .{};
     return f;
 }
 
@@ -117,16 +155,35 @@ pub fn yield() void {
     switchTo(current().resumer.?);
 }
 
+const Switch = struct { from: *Fiber, to: *Fiber };
+
+extern fn sk_spill_registers_and_call(f: *const fn (?*anyopaque) callconv(.c) void, arg: ?*anyopaque) void;
+
 fn switchTo(to: *Fiber) void {
-    const from = current();
-    // Whoever switches back to `from` sets current_fiber to it first.
+    var s: Switch = .{ .from = current(), .to = to };
+    // With the registers spilled above this point, the suspended stack holds every value.
+    sk_spill_registers_and_call(switchSpilled, &s);
+}
+
+fn switchSpilled(arg: ?*anyopaque) callconv(.c) void {
+    const s: *Switch = @ptrCast(@alignCast(arg));
+    var marker: usize = 0;
+    std.mem.doNotOptimizeAway(&marker);
+    const from = s.from;
+    const to = s.to;
+    from.scan_low = @intFromPtr(&marker);
+    from.cond_state = cond.saveFiberState();
+    from.state = if (from.done) .idle else .suspended;
+    // Whoever switches back to `from` sets these for it.
+    to.state = .running;
+    cond.restoreFiberState(to.cond_state);
     current_fiber = to;
+    gc.setStackHigh(to.ctx.high);
     platform.switchFiber(&from.ctx, &to.ctx);
 }
 
 // ---------------------------------------------------------------------------------------
-// Tests. Jobs here don't allocate on the GC heap: the collector doesn't scan fiber stacks
-// until step 2 of M2.2.
+// Tests (allocation, collections and conditions in fibers are in fiber_test.zig)
 
 const testing = std.testing;
 
