@@ -404,7 +404,14 @@ executable's native path."
                                                       (subseq text (+ (search bad text)
                                                                       (length bad)))))
                                        s)))
-                     (setf pos (wait "; reloaded loop.skn" pos))
+                     (let ((reloaded (wait-for-output buffer lock "; reloaded loop.skn"
+                                                      :start pos)))
+                       (unless reloaded
+                         ;; What the watcher sees, from the failing fiber.
+                         (say (concatenate 'string "[(%file-mtime \"loop.skn\") "
+                                           "(%namespace-file (%find-namespace \"devloop\"))]"))
+                         (sleep 2))
+                       (setf pos (wait "; reloaded loop.skn" pos)))
                      ;; Forms typed now run in the failing fiber, in the program's namespace.
                      (say "(value-for 3)")
                      (setf pos (wait "300" pos))
@@ -419,7 +426,9 @@ executable's native path."
                      (unless (sb-ext:process-alive-p process)
                        (is (eql 0 (sb-ext:process-exit-code process)))))))
             (when (sb-ext:process-alive-p process)
-              (sb-ext:process-kill process 9)))))))
+              (sb-ext:process-kill process 9))
+            ;; Windows keeps the executable locked until the process has gone.
+            (sb-ext:process-wait process))))))
 
 (test repl-server-natively
   (if (not (zig-available-p))
@@ -464,4 +473,6 @@ executable's native path."
                                 "server transcript:~%~A" got)))
                      (close stream))))
             (when (sb-ext:process-alive-p process)
-              (sb-ext:process-kill process 9)))))))
+              (sb-ext:process-kill process 9))
+            ;; Windows keeps the executable locked until the process has gone.
+            (sb-ext:process-wait process))))))

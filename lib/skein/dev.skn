@@ -447,12 +447,18 @@ function that stops it."
     (future
       (loop []
         (when-not @stop
-          (doseq [f (watched-files)]
-            (let [date (%file-mtime f)
-                  old (get @dates f ::unseen)]
-              (swap! dates assoc f date)
-              (when (and (not= old ::unseen) date old (not= date old))
-                (reload-changed f))))
+          ;; An error here is reported, and the watcher goes on.
+          (try (doseq [f (watched-files)]
+                 (let [date (%file-mtime f)
+                       old (get @dates f ::unseen)]
+                   ;; A date that can't be read (on Windows, while the file is being
+                   ;; written) keeps the last one, so the change is seen afterwards.
+                   (when date
+                     (swap! dates assoc f date)
+                     (when (and (not= old ::unseen) old (not= date old))
+                       (reload-changed f)))))
+               (catch error e
+                 (announce (str "; error in the file watcher: " (condition-message e)))))
           (sleep 0.25)
           (recur))))
     (fn [] (reset! stop true))))
