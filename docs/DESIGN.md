@@ -797,7 +797,7 @@ Phase 1 details (D-044, D-046):
 - **Data:** symbols and keywords are interned, permanent objects. Collections are ports of Phase 0's (vector trie with tail, array maps up to 8 entries, then a HAMT; sets on maps; edit-token transients), with the same hash functions, so maps and sets iterate in the same order natively and on the host. Strings keep their length in characters, so `count` is O(1).
 
 ### 17.4 Fibers and scheduler
-- Each fiber has its own fixed-size stack: reserved virtual memory with a guard page, committed by the OS only as pages are touched. The default reservation is 256 KB, configurable per spawn. Overflow signals a `stack-overflow` error in that fiber (§10). Freed stacks are pooled (D-024). Fibers switch stacks with hand-written assembly per architecture (x86_64 SysV, x86_64 Windows, arm64).
+- Each fiber has its own fixed-size stack: reserved virtual memory with a guard page, committed by the OS only as pages are touched. The default reservation is 256 KB, configurable per spawn. Overflow signals a `stack-overflow` error in that fiber (§10). Freed stacks are pooled (D-024). Fibers switch stacks with hand-written assembly per architecture on macOS and Linux (arm64, x86_64 System V), and with Windows' fiber API on Windows, which keeps the stack bounds that Windows' unwinder and stack growth check (D-074).
 - Each OS worker has a work-stealing deque, plus a global injection queue.
 - Channel operations, `sleep`, `deref` of futures and nursery joins park the fiber.
 - `^:blocking` FFI calls hand off the worker thread (§14.3).

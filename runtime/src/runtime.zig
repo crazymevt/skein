@@ -36,6 +36,7 @@ pub const tasks = @import("tasks.zig");
 pub const io = @import("io.zig");
 pub const compiler = @import("compiler.zig");
 pub const ffi = @import("ffi.zig");
+pub const fiber = @import("fiber.zig");
 
 pub const Value = value.Value;
 
@@ -75,6 +76,7 @@ test {
     _ = io;
     _ = compiler;
     _ = ffi;
+    _ = fiber;
     _ = @import("cond_test.zig");
     _ = @import("platform_test.zig");
 }

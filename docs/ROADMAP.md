@@ -31,7 +31,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.11 `skein build` and `skein package` | ✅ |
 | M1.12 Driftrock native | ✅ |
 | M2.1 Phase 1 follow-ups | 🟨 |
-| M2.2 Fibers | ⬜ |
+| M2.2 Fibers | 🟨 |
 | M2.3 Work-stealing scheduler | ⬜ |
 | M2.4 Dynamic vars natively | ⬜ |
 | M2.5 Evaluating code in native programs | ⬜ |
@@ -288,6 +288,11 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Context switching per architecture (arm64, x86_64 System V, x86_64 Windows).
 - The GC scans each fiber's stack; conditions, handlers and restarts are per fiber.
 - A scheduler on one thread first.
+- Steps, in order (D-074):
+  1. ✅ Fiber stacks (reserved, guarded, committed as touched, pooled) and switching: hand-written for arm64 and x86_64 on macOS and Linux, Windows' fiber API on Windows.
+  2. The GC scans every fiber's stack; condition frames are per fiber; errors, restarts and unwinding work inside fibers.
+  3. Stack overflow: the guard page becomes a `stack-overflow` error in the fiber, which can handle it and go on.
+  4. A scheduler on one thread: spawning, yielding, a run queue, fibers finishing; the exit test.
 
 **Exit:** 100,000 fibers that yield and allocate under collections run on all three platforms in CI.
 

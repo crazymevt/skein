@@ -245,3 +245,97 @@ pub fn processSymbol(name: [:0]const u8) ?*anyopaque {
     }
     return dlsym(@ptrFromInt(h), name.ptr);
 }
+
+// ---------------------------------------------------------------------------------------
+// Fibers (M2.2, D-074): stacks of their own, switched by a routine per architecture that
+// saves the callee-saved registers on the old stack and loads the new stack pointer.
+
+/// A fiber's machine state: its stack (the whole reservation, guard page included) and,
+/// while it isn't running, the stack pointer to resume at.
+pub const FiberContext = struct {
+    sp: usize = 0,
+    stack: []align(page_size_min) u8 = &.{},
+    /// The top of the stack (stacks grow down); 0 until known.
+    high: usize = 0,
+};
+
+/// The entry point of a new fiber: called with the argument given to createFiber, on the
+/// fiber's stack. It must never return.
+pub const FiberEntry = *const fn (?*anyopaque) callconv(.c) noreturn;
+
+/// Bytes below each fiber stack that fault when touched.
+pub fn fiberGuardSize() usize {
+    return pageSize();
+}
+
+/// Make `ctx` a new fiber with a stack of at least `size` bytes above a guard page, which
+/// runs `entry(arg)` when it's first switched to. Pages are committed by the OS as the
+/// fiber touches them.
+pub fn createFiber(ctx: *FiberContext, size: usize, entry: FiberEntry, arg: ?*anyopaque) MemoryError!void {
+    const guard = fiberGuardSize();
+    const usable = std.mem.alignForward(usize, size, pageSize());
+    const mem = try reserve(guard + usable);
+    errdefer release(mem);
+    try commit(@alignCast(mem[guard..]));
+    ctx.* = .{ .stack = mem, .high = @intFromPtr(mem.ptr) + mem.len };
+    ctx.sp = initialFrame(ctx.high, entry, arg);
+}
+
+/// Free a fiber's stack. It must not be running.
+pub fn destroyFiber(ctx: *FiberContext) void {
+    if (ctx.stack.len != 0) release(ctx.stack);
+    ctx.* = .{};
+}
+
+/// Make `ctx` stand for the calling thread's own stack, so a fiber can switch back to it.
+pub fn initThreadFiber(ctx: *FiberContext) void {
+    ctx.* = .{ .high = currentStackBounds().high };
+}
+
+/// Save the running context into `from` and resume `to`. Returns when something switches
+/// back to `from`.
+pub fn switchFiber(from: *FiberContext, to: *FiberContext) void {
+    switchStacks(&from.sp, to.sp);
+}
+
+/// Save the callee-saved registers on the current stack, store its pointer in `save`, and
+/// resume the stack at `load` (fiber_switch.c).
+extern fn sk_switch_stacks(save: *usize, load: usize) void;
+
+fn switchStacks(save: *usize, load: usize) void {
+    sk_switch_stacks(save, load);
+}
+
+/// Lay out a new fiber's first frame below `high` so that switching to it runs
+/// `entry(arg)`; return its stack pointer.
+fn initialFrame(high: usize, entry: FiberEntry, arg: ?*anyopaque) usize {
+    switch (builtin.cpu.arch) {
+        .aarch64 => {
+            // sk_switch_stacks pops x19-x30 and d8-d15 (160 bytes), then returns to x30.
+            const sp = high - 160;
+            const words: [*]usize = @ptrFromInt(sp);
+            @memset(words[0..20], 0);
+            words[0] = @intFromPtr(entry); // x19
+            words[1] = @intFromPtr(arg); // x20
+            words[11] = @intFromPtr(&sk_fiber_start); // x30
+            return sp;
+        },
+        .x86_64 => {
+            // sk_switch_stacks pops the float control words, r15, r14, r13, r12, rbx and
+            // rbp, then returns. After the return the stack pointer is 16-aligned, so
+            // sk_fiber_start's call enters `entry` with the usual alignment.
+            const sp = high - 16 - 8 * 8;
+            const words: [*]usize = @ptrFromInt(sp);
+            @memset(words[0..8], 0);
+            words[0] = 0x037F_0000_1F80; // MXCSR, then the x87 control word
+            words[4] = @intFromPtr(entry); // r12
+            words[3] = @intFromPtr(arg); // r13
+            words[7] = @intFromPtr(&sk_fiber_start); // return address
+            return sp;
+        },
+        else => @compileError("fibers support arm64 and x86_64"),
+    }
+}
+
+/// The first code a new fiber runs (fiber_switch.c): it calls `entry(arg)`.
+extern fn sk_fiber_start() callconv(.c) void;

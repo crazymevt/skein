@@ -29,6 +29,10 @@ pub fn build(b: *std.Build) void {
     });
     runtime.addCSourceFile(.{ .file = b.path("src/spill.c"), .flags = &.{"-std=c11"} });
     runtime.addCSourceFile(.{ .file = b.path("src/unwind.c"), .flags = &.{"-std=c11"} });
+    // Switching fiber stacks (M2.2, D-074); Windows uses its own fibers.
+    if (target.result.os.tag != .windows) {
+        runtime.addCSourceFile(.{ .file = b.path("platform/posix/fiber_switch.c"), .flags = &.{"-std=c11"} });
+    }
     runtime.addIncludePath(b.path("include"));
 
     const lib = b.addLibrary(.{

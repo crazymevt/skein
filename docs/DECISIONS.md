@@ -991,3 +991,17 @@ Date: 2026-11-10 · Status: Accepted
   4. **`.skein-cache/` files are named after the program's file and a hash of its path** (`main-1234567.c`), so programs that share a file name don't overwrite each other's C (M2.1).
 - **Alternatives:** `skein.game/asset-path` returning one asset's full path; keeping the C comparisons with a growing list of skipped programs.
 - **Consequences:** DESIGN §21 lists `resource-dir` in `skein.io` once M2.1 adds it.
+
+## D-074: Fibers in the runtime
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.2 adds fibers to the native runtime (DESIGN §17.4, D-024): stacks of their own, switched in user space, which the GC must scan and the condition system must keep apart. Tasks still run on OS threads until M2.3.
+- **Decision:**
+  - **Steps:** stacks and switching; the GC and per-fiber state; stack overflow; a scheduler on one thread (ROADMAP).
+  - **Stacks** are reserved address space with a guard page at the bottom, readable and writable above it and committed by the OS as touched; freed stacks are pooled.
+  - **Switching:** on macOS and Linux, a hand-written routine per architecture (arm64, x86_64 System V) saves the callee-saved registers on the old stack and loads the new stack pointer. On Windows the runtime uses Windows' fiber API (`CreateFiberEx`, `SwitchToFiber`) instead of its own routine, because Windows keeps each stack's bounds in the thread's information block: its unwinder, which mingw's `longjmp` uses (D-047), and its stack growth check them, and the fiber API keeps them right.
+  - **The GC** scans the stack the running fiber is on, from its current position, and every other fiber's stack from where it was suspended. Registers are spilled onto the stack before every switch, so values held only in registers are scanned too (on Windows the fiber API saves them elsewhere).
+  - **Per-fiber state:** the chain of condition frames (handlers, restarts, blocks, cancellation scopes) is saved and restored on every switch; the multiple-values registers stay per thread, since no switch happens between a return and the code that reads its values.
+- **Alternatives:**
+  - Hand-written switching on Windows too, updating the thread information block's stack fields on every switch. It depends on undocumented layout details that the fiber API already handles.
+  - `ucontext` (`swapcontext`) on POSIX: deprecated on macOS, and it makes a system call per switch to save the signal mask.
+- **Consequences:** DESIGN §17.4 says Windows uses its fiber API. Stack overflow (step 3) is handled per platform: a signal on an alternate stack on POSIX, an exception handler on Windows.

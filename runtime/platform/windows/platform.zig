@@ -243,3 +243,68 @@ pub fn processSymbol(name: [:0]const u8) ?*anyopaque {
     }
     return null;
 }
+
+// ---------------------------------------------------------------------------------------
+// Fibers (M2.2, D-074): Windows' own fibers, which keep the stack bounds in the thread
+// information block that the unwinder (and so mingw's longjmp) and stack growth check.
+
+extern "kernel32" fn CreateFiberEx(commit: usize, reserve_size: usize, flags: u32, start: *const fn (?*anyopaque) callconv(.winapi) void, parameter: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn DeleteFiber(fiber: *anyopaque) callconv(.winapi) void;
+extern "kernel32" fn SwitchToFiber(fiber: *anyopaque) callconv(.winapi) void;
+extern "kernel32" fn ConvertThreadToFiberEx(parameter: ?*anyopaque, flags: u32) callconv(.winapi) ?*anyopaque;
+
+const FIBER_FLAG_FLOAT_SWITCH: u32 = 1;
+
+/// A fiber's machine state: Windows' fiber, and the top of its stack (0 until it first
+/// runs, when Windows has made the stack).
+pub const FiberContext = struct {
+    handle: ?*anyopaque = null,
+    high: usize = 0,
+    entry: ?FiberEntry = null,
+    arg: ?*anyopaque = null,
+};
+
+/// The entry point of a new fiber: called with the argument given to createFiber, on the
+/// fiber's stack. It must never return.
+pub const FiberEntry = *const fn (?*anyopaque) callconv(.c) noreturn;
+
+/// Bytes below each fiber stack that fault when touched (Windows' guard page).
+pub fn fiberGuardSize() usize {
+    return pageSize();
+}
+
+fn fiberStart(parameter: ?*anyopaque) callconv(.winapi) void {
+    const ctx: *FiberContext = @ptrCast(@alignCast(parameter));
+    ctx.high = currentStackBounds().high;
+    ctx.entry.?(ctx.arg);
+}
+
+/// Make `ctx` a new fiber with a stack of at least `size` bytes, which runs `entry(arg)`
+/// when it's first switched to. Windows commits its pages as the fiber touches them.
+pub fn createFiber(ctx: *FiberContext, size: usize, entry: FiberEntry, arg: ?*anyopaque) MemoryError!void {
+    ctx.* = .{ .entry = entry, .arg = arg };
+    ctx.handle = CreateFiberEx(pageSize(), size, FIBER_FLAG_FLOAT_SWITCH, fiberStart, ctx) orelse
+        return error.OutOfMemory;
+}
+
+/// Free a fiber and its stack. It must not be running.
+pub fn destroyFiber(ctx: *FiberContext) void {
+    if (ctx.handle) |h| DeleteFiber(h);
+    ctx.* = .{};
+}
+
+/// This thread's own fiber (Windows makes the thread one the first time).
+threadlocal var thread_fiber: ?*anyopaque = null;
+
+/// Make `ctx` stand for the calling thread's own stack, so a fiber can switch back to it.
+pub fn initThreadFiber(ctx: *FiberContext) void {
+    if (thread_fiber == null) thread_fiber = ConvertThreadToFiberEx(null, FIBER_FLAG_FLOAT_SWITCH);
+    ctx.* = .{ .handle = thread_fiber, .high = currentStackBounds().high };
+}
+
+/// Save the running context into `from` and resume `to`. Returns when something switches
+/// back to `from`.
+pub fn switchFiber(from: *FiberContext, to: *FiberContext) void {
+    _ = from;
+    SwitchToFiber(to.handle.?);
+}
