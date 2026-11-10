@@ -1,0 +1,484 @@
+(ns skein.swank
+  "The Swank server of native skein dev (DESIGN §15, M2.7, D-082), which SLIME connects to.
+
+Swank sends messages both ways as a six-digit hexadecimal length (in UTF-8 bytes), then
+that many bytes of an s-expression. Emacs sends Lisp data; here it's read into Skein
+values: lists are lists (and () is nil), t and nil are true and nil, :keywords are
+keywords, pkg:name symbols are symbols with a namespace, and names are lowercased, as
+Emacs writes them. What's sent back is written as Emacs Lisp reads it.
+
+A request is (:emacs-rex form package thread id); the answer is (:return (:ok value) id),
+or (:return (:abort message) id) after an error. Requests for the REPL thread run in
+order in one fiber per connection (the listener); the others each in a fiber of their
+own, as Swank's :spawn style runs them. Code runs in the namespace the request's package
+names, or the listener's if there is none of that name; what it prints goes to Emacs as
+(:write-string text).
+
+skein dev starts the server: this namespace gives it start-server when it's loaded."
+  (:require [skein.dev :as dev]
+            [skein.compiler.reader :as reader]
+            [skein.compiler.expander :as expander]))
+
+(def protocol-version
+  "The Swank protocol version connection-info reports."
+  "2.30")
+
+;;; ------------------------------------------------------------------------------------
+;;; Text helpers
+
+(defn- ascii-case
+  "s with its ASCII letters from first-code to last-code moved by shift."
+  [s first-code last-code shift]
+  (apply str (map (fn [c] (let [i (int c)] (if (<= first-code i last-code) (char (+ i shift)) c)))
+                  s)))
+
+(defn- lower [s] (ascii-case s 65 90 32))
+
+(defn- upper [s] (ascii-case s 97 122 -32))
+
+(defn- hex-digit [c]
+  (let [i (int c)]
+    (cond (<= 48 i 57) (- i 48)
+          (<= 97 i 102) (- i 87)
+          (<= 65 i 70) (- i 55)
+          :else nil)))
+
+(defn- parse-hex
+  "The number the hexadecimal digits of s give, or nil if s has another character."
+  [s]
+  (reduce (fn [n c] (let [d (hex-digit c)] (if (and n d) (+ (* n 16) d) nil))) 0 s))
+
+(defn- hex6
+  "n as six lowercase hexadecimal digits."
+  [n]
+  (loop [n n i 0 out ()]
+    (if (= i 6)
+      (apply str out)
+      (recur (quot n 16) (inc i) (cons (nth "0123456789abcdef" (mod n 16)) out)))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Reading the data Emacs sends
+
+(defcondition swank-error [error]
+  "A message from Emacs that isn't Lisp data the server can read."
+  (message :reader swank-error-message)
+  (:report (fn [c] (str "Swank: " (swank-error-message c)))))
+
+(defn- fail [& parts] (error swank-error :message (apply str parts)))
+
+(defn- peek-at [st]
+  (let [p @(:pos st)] (when (< p (:n st)) (nth (:text st) p))))
+
+(defn- advance! [st] (swap! (:pos st) inc))
+
+(defn- blank? [c] (<= (int c) 32))
+
+(defn- delimiter? [c]
+  (or (blank? c) (contains? #{\( \) \[ \] \" \' \;} c)))
+
+(defn- skip-blank! [st]
+  (loop []
+    (when-let [c (peek-at st)]
+      (cond (blank? c) (do (advance! st) (recur))
+            (= c \;) (do (loop [] (when-let [d (peek-at st)]
+                                    (advance! st)
+                                    (when-not (= d \newline) (recur))))
+                         (recur))
+            :else nil))))
+
+(def ^:private read-datum)
+
+(defn- read-items
+  "The data up to the character close, which ends them."
+  [st close]
+  (advance! st)
+  (loop [items []]
+    (skip-blank! st)
+    (let [c (peek-at st)]
+      (cond (nil? c) (fail "the message ends inside a list")
+            (= c close) (do (advance! st) items)
+            :else (recur (conj items (read-datum st)))))))
+
+(defn- read-text-literal
+  "A string, which Emacs writes with \\\" and \\\\ escaped (and \\n and the like)."
+  [st]
+  (advance! st)
+  (let [text (:text st)]
+    (loop [i @(:pos st) start i parts []]
+      (when (>= i (:n st)) (fail "the message ends inside a string"))
+      (let [c (nth text i)]
+        (cond (= c \") (do (reset! (:pos st) (inc i))
+                           (apply str (conj parts (subs text start i))))
+              (= c \\)
+              (do (when (>= (inc i) (:n st)) (fail "the message ends inside a string"))
+                  (let [e (nth text (inc i))
+                        parts (conj parts (subs text start i))]
+                    (recur (+ i 2) (+ i 2)
+                           (case e
+                             \n (conj parts "\n")
+                             \t (conj parts "\t")
+                             \r (conj parts "\r")
+                             ;; A backslash before a line break continues the line.
+                             \newline parts
+                             (conj parts (str e))))))
+              :else (recur (inc i) start parts))))))
+
+(defn- token->datum
+  "What a symbol or number token means."
+  [token]
+  (let [colon (loop [i 0] (cond (= i (count token)) nil
+                                (= (nth token i) \:) i
+                                :else (recur (inc i))))]
+    (cond (= colon 0) (keyword (lower (subs token 1)))
+          (= (lower token) "nil") nil
+          (= (lower token) "t") true
+          (parse-long token) (parse-long token)
+          colon (let [pkg (subs token 0 colon)
+                      nm (subs token (if (and (< (inc colon) (count token))
+                                              (= (nth token (inc colon)) \:))
+                                       (+ colon 2)
+                                       (inc colon)))]
+                  (symbol (lower pkg) (lower nm)))
+          :else (symbol (lower token)))))
+
+(defn- read-token [st]
+  (let [start @(:pos st)]
+    (loop []
+      (let [c (peek-at st)]
+        (when (and c (not (delimiter? c))) (advance! st) (recur))))
+    (subs (:text st) start @(:pos st))))
+
+(defn- read-datum* [st]
+  (skip-blank! st)
+  (let [c (peek-at st)]
+    (cond (nil? c) (fail "the message ends where data was expected")
+          (= c \() (let [items (read-items st \))]
+                     (when (seq items) (apply list items)))
+          (= c \[) (read-items st \])
+          (= c \") (read-text-literal st)
+          (= c \') (do (advance! st) (list (symbol "quote") (read-datum st)))
+          (contains? #{\) \]} c) (fail "unexpected `" c "`")
+          :else (let [token (read-token st)]
+                  (when (empty? token) (fail "unexpected `" c "`"))
+                  (token->datum token)))))
+
+(def ^:private read-datum read-datum*)
+
+(defn read-data
+  "The datum the Lisp data text gives (as the namespace docstring says)."
+  [text]
+  (let [st {:text text :n (count text) :pos (atom 0)}
+        datum (read-datum st)]
+    (skip-blank! st)
+    (when (peek-at st) (fail "more than one datum in a message"))
+    datum))
+
+;;; ------------------------------------------------------------------------------------
+;;; Writing data for Emacs
+
+(defn write-data
+  "x written as Emacs Lisp reads it: nil and false as nil, true as t, and other values
+that have no Lisp syntax as strings of their printed form."
+  [x]
+  (cond (or (nil? x) (false? x)) "nil"
+        (true? x) "t"
+        ;; Skein's string escapes are ones Emacs reads.
+        (string? x) (pr-str x)
+        (keyword? x) (str ":" (when (namespace x) (str (namespace x) "/")) (name x))
+        (symbol? x) (if (namespace x) (str (namespace x) ":" (name x)) (name x))
+        (integer? x) (str x)
+        (float? x) (str (f64 x))
+        (char? x) (str (int x))
+        (or (seq? x) (vector? x) (list? x))
+        (if (seq x) (str "(" (apply str (interpose " " (map write-data x))) ")") "nil")
+        :else (pr-str (pr-str x))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Connections
+
+(defn- send!
+  "Send the message to Emacs (the connection's writer sends them in order)."
+  [c message]
+  (>! (:out c) message))
+
+(defn- take-bytes!
+  "The next n bytes from the connection, as a string, or nil when it ends first."
+  [c n]
+  (loop []
+    (let [p @(:pending c)]
+      (if (>= (:bytes p) n)
+        (let [[head tail] (%utf8-split (apply str (:chunks p)) n)]
+          (reset! (:pending c) {:chunks (if (empty? tail) [] [tail]) :bytes (- (:bytes p) n)})
+          head)
+        (when-let [text (%read-text (:socket c))]
+          (reset! (:pending c) {:chunks (conj (:chunks p) text)
+                                :bytes (+ (:bytes p) (%utf8-length text))})
+          (recur))))))
+
+(defn- read-message
+  "The next message from Emacs, or ::end when the connection ends."
+  [c]
+  (if-let [header (take-bytes! c 6)]
+    (let [n (or (parse-hex header) (fail "bad message length `" header "`"))]
+      (if-let [payload (take-bytes! c n)] (read-data payload) ::end))
+    ::end))
+
+(defn- frame
+  "The text that sends the message: its length, then the data."
+  [message]
+  (let [payload (write-data message)]
+    (str (hex6 (%utf8-length payload)) payload)))
+
+(defn- writer
+  "Send the connection's messages until it's closed or can't be written to."
+  [c]
+  (loop []
+    (when-let [m (<! (:out c))]
+      (if (%write-text (:socket c) (frame m))
+        (recur)
+        (close! (:out c))))))
+
+(defn- output-fn
+  "The *out* function that sends what code prints to Emacs."
+  [c]
+  (fn [text] (when (seq text) (send! c (list :write-string text)))))
+
+(defn- namespace-for
+  "The namespace a request's package names: a namespace of that name (or lowercased), or
+the listener's."
+  [c pkg]
+  (cond (and (string? pkg) (%find-namespace pkg)) pkg
+        (and (string? pkg) (%find-namespace (lower pkg))) (lower pkg)
+        :else @(:ns c)))
+
+(defn- console-for
+  "What skein.dev evaluates in for a request in the namespace ns: its own namespace (a
+buffer's), with output to Emacs."
+  [c ns]
+  {:ns (atom ns) :output (output-fn c)})
+
+;;; ------------------------------------------------------------------------------------
+;;; Evaluating and compiling
+
+(defn- eval-text
+  "Evaluate the forms of text in the console's namespace; the value of the last, or ::none
+if there are none. file, line and column say where text starts, for locations."
+  [console text file line column]
+  (let [ns-name (fn [] @(:ns console))
+        r (reader/make-reader text {:file file :namespace (ns-name)
+                                    :resolve-alias
+                                    (fn [alias]
+                                      (when-let [ns (%find-namespace (ns-name))]
+                                        (when-let [target (%find-alias ns alias)]
+                                          (%namespace-name target))))})]
+    (reset! (:line r) line)
+    (reset! (:column r) column)
+    (loop [value ::none]
+      (reader/set-reader-namespace! r (ns-name))
+      (let [form (reader/read-form r false ::eof)]
+        (if (= form ::eof) value (recur (dev/eval-in console form)))))))
+
+(defn- echo
+  "A value as SLIME shows it in the echo area."
+  [value]
+  (if (= value ::none) "; No value" (str "=> " (dev/show value))))
+
+(defn- location
+  "A source location (from the reader) as SLIME takes one; buffer is the name of the
+Emacs buffer for text with no file of its own."
+  [loc file buffer]
+  (if loc
+    (list :location
+          (if (and buffer (or (nil? (:file loc)) (= (:file loc) file)))
+            (list :buffer buffer)
+            (list :file (:file loc)))
+          (list :line (:line loc) (:column loc))
+          nil)
+    (list :error "no location")))
+
+(defn- compilation-result
+  "Call f; SLIME's (:compilation-result notes successp duration loadp faslfile), with a
+note for a read or compile error. Other errors go on up."
+  [f file buffer]
+  (let [note (fn [message loc]
+               (list :message message :severity :error :location (location loc file buffer)
+                     :references nil))
+        notes (try (f) nil
+                   (catch reader/read-error e
+                     [(note (reader/read-error-message e) (reader/read-error-location e))])
+                   (catch expander/compile-error e
+                     [(note (expander/compile-error-message e)
+                            (expander/compile-error-location e))]))]
+    (list :compilation-result notes (empty? notes) 0.0 nil nil)))
+
+(defn- start-of
+  "The line and column where a region starts, from SLIME's position list
+((:position offset) (:line line column))."
+  [position]
+  (or (some (fn [p] (when (and (seq? p) (= :line (first p)))
+                      [(second p) (max 1 (or (first (drop 2 p)) 1))]))
+            position)
+      [1 1]))
+
+(defn- options
+  "The keyword arguments of a request, as a map."
+  [args]
+  (apply hash-map args))
+
+;;; ------------------------------------------------------------------------------------
+;;; Requests: each is a function of the connection, the request's package and its
+;;; arguments, whose result is the :ok value.
+
+(defn- connection-info [c pkg args]
+  (let [ns @(:ns c)]
+    (list :pid nil :style :spawn
+          :encoding (list :coding-systems (list "utf-8-unix"))
+          :lisp-implementation (list :type "Skein" :name "skein" :version dev/version
+                                     :program nil)
+          :machine (list :instance "localhost" :type "" :version "")
+          :features nil :modules nil
+          :package (list :name ns :prompt ns)
+          :version protocol-version)))
+
+(defn- swank-require [c pkg [modules]]
+  (map (fn [m] (upper (name m))) (if (seq? modules) modules (list modules))))
+
+(defn- create-repl [c pkg args]
+  (list @(:ns c) @(:ns c)))
+
+(defn- listener-eval [c pkg [text]]
+  (let [console {:ns (:ns c) :output (output-fn c)}
+        before @(:ns c)
+        value (eval-text console text "repl" 1 1)]
+    (when-not (= value ::none) (dev/record-value! value))
+    (when-not (= before @(:ns c)) (send! c (list :new-package @(:ns c) @(:ns c))))
+    (send! c (list :write-string (if (= value ::none) "; No value" (str (dev/show value) "\n"))
+                   :repl-result))
+    nil))
+
+(defn- interactive-eval [c pkg [text]]
+  (echo (eval-text (console-for c (namespace-for c pkg)) text "slime" 1 1)))
+
+(defn- eval-and-grab-output [c pkg [text]]
+  (let [output (atom [])
+        console {:ns (atom (namespace-for c pkg))
+                 :output (fn [s] (swap! output conj s))}
+        value (eval-text console text "slime" 1 1)]
+    (list (apply str @output) (if (= value ::none) "" (dev/show value)))))
+
+(defn- pprint-eval [c pkg [text]]
+  (let [value (eval-text (console-for c (namespace-for c pkg)) text "slime" 1 1)]
+    (if (= value ::none) "; No value" (dev/show value))))
+
+(defn- compile-string-for-emacs [c pkg [text buffer position filename]]
+  (let [[line column] (start-of position)
+        file (if (string? filename) filename buffer)
+        console (console-for c (namespace-for c pkg))]
+    (compilation-result (fn [] (eval-text console text file line column))
+                        file (when-not (string? filename) buffer))))
+
+(defn- compile-file-for-emacs [c pkg [filename]]
+  (let [console (console-for c (namespace-for c pkg))]
+    (compilation-result (fn [] (dev/call-in console (fn [] (load-file filename))))
+                        filename nil)))
+
+(defn- load-file-request [c pkg [filename]]
+  (let [console (console-for c (namespace-for c pkg))]
+    (dev/call-in console (fn [] (load-file filename)))
+    true))
+
+(defn- set-package [c pkg [nm]]
+  (let [found (cond (%find-namespace nm) nm
+                    (%find-namespace (lower nm)) (lower nm)
+                    :else (error (str "no namespace named " nm)))]
+    (reset! (:ns c) found)
+    (list found found)))
+
+(defn- list-all-package-names [c pkg args]
+  (sort (map (fn [ns] (:name @ns)) (%all-namespaces))))
+
+(defn- quit-lisp [c pkg args]
+  (%exit 0))
+
+(def ^:private requests
+  "The requests the server answers, by name (without their package, swank: or
+swank-repl:)."
+  {"connection-info" connection-info
+   "swank-require" swank-require
+   "create-repl" create-repl
+   "listener-eval" listener-eval
+   "interactive-eval" interactive-eval
+   "interactive-eval-region" interactive-eval
+   "eval-and-grab-output" eval-and-grab-output
+   "pprint-eval" pprint-eval
+   "compile-string-for-emacs" compile-string-for-emacs
+   "compile-file-for-emacs" compile-file-for-emacs
+   "load-file" load-file-request
+   "set-package" set-package
+   "list-all-package-names" list-all-package-names
+   "buffer-first-change" (fn [c pkg args] nil)
+   "quit-lisp" quit-lisp})
+
+(defn- argument
+  "The value of an argument of a request: Emacs quotes lists and symbols."
+  [x]
+  (if (and (seq? x) (symbol? (first x)) (= "quote" (name (first x)))) (second x) x))
+
+(defn- answer
+  "Handle the request form and send its answer."
+  [c form pkg id]
+  (let [result (try
+                 (when-not (and (seq? form) (symbol? (first form)))
+                   (error (str "not a request: " (write-data form))))
+                 (let [handler (or (get requests (name (first form)))
+                                   (error (str "Skein's Swank server has no "
+                                               (write-data (first form)))))]
+                   (list :ok (handler c pkg (map argument (rest form)))))
+                 (catch error e (list :abort (condition-message e))))]
+    (send! c (list :return result id))))
+
+(defn- dispatch
+  "Act on a message from Emacs."
+  [c message]
+  (when (and (seq? message) (= :emacs-rex (first message)))
+    (let [[_ form pkg thread id] message]
+      (if (= thread :repl-thread)
+        (>! (:listener c) [form pkg id])
+        (future (answer c form pkg id))))))
+
+(defn- serve
+  "Talk to the Emacs connected on socket until it disconnects."
+  [socket]
+  (let [c {:socket socket
+           :out (chan)
+           :listener (chan 256)
+           :pending (atom {:chunks [] :bytes 0})
+           :ns (atom (dev/starting-namespace))}]
+    (future (writer c))
+    (future (loop []
+              (when-let [[form pkg id] (<! (:listener c))]
+                (answer c form pkg id)
+                (recur))))
+    (try (loop []
+           (let [message (read-message c)]
+             (when-not (= message ::end)
+               (dispatch c message)
+               (recur))))
+         (catch error e (println (str "; Swank: " (condition-message e))))
+         (finally
+           (close! (:listener c))
+           (close! (:out c))
+           (%tcp-close socket)))))
+
+(defn start-server
+  "Serve Swank on localhost:port (0 for any free port); the server, or nil if it can't
+listen there."
+  [port]
+  (when-let [server (%tcp-listen port)]
+    (future (loop []
+              (when-let [socket (%tcp-accept server)]
+                (future (serve socket))
+                (recur))))
+    server))
+
+(dev/install-swank! start-server)

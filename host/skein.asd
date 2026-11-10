@@ -96,6 +96,7 @@
                (:file "ffi")
                (:file "bindgen")
                (:file "repl")
+               (:file "swank")
                (:file "math")
                (:file "io")
                (:file "backend-c")

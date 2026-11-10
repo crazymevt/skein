@@ -155,6 +155,12 @@
       (setf (namespace-file ns) *loading-file*))
     ns))
 
+(defcore "%set-namespace-cell-hook!" (f)
+  ;; Natively, skein.dev's REPLs give each evaluation its own current namespace (D-083);
+  ;; Phase 0's bind *current-namespace*.
+  (declare (ignore f))
+  nil)
+
 (defcore "in-ns" (name)
   (let ((ns (ensure-namespace (sym-string name "a namespace name"))))
     (setf (namespace-loaded-p ns) t

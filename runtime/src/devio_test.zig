@@ -53,3 +53,13 @@ test "the server accepts a connection on localhost and reads and writes text" {
     _ = call("%tcp-close", &.{conn});
     _ = call("%tcp-close", &.{server});
 }
+
+test "Swank's framing counts and splits UTF-8 bytes" {
+    coll.ensureConstants();
+    const s = string.make("caf\xc3\xa9!");
+    try testing.expectEqual(@as(i64, 6), call("%utf8-length", &.{s}).toFixnum());
+    const parts = call("%utf8-split", &.{ s, Value.fromFixnum(5) });
+    try testing.expectEqualStrings("caf\xc3\xa9", string.bytes(coll.vectorNth(parts, 0).?));
+    try testing.expectEqualStrings("!", string.bytes(coll.vectorNth(parts, 1).?));
+    try testing.expectEqual(Value.nil, call("%utf8-split", &.{ s, Value.fromFixnum(7) }));
+}

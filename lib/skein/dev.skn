@@ -12,8 +12,9 @@ opens a debug session: its fiber waits, a console attaches, and the forms typed 
 evaluated in that fiber, where its restarts are.
 
 `skein dev` runs a program with SKEIN_DEV set (a port, or none): run-main then serves the
-REPL on the terminal and localhost, reloads source files when they change, and runs -main
-under a \"Stop the program\" restart."
+REPL on the terminal and localhost, and Swank (skein.swank) on the port SKEIN_SWANK gives,
+reloads source files when they change, and runs -main under a \"Stop the program\"
+restart."
   (:require [skein.compiler.reader :as reader]
             [skein.compiler.eval :as evaluator]))
 
@@ -29,6 +30,14 @@ that code spawns."
 
 (%set-output-var! (%runtime-var (%find-own-var (%find-namespace "skein.dev") "*out*")))
 
+(def ^:dynamic *namespace-cell*
+  "nil, or an atom holding the current namespace of the code a console is evaluating, and
+of the tasks it starts, so that consoles evaluating at the same time don't change each
+other's (D-083)."
+  nil)
+
+(%set-namespace-cell-hook! (fn [] *namespace-cell*))
+
 ;;; ------------------------------------------------------------------------------------
 ;;; Consoles
 
@@ -39,6 +48,11 @@ that code spawns."
 (def ^:private initial-namespace
   "The namespace new consoles start in: the program's in skein dev."
   (atom "user"))
+
+(defn starting-namespace
+  "The name of the namespace new consoles start in: the program's in skein dev."
+  []
+  @initial-namespace)
 
 (defn- make-console
   "A console that reads text with (read-text), nil at its end, and writes it with (write
@@ -147,7 +161,7 @@ text). output is the function code evaluated from it prints with, or nil."
   [x]
   (and (atom? x) (map? @x) (contains? @x :mappings) (string? (:name @x))))
 
-(defn- show
+(defn show
   "The printed form of a value, as Phase 0's REPL prints it."
   [x]
   (if (model-namespace? x) (str "#<namespace " (:name @x) ">") (pr-str x)))
@@ -165,7 +179,9 @@ text). output is the function code evaluated from it prints with, or nil."
 (defn- core-value [nm]
   (let [v (%var-value (core-var nm))] (if (%var-defined? (core-var nm)) v nil)))
 
-(defn- record-value! [value]
+(defn record-value!
+  "Make value *1, and the earlier ones *2 and *3."
+  [value]
   (set-core-var! "*3" (core-value "*2"))
   (set-core-var! "*2" (core-value "*1"))
   (set-core-var! "*1" value))
@@ -180,17 +196,23 @@ text). output is the function code evaluated from it prints with, or nil."
 (def ^:private debug)
 (def ^:private remote-debug)
 
-(defn- eval-in
-  "Evaluate the syntax form in the console's namespace, which follows the ns and in-ns
-forms it evaluates; what it prints goes to the console."
-  [console form]
-  (let [saved (%current-namespace-name)]
+(defn call-in
+  "Call f in the namespace of console (a map with an atom :ns holding a namespace name, and
+:output, a function for *out* or nil): the namespace follows the ns and in-ns forms f
+evaluates, and what f prints goes to :output."
+  [console f]
+  ;; With a current namespace of its own: consoles evaluate at the same time (D-083).
+  (binding [*namespace-cell* (atom (%current-namespace))
+            *out* (:output console)]
     (%in-ns (symbol @(:ns console)))
-    (try (binding [*out* (:output console)]
-           (evaluator/evaluate-syntax form))
+    (try (f)
          (finally
-           (reset! (:ns console) (%current-namespace-name))
-           (%in-ns (symbol saved))))))
+           (reset! (:ns console) (%current-namespace-name))))))
+
+(defn eval-in
+  "Evaluate the syntax form in the console's namespace, as call-in calls a function."
+  [console form]
+  (call-in console (fn [] (evaluator/evaluate-syntax form))))
 
 (defn- eval-print
   "Evaluate form and print its value, with an abort restart around it and the debugger
@@ -463,11 +485,22 @@ function that stops it."
           (recur))))
     (fn [] (reset! stop true))))
 
+(def ^:private swank-starter
+  "skein.swank's start-server, which it installs when it's loaded."
+  (atom nil))
+
+(defn install-swank!
+  "Give skein dev the function that serves Swank: (start port) listens on localhost:port
+and returns the server, or nil if it can't listen there (skein.swank calls this)."
+  [start]
+  (reset! swank-starter start))
+
 (defn- run-dev
   "Run main-fn with args as skein dev does: serve the REPL on the terminal and, unless
-port is nil, on localhost:port, reload changed source files, and keep the REPL running
-after the program finishes. Returns 0, or 1 if an error stopped the program."
-  [main-fn args ns-name port]
+port is nil, on localhost:port, and Swank on localhost:swank-port unless that is nil,
+reload changed source files, and keep the REPL running after the program finishes.
+Returns 0, or 1 if an error stopped the program."
+  [main-fn args ns-name port swank-port]
   (install-debugger!)
   (doseq [nm ["*1" "*2" "*3" "*e"]] (set-core-var! nm nil))
   (reset! initial-namespace ns-name)
@@ -475,12 +508,17 @@ after the program finishes. Returns 0, or 1 if an error stopped the program."
                  (or (start-server port)
                      (do (println (str "; no REPL server: cannot listen on port " port))
                          nil)))
+        swank (when (and swank-port @swank-starter)
+                (or (@swank-starter swank-port)
+                    (do (println (str "; no Swank server: cannot listen on port " swank-port))
+                        nil)))
         terminal (terminal-console)
         terminal-done (atom false)
         program-running (atom true)
         status (atom 0)]
     (println (str "; skein dev: reloading changed files"
-                  (if server (str "; REPL on localhost:" (%tcp-port server)) "")))
+                  (if server (str "; REPL on localhost:" (%tcp-port server)) "")
+                  (if swank (str "; Swank on localhost:" (%tcp-port swank)) "")))
     (let [stop-watcher (start-watcher)]
       (future (console-loop terminal)
               (reset! terminal-done true)
@@ -500,14 +538,23 @@ after the program finishes. Returns 0, or 1 if an error stopped the program."
           (recur)))
       (stop-watcher)
       (when server (%tcp-close server))
+      (when swank (%tcp-close swank))
       @status)))
+
+(defn- port-setting
+  "The port the environment variable gives (a number, or none for nil)."
+  [variable]
+  (let [mode (%getenv variable)]
+    (when-not (or (nil? mode) (= mode "none")) (parse-long mode))))
 
 (defn run-main
   "How a program built with --eval starts (D-081): with SKEIN_DEV set (a port, or none,
-by skein dev), run it as skein dev does; else call main-fn (its -main, or nil) with the
-command-line arguments. ns-name is the program's namespace."
+by skein dev), run it as skein dev does, with Swank on the port SKEIN_SWANK gives (D-082);
+else call main-fn (its -main, or nil) with the command-line arguments. ns-name is the
+program's namespace."
   [main-fn args ns-name]
-  (if-let [mode (%getenv "SKEIN_DEV")]
-    (let [status (run-dev main-fn args ns-name (when-not (= mode "none") (parse-long mode)))]
+  (if (%getenv "SKEIN_DEV")
+    (let [status (run-dev main-fn args ns-name (port-setting "SKEIN_DEV")
+                          (port-setting "SKEIN_SWANK"))]
       (when-not (zero? status) (%exit status)))
     (when main-fn (apply main-fn args))))

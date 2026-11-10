@@ -1131,3 +1131,10 @@ Date: 2026-11-10 · Status: Accepted
   - **Steps:** the protocol, evaluation and loading; the debugger; completion, argument lists, documentation and the inspector; the Emacs helper and the scripted SLIME session.
 - **Alternatives:** Swank only with `--swank`, or Swank replacing the text REPL; setup lines in the docs instead of an elisp file; running the SLIME session on all three platforms.
 - **Consequences:** SLY (Slynk) still needs a compatibility check (D-018). VS Code's plain-text setup stays as it is.
+
+## D-083: Each REPL evaluation has its own current namespace
+Date: 2026-11-10 · Status: Accepted
+- **Context:** natively the current namespace was one atom for the whole program (D-078). The text REPL's consoles switched it around each evaluation and switched it back afterwards. Swank runs requests at the same time (M2.7, D-082): a `C-x C-e` in a buffer while the listener is still evaluating, for example a game loop started from the REPL. One evaluation then restores the other's namespace, and the listener ends up in the buffer's.
+- **Decision:** `skein.compiler.env` takes the current namespace from a hook, `%set-namespace-cell-hook!`. skein.dev installs a function that returns its dynamic var `*namespace-cell*`, and every console or Swank evaluation (`skein.dev/call-in`) binds that var to an atom of its own, starting at the console's namespace. Tasks the evaluation starts copy the binding, so they share it. Other code (the program, the file watcher) uses the shared atom as before. The hook exists because Phase 0's C backend, which compiles `env.skn` for the first compiler, has no `binding`; Phase 0's `%set-namespace-cell-hook!` does nothing, since its REPL binds `*current-namespace*` per thread.
+- **Alternatives:** a lock around each evaluation, which would make a long listener evaluation hold up every other one, the program's debugger sessions included; a dynamic var in `env.skn` itself, which Phase 0's C backend can't compile.
+- **Consequences:** `%current-namespace` calls the hook in `--eval` programs (one dynamic var read). The program's own code still shares one current namespace between its tasks.

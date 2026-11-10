@@ -81,7 +81,7 @@ These are defined in M0.1; update this section if they change.
 | `build/skeinc build [file.skn] [-o out] [--target T] [--profile dev\|release] [--eval]` | compile a program natively with the compiler written in Skein, for any §19.1 target; with no file, the `project.skn` in the current directory; `--eval` (dev only) includes the evaluator (D-078) |
 | `build/skeinc package [--target T] [--profile P]` | package the project in the current directory: `dist/<target>/<name>/`, or `<name>.app` for macOS |
 | `build/skeinc run\|dev\|repl ...`, `build/skeinc current` | what `./skein run`, `dev` and `repl` run; `current` exits with 0 if skeinc is newer than its sources (the launcher bootstraps it otherwise) |
-| `./skein dev [--port N \| --no-server] <file.skn> [args]` | run natively with file reloading and a REPL (terminal and localhost:5555) |
+| `./skein dev [--port N \| --no-server] [--swank-port N \| --no-swank] <file.skn> [args]` | run natively with file reloading, a REPL (terminal and localhost:5555) and Swank for SLIME (localhost:4005) |
 | `make bench` | run the benchmarks in `bench/` |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |
 | `make sdl3-bindings` | regenerate `lib/sdl3/raw.skn` |

@@ -12,6 +12,7 @@ const platform = @import("platform");
 const rt = @import("rt.zig");
 const sched = @import("sched.zig");
 const string = @import("string.zig");
+const coll = @import("coll.zig");
 const io = @import("io.zig");
 const Value = @import("value.zig").Value;
 
@@ -265,7 +266,6 @@ fn runAttached(argv: Value, env: Value) Value {
         }
         vars.deinit(alloc);
     }
-    const coll = @import("coll.zig");
     for (0..coll.vectorCount(argv)) |i| {
         const a = coll.vectorNth(argv, i).?;
         if (!string.isString(a)) rt.raise(.type_error, "%run-attached needs a vector of strings", .{});
@@ -288,6 +288,25 @@ fn runAttached(argv: Value, env: Value) Value {
     var call: AttachedCall = .{ .argv = args.items, .env = vars.items };
     io.pathBlocking(attachedBlocking, &call);
     return if (call.code) |c| Value.fromFixnum(c) else Value.nil;
+}
+
+// ---------------------------------------------------------------------------------------
+// Swank's framing (M2.7, D-082) counts UTF-8 bytes
+
+/// [the first n bytes of the string, the rest], or nil if it has fewer than n bytes.
+fn utf8Split(s: Value, n: Value) Value {
+    if (!string.isString(s)) rt.raise(.type_error, "%utf8-split needs a string", .{});
+    if (!n.isFixnum() or n.toFixnum() < 0) rt.raise(.type_error, "%utf8-split needs a byte count", .{});
+    const k: usize = @intCast(n.toFixnum());
+    const all = string.bytes(s);
+    if (k > all.len) return Value.nil;
+    if (k < all.len and all[k] & 0xC0 == 0x80) rt.raise(.@"error", "%utf8-split: byte {d} is inside a character", .{k});
+    // Copy first: making the strings may move s.
+    const t = alloc.dupe(u8, all) catch rt.fatal("out of memory", .{});
+    defer alloc.free(t);
+    const head = string.make(t[0..k]);
+    const tail = string.make(t[k..]);
+    return coll.vectorOf(&.{ head, tail });
 }
 
 // ---------------------------------------------------------------------------------------
@@ -360,6 +379,18 @@ pub const entries = [_]CoreEntry{
     .{ .name = "%tcp-close", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return close(a[0]);
+        }
+    }.f },
+    // (%utf8-length s): the number of bytes of the string in UTF-8.
+    .{ .name = "%utf8-length", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            if (!string.isString(a[0])) rt.raise(.type_error, "%utf8-length needs a string", .{});
+            return Value.fromFixnum(@intCast(string.bytes(a[0]).len));
+        }
+    }.f },
+    .{ .name = "%utf8-split", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return utf8Split(a[0], a[1]);
         }
     }.f },
 };

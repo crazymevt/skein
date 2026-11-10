@@ -336,13 +336,13 @@ instead."
                      (fail "cannot find skein.core.native"))]
      (reset! env/namespace-loader (fn [nm] (load-for-syntax build nm)))
      (translate-source build library)
-     ;; --eval (D-078, D-081): the front end, the evaluator and the REPL, before the
-     ;; program.
+     ;; --eval (D-078, D-081, D-082): the front end, the evaluator, the REPL and Swank
+     ;; (skein.swank, which requires skein.dev), before the program.
      (when eval?
        (c/note-eval! (:unit build))
-       (swap! (:translated build) conj "skein.dev")
-       (translate-source build (or (find-namespace-file build "skein.dev")
-                                   (fail "cannot find skein.dev"))))
+       (swap! (:translated build) conj "skein.swank")
+       (translate-source build (or (find-namespace-file build "skein.swank")
+                                   (fail "cannot find skein.swank"))))
      (let [ns (translate-source build path)
            main (%find-own-var ns (or main-name "-main"))]
        (when (and main-name (nil? main))
@@ -691,21 +691,28 @@ in Phase 0; --release builds with the release profile, without the evaluator."
     (run-program (first args) (if release {:profile "release"} {:profile "dev" :eval true})
                  (rest args) nil)))
 
-(defn- dev-command
-  "skein dev [--port N | --no-server] <file.skn> [args...]: the program run with
-SKEIN_DEV set, which starts the REPL, the server and the file watcher (skein.dev)."
+(defn- port-option
+  "The port after the option in args, as a string; fails unless it's a number."
   [args]
-  (loop [args (seq args) port "5555"]
+  (if-let [n (second args)]
+    (if (parse-long n) n (fail "skein dev: bad port " n))
+    (fail "skein dev: " (first args) " needs a number")))
+
+(defn- dev-command
+  "skein dev [--port N | --no-server] [--swank-port N | --no-swank] <file.skn> [args...]:
+the program run with SKEIN_DEV and SKEIN_SWANK set, which start the REPL, its server, the
+Swank server and the file watcher (skein.dev, skein.swank)."
+  [args]
+  (loop [args (seq args) port "5555" swank "4005"]
     (let [arg (first args)]
-      (cond (= arg "--no-server") (recur (next args) "none")
-            (= arg "--port")
-            (if-let [n (second args)]
-              (if (parse-long n) (recur (nnext args) n) (fail "skein dev: bad port " n))
-              (fail "skein dev: --port needs a number"))
+      (cond (= arg "--no-server") (recur (next args) "none" swank)
+            (= arg "--port") (recur (nnext args) (port-option args) swank)
+            (= arg "--no-swank") (recur (next args) port "none")
+            (= arg "--swank-port") (recur (nnext args) port (port-option args))
             (and arg (= (first arg) \-)) (fail "skein dev: unknown option " arg)
             (nil? arg) (fail "skein dev: expected a file, e.g. `skein dev game.skn`")
             :else (run-program arg {:profile "dev" :eval true} (rest args)
-                               {"SKEIN_DEV" port})))))
+                               {"SKEIN_DEV" port "SKEIN_SWANK" swank})))))
 
 (defn- repl-command
   "skein repl: the REPL program, skein.dev.repl."

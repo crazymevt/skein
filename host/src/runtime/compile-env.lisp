@@ -151,7 +151,7 @@ received to that form's metadata (as data), for %syntax-meta.")
                                                      ,name))))))
   (native-only "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen"
                "%tcp-accept" "%tcp-port" "%tcp-close" "%exit" "%main-thread?"
-               "%run-attached"))
+               "%run-attached" "%utf8-length" "%utf8-split"))
 
 (defcore "%set-output-var!" (var)
   ;; Phase 0's REPL binds *standard-output* instead.
