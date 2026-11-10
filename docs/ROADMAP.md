@@ -42,7 +42,9 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.10 STM | ⬜ |
 | M2.11 Standard library | ⬜ |
 | M2.12 Package management | ⬜ |
-| M2.13 Driftrock developed live, natively | ⬜ |
+| M2.13 FFI additions | ⬜ |
+| M2.14 UI library | ⬜ |
+| M2.15 Driftrock developed live, natively | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -270,7 +272,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Goal:** everything Phase 0 does for live development, natively: fibers on a work-stealing scheduler, a REPL and `skein dev` in the running native program, SLIME through a Swank server, supervisors, hot reload of compiled code and STM. At the end `./skein run`, `dev` and `repl` run on the native runtime, and SBCL only bootstraps the compiler (D-072).
 
-**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), the standard library (M2.11, D-089), package management (M2.12, D-085), and Driftrock developed live (M2.13).
+**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), the standard library (M2.11, D-089), package management (M2.12, D-085), the FFI additions and UI library that desktop apps need (M2.13–M2.14, D-090), and Driftrock developed live (M2.15).
 
 **Rules for Phase 2**
 - Phase 1's rules still apply (Zig 0.17.1, C11 with `zig cc`, platform code only in `runtime/platform/<os>/`, the Core IR as the contract).
@@ -394,7 +396,21 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Exit:** a project that depends on a library in a git repository (a local repository in the tests, and one on GitHub in CI) and on a local folder builds, runs with `skein run` and `skein dev`, and packages with its dependencies' native libraries and assets, on all three platforms.
 
-### M2.13 Driftrock developed live, natively
+### M2.13 FFI additions
+- What native desktop UIs need from `skein.ffi` (DESIGN §14, D-090), natively: structs and unions **by value** as arguments and results, of C functions and of callbacks; **calling a C function pointer** with a declared signature (Objective-C's `objc_msgSend` with each message's own signature, COM vtables); and **variadic** C functions, called with the types of each call. `skein bindgen` stops skipping by-value structs and variadic functions.
+- To settle when preparing it: the syntax for calls through pointers and for variadic calls; whether Phase 0 gets any of it (its CFFI would need `cffi-libffi`, which isn't an allowed dependency); the order of the steps.
+
+**Exit:** native tests pass structs by value to and from C functions and callbacks, call through function pointers and call variadic functions, on all three platforms, and `lib/sdl3/raw.skn` is regenerated with the declarations that were skipped.
+
+### M2.14 UI library
+- `skein.ui`: native desktop user interfaces from Skein objects and events (D-090). Widgets are classes backed by the platform's own controls, so programs look and behave as their users expect (native controls, dark mode, accessibility, standard menus and dialogs). Properties are slots and generic functions; events are objects that handlers and methods receive, some of them vetoable (a window close); layout is boxes and grids with expansion, alignment and margins; menus with shortcuts, the platform's alerts and file choosers, timers and the clipboard. Calls from any fiber are handed to the UI thread, so a window can be built and changed from the REPL or SLIME while the program runs.
+- Backends: Cocoa on macOS (AppKit through the Objective-C runtime), Win32 and Common Controls on Windows, GTK 4 on Linux, and a headless one for tests. Namespaces `skein.ui` (objects, events, layout, the backend protocol), `skein.ui.headless`, `skein.ui.cocoa`, `skein.ui.win32` and `skein.ui.gtk`.
+- It is a port of the design of Jessie's Common Lisp toolkit, written for Skein rather than translated line by line.
+- To settle when preparing it: the widgets of the first version (labels, buttons, toggles and checks, radio buttons, entries, a text view, sliders, spin buttons, progress bars, combo boxes, lists, tables, trees, images, frames, tabs, split panes, scrolled windows, a canvas, and later a web view); the event API (handlers connected with `on`, methods on `handle-event`); setting properties without `setf` (`set-*!` generics or cell slots); GTK 4 in Linux CI; the steps (the core on the headless backend first, then one backend at a time).
+
+**Exit:** the core's tests pass on the headless backend on all three platforms, and one demo program (a window with a form, a list, a menu and a dialog) runs on Cocoa, Win32 and GTK 4 in CI (under Xvfb on Linux), and is changed live from SLIME.
+
+### M2.15 Driftrock developed live, natively
 - Develop and debug Driftrock with native `skein dev` and SLIME: fix a crash in the debugger and resume, edit while playing, reload compiled code.
 
 **Exit:** Driftrock is developed live on the native runtime on all three platforms. Write `docs/PHASE2-RETRO.md` and update DESIGN.md.

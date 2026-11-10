@@ -634,7 +634,7 @@ Clojure-style refs with `dosync`/`alter`/`commute` are planned once the native r
 Phase 0 details (D-038):
 - C `NULL` is `nil`, both as a result and as an argument (including `c-string`).
 - `(ptr T)` documents the pointee; all pointers are passed alike. Function pointers are `ptr`; `defcallback` makes one.
-- Structs and unions are passed to and from functions by pointer only; by-value struct arguments and results are not supported yet. Inside structs they are stored inline. Reading a field that holds a struct, union or array returns its address.
+- Structs and unions are passed to and from functions by pointer only; by-value struct arguments and results are not supported yet. M2.13 adds them, calls through C function pointers and variadic calls (D-090). Inside structs they are stored inline. Reading a field that holds a struct, union or array returns its address.
 - C code runs with float traps masked. A callback that signals an error warns and returns zero, since errors cannot unwind through C. No other non-local exit can leave a callback either: invoking a restart or returning from a block established outside the C call, or a handler outside that unwinds, is stopped where C called the callback, which warns and returns zero (D-068).
 - Libraries are searched in `SKEIN_LIBRARY_PATH` (`:`-separated, `;` on Windows), then `/opt/homebrew/lib` and `/usr/local/lib` on macOS, `/usr/local/lib` on Linux, then the OS search path.
 
@@ -942,6 +942,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
 | `skein.ecs` | entity–component–system on `defsoa` | 1+ |
 | `skein.json`, `skein.edn` | data formats | 1+ |
 | `skein.net` | sockets, HTTP client | Deferred |
+| `skein.ui` | native desktop UIs: widgets backed by Cocoa, Win32 and GTK 4 controls, events, layout, menus and dialogs; a headless backend for tests | 2 (M2.14, D-090) |
 
 Phase 0 status (D-040):
 - **Done:** `skein.core`, `skein.ffi`, `skein.jobs` (job graphs; the rest of `skein.conc` is in `skein.core`) and `skein.math`. `skein.time` has `now` and `now-ns`, with `sleep` in `skein.core`. `skein.game` has `run-loop` and the frame restarts, but no input mapping yet.

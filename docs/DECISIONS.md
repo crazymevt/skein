@@ -1204,3 +1204,10 @@ Date: 2026-11-10 · Status: Accepted
 - **Alternatives:** right after supervisors (M2.9); Phase 3.
 - **Consequences:** Phase 2 has thirteen milestones. Libraries fetched as packages can rely on `skein.string` and `skein.test`.
 
+## D-090: FFI additions and a UI library
+Date: 2026-11-10 · Status: Accepted
+- **Context:** Skein is for games *and desktop apps*, but has nothing for desktop user interfaces. Jessie's Common Lisp GUI toolkit (native widgets on Cocoa, Win32 and GTK 4 from CLOS objects and events, with a headless backend for tests) has the design wanted. Its platform-independent core maps onto Skein's object system; its native backends need FFI features Skein lacks: structs by value (Cocoa passes `NSRect`, `NSSize`, `NSPoint` and `NSRange` by value throughout), calls through function pointers with a signature per call (`objc_msgSend`, COM vtables) and variadic calls (GTK's `g_object_new`, `g_object_set`).
+- **Decision** (Jessie's): two milestones before Driftrock developed live, which becomes M2.15: **M2.13 FFI additions** (by-value structs, calls through function pointers, variadic calls, and bindgen for them), then **M2.14 UI library**, `skein.ui` in this repository's `lib/`, beside `skein.game`, with `skein.ui.headless`, `skein.ui.cocoa`, `skein.ui.win32` and `skein.ui.gtk`. It ports the toolkit's design to Skein; its name is `skein.ui`. Both come after the standard library (M2.11) and package management (M2.12), which they use.
+- **Alternatives:** after Driftrock developed live, or in Phase 3; a library `ui` in a repository of its own, used as a package.
+- **Consequences:** Phase 2 has fifteen milestones. The FFI additions also serve games' bindings (SDL3 declarations bindgen skipped). The widgets, the event API, how properties are set without `setf`, and the steps are settled when M2.14 is prepared.
+
