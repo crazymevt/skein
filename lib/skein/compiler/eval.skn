@@ -90,9 +90,10 @@ order of their first use."
       (walk fn-node))
     (filterv (fn [id] (not (contains? @bound id))) @refs)))
 
-(defn- boxed-ids
-  "The ids of the ^:mutable locals in node that some function in it uses from outside
-itself: they live in boxes, which the function captures."
+(defn- captures
+  "{:captured ids :boxed ids}: the locals in node that some function in it uses from
+outside itself, and those of them that are ^:mutable, which live in boxes that the
+function captures."
   [node]
   (let [captured (atom #{})
         mutable (atom #{})
@@ -108,27 +109,159 @@ itself: they live in boxes, which the function captures."
                 nil)
               (doseq [c (children n)] (walk c)))]
       (walk node))
-    (set (filter (fn [id] (contains? @mutable id)) @captured))))
+    {:captured @captured
+     :boxed (set (filter (fn [id] (contains? @mutable id)) @captured))}))
+
+;;; ------------------------------------------------------------------------------------
+;;; Static types (DESIGN §12, D-056), as the C backend infers them (c.skn), so that
+;;; evaluated code computes unboxed where compiled code does (step 5 of M2.5): :f64, :int
+;;; (an int64), :bool, or [:array :f64] / [:array :int] (an array, which stays a Value);
+;;; nil for a boxed value of unknown type. f32 values stay boxed here. A local that a
+;;; closure captures stays boxed too.
+
+(defn- scalar-type? [t] (contains? #{:f64 :int :bool} t))
+(defn- numeric-type? [t] (contains? #{:f64 :int} t))
+(defn- array-type? [t] (vector? t))
+
+(defn- declared-type
+  "The static type for the Skein type data (from ^type or declare), or nil."
+  [data]
+  (cond (and (symbol? data) (nil? (namespace data)))
+        (case (name data) "f64" :f64 "fixnum" :int nil)
+        (and (list? data) (seq data))
+        (let [[head element] data]
+          (when (and (symbol? head) (= (name head) "array"))
+            (let [e (declared-type element)]
+              (when (numeric-type? e) [:array e]))))
+        :else nil))
+
+(defn- declared-fixnum? [l]
+  (let [data @(:local/type l)]
+    (and (symbol? data) (nil? (namespace data)) (= (name data) "fixnum"))))
+
+(defn- local-type [c l] (get @(:types c) (id-of l)))
+
+(defn- note-type! [c l t]
+  (when (and t (not (contains? (:captured c) (id-of l))))
+    (swap! (:types c) assoc (id-of l) t)))
+
+(defn- primitive-name [call]
+  (let [f (:fn call)]
+    (when (and (= :var-ref (:op f)) (= "skein.core" (%namespace-name (%var-namespace (:var f)))))
+      (%var-name (:var f)))))
+
+(defn- contagion [types] (if (some #{:f64} types) :f64 :int))
+
+(defn- join-types [a b]
+  (cond (= a :recur) b
+        (= b :recur) a
+        (= a b) a
+        :else nil))
+
+(def ^:private node-type)
+
+(defn- primitive-type
+  "The static type of a call to a skein.core primitive with typed arguments, or nil."
+  [c call]
+  (let [nm (primitive-name call)
+        args (:args call)
+        types (mapv (fn [a] (node-type c a)) args)
+        n (count args)
+        is (fn [& names] (some #{nm} names))
+        numeric (fn [] (every? numeric-type? types))
+        [t0 t1 t2] types]
+    (when nm
+      (or (cond (is "+" "*" "-") (and (>= n 1) (numeric) (contagion types))
+                (is "/") (and (= n 2) (numeric) :f64)
+                (is "inc" "dec") (and (= n 1) (numeric) t0)
+                (is "<" ">" "<=" ">=" "==") (and (>= n 2) (numeric) :bool)
+                (is "zero?" "pos?" "neg?") (and (= n 1) (numeric) :bool)
+                (is "not") (and (= n 1) (= t0 :bool) :bool)
+                (is "sqrt") (and (= n 1) (numeric-type? t0) :f64)
+                (is "aget") (and (= n 2) (array-type? t0) (= t1 :int) (second t0))
+                (is "aset!") (and (= n 3) (array-type? t0) (= t1 :int) (= t2 (second t0)) t2)
+                (is "count") (and (= n 1) (array-type? t0) :int))
+          nil))))
+
+(defn- node-type*
+  "The static type of node's value, :recur if it always jumps, or nil."
+  [c node]
+  (case (:op node)
+    :const (let [v (:value node)]
+             (cond (and (integer? v) (<= -2305843009213693952 v 2305843009213693951)) :int
+                   (instance? 'f64 v) :f64
+                   :else nil))
+    :local-ref (local-type c (:local node))
+    :the (or (declared-type (:type node)) (node-type c (:expr node)))
+    :locally (node-type c (:body node))
+    :let (node-type c (:body node))
+    :do (when-let [f (last (:forms node))] (node-type c f))
+    :if (join-types (node-type c (:then node)) (node-type c (:else node)))
+    :loop (let [t (node-type c (:body node))] (if (= t :recur) nil t))
+    :recur :recur
+    :call (primitive-type c node)
+    nil))
+
+(def ^:private node-type node-type*)
+
+(defn- overflowing?
+  "True for integer arithmetic, whose result may not fit in an int64: it's unboxed only
+where a typed integer is required, never into an inferred local or a boxed value."
+  [c node]
+  (and (= :int (node-type c node)) (= :call (:op node))
+       (contains? #{"+" "-" "*" "inc" "dec"} (primitive-name node))))
+
+(defn- infer-locals!
+  "Record the static types of the locals that node binds (outside nested functions): a
+declared type, or for an immutable let local, the type of its init."
+  [c node]
+  (letfn [(walk [n]
+            (case (:op n)
+              :let (do (doseq [[l init] (:bindings n)]
+                         (walk init)
+                         (note-type! c l (or (declared-type @(:local/type l))
+                                             (and (not (:local/mutable? l))
+                                                  (let [t (node-type c init)]
+                                                    (and (or (numeric-type? t) (array-type? t))
+                                                         (not (overflowing? c init))
+                                                         t))))))
+                       (walk (:body n)))
+              :loop (do (doseq [[l init] (:bindings n)]
+                          (walk init)
+                          (note-type! c l (declared-type @(:local/type l))))
+                        (walk (:body n)))
+              :fn nil
+              (doseq [x (children n)] (walk x))))]
+    (walk node)))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Lowering
 ;;;
 ;;; The context of the arity being lowered: its frame's slot count, its locals (id ->
-;;; {:slot :box}, or :self), its loops' and its own rebinding slots (id -> [[slot boxed?]
-;;; ...]), the function's captures, and the ids of the captured locals.
+;;; {:slot :box}, or :self) and their static types, its loops' and its own rebinding
+;;; targets (id -> [[slot boxed? rep local]...]), the function's captures, and the ids of
+;;; the captured and boxed locals. A typed local's slot holds its raw value (rep :f64 or
+;;; :int).
 
-(defn- make-context [fn-ctx boxed]
-  {:fn fn-ctx :slots (atom 0) :locals (atom {}) :targets (atom {}) :boxed boxed})
+(defn- make-context [fn-ctx caps]
+  {:fn fn-ctx :slots (atom 0) :locals (atom {}) :types (atom {}) :targets (atom {})
+   :boxed (:boxed caps) :captured (:captured caps) :caps caps})
 
 (defn- make-fn-context [] {:captures (atom []) :index (atom {})})
 
+(defn- rep-of
+  "How local l's slot holds its value: :f64 or :int raw, else nil (a Value)."
+  [c l]
+  (let [t (local-type c l)] (when (contains? #{:f64 :int} t) t)))
+
 (defn- bind-local!
-  "Give local l a new slot in c: [slot boxed?]."
+  "Give local l a new slot in c: [slot boxed? rep]."
   [c l]
   (let [slot (dec (swap! (:slots c) inc))
-        boxed (contains? (:boxed c) (id-of l))]
-    (swap! (:locals c) assoc (id-of l) {:slot slot :box boxed})
-    [slot boxed]))
+        boxed (contains? (:boxed c) (id-of l))
+        rep (rep-of c l)]
+    (swap! (:locals c) assoc (id-of l) {:slot slot :box boxed :rep rep})
+    [slot boxed rep]))
 
 (defn- capture!
   "The index of id among the captured values of c's function, adding it."
@@ -147,6 +280,7 @@ box it lives in."
   (let [info (get @(:locals c) id)
         boxed (and deref? (contains? (:boxed c) id))]
     (cond (= info :self) [:self]
+          (and info (:rep info)) [:box (:rep info) [:typed (:rep info) :slot (:slot info)]]
           info [(if boxed :slot-box :slot) (:slot info)]
           :else [(if boxed :capt-box :capt) (capture! c id)])))
 
@@ -175,6 +309,48 @@ backend finds it (D-077): a name nothing defines yet gets a var of its own."
       (or (%resolve-var ns (name sym)) (%intern-var ns (name sym))))))
 
 (def ^:private lower)
+(def ^:private lower-typed)
+
+(defn- loc-string [n] (reader/format-location (:loc n)))
+
+(defn- unbox
+  "Lowered code converting the Value of lowered code g to want, checking its type."
+  [g want n]
+  (cond (nil? want) g
+        (= want :bool) [:typed :bool :truthy g]
+        (array-type? want) [:check-array (if (= :f64 (second want)) 9 10) g (loc-string n)]
+        :else [:typed want :unbox g (loc-string n)]))
+
+(defn- lower-as
+  "Lowered code for n's value as want: nil (a Value), :f64, :int or :bool (raw), an array
+type (a Value, checked), or :void (only its effects). With strict (a declared type), a
+value of a different type is a type error rather than converted."
+  ([c n want] (lower-as c n want false))
+  ([c n want strict]
+   (let [have (node-type c n)]
+     (cond (= want :void)
+           (if (scalar-type? have) [:discard have (lower-typed c n have)] (lower n c))
+           (= have :recur) (if (scalar-type? want) [:typed want :escape (lower n c)] (lower n c))
+           (and (scalar-type? have) (not (and (nil? want) (overflowing? c n))))
+           (let [t (lower-typed c n have)]
+             (cond (= have want) t
+                   (nil? want) [:box have t]
+                   (and (not strict) (= want :f64) (= have :int)) [:typed :f64 :from-int t]
+                   (= want :bool) [:typed :bool :after have t]
+                   :else (unbox [:box have t] want n)))
+           (and (array-type? want) (= have want)) (lower n c)
+           :else (unbox (lower n c) want n)))))
+
+(defn- local-store
+  "Lowered code for init's value as stored in local l's slot: of l's static type,
+checked against its declared type."
+  [c l init]
+  (let [t (local-type c l)
+        declared (declared-type @(:local/type l))
+        x (if t (lower-as c init t (boolean declared)) (lower init c))]
+    (if (and (= t :int) (declared-fixnum? l) (not= (node-type c init) :recur))
+      [:typed :int :fixnum-range x (loc-string init)]
+      x)))
 
 (defn- lower-fn
   "[lambda captured-ids] for the fn node, in the context c of the code around it."
@@ -182,30 +358,43 @@ backend finds it (D-077): a name nothing defines yet gets a var of its own."
   (let [fc (make-fn-context)
         arities
         (mapv (fn [a]
-                (let [ac (make-context fc (:boxed c))
+                (let [ac (make-context fc (:caps c))
                       _ (when (:self node) (swap! (:locals ac) assoc (id-of (:self node)) :self))
-                      params (mapv (fn [p] (bind-local! ac p)) (:params a))
-                      rest-binding (when (:rest a) (bind-local! ac (:rest a)))
-                      all (if rest-binding (conj params rest-binding) params)
-                      _ (swap! (:targets ac) assoc (:id a) all)
+                      ;; Parameters with declared types are checked, and unboxed, on entry.
+                      locals (if (:rest a) (conj (vec (:params a)) (:rest a)) (vec (:params a)))
+                      _ (doseq [p (:params a)] (note-type! ac p (declared-type @(:local/type p))))
+                      _ (infer-locals! ac (:body a))
+                      bound (mapv (fn [p] (bind-local! ac p)) locals)
+                      _ (swap! (:targets ac) assoc (:id a)
+                               (mapv (fn [[slot boxed rep] p] [slot boxed rep p]) bound locals))
                       body (lower (:body a) ac)]
-                  {:params (count params) :rest (boolean rest-binding) :slots @(:slots ac)
-                   :boxes (vec (keep (fn [[slot boxed]] (when boxed slot)) all))
+                  {:params (count (:params a)) :rest (boolean (:rest a)) :slots @(:slots ac)
+                   :boxes (vec (keep (fn [[slot boxed]] (when boxed slot)) bound))
+                   :unbox (vec (keep (fn [p]
+                                       (let [t (local-type ac p)
+                                             slot (:slot (get @(:locals ac) (id-of p)))]
+                                         (cond (contains? #{:f64 :int} t) [slot t]
+                                               (array-type? t)
+                                               [slot (if (= :f64 (second t)) 9 10)])))
+                                     (:params a)))
+                   :loc (loc-string a)
                    :body body}))
               (:arities node))
         captured @(:captures fc)]
-    [{:name (str (or (:name node) "fn")) :loc (reader/format-location (:loc node))
+    [{:name (str (or (:name node) "fn")) :loc (loc-string node)
       :captures (mapv (fn [id] (ref c id false)) captured) :arities arities}
      captured]))
 
 (defn- lower-bindings
-  "[[slot boxed? init]...] for [local init] bindings, each in scope after its init."
+  "[[slot boxed? init rep]...] for [local init] bindings, each in scope after its init,
+and the targets a loop's recur rebinds."
   [c bindings]
-  (mapv (fn [[l init]]
-          (let [i (lower init c)
-                [slot boxed] (bind-local! c l)]
-            [slot boxed i]))
-        bindings))
+  (let [out (mapv (fn [[l init]]
+                    (let [i (local-store c l init)
+                          [slot boxed rep] (bind-local! c l)]
+                      [slot boxed i rep]))
+                  bindings)]
+    [out (mapv (fn [[slot boxed _ rep] [l]] [slot boxed rep l]) out bindings)]))
 
 (defn- core-call? [f nm]
   (and (= :var-ref (:op f))
@@ -242,41 +431,118 @@ backend finds it (D-077): a name nothing defines yet gets a var of its own."
                             slots lowered))]
     [:letfn (mapv (fn [slot [lam]] [slot lam]) slots lowered) fixups (lower (:body n) c)]))
 
+(defn- lower-recur
+  "recur: its arguments as the target's locals store them."
+  [n c]
+  (let [targets (get @(:targets c) (:target n))]
+    [:recur (mapv (fn [[slot boxed rep]] [slot boxed rep]) targets)
+     (mapv (fn [[_ _ _ l] arg] (local-store c l arg)) targets (:args n))]))
+
+(defn- lower-primitive
+  "A call to a skein.core primitive whose static type is t, computed unboxed."
+  [c n t]
+  (let [nm (primitive-name n)
+        args (:args n)
+        types (mapv (fn [a] (node-type c a)) args)
+        operands (fn [ty] (mapv (fn [a] (lower-as c a ty)) args))
+        fold (fn [op vs] (reduce (fn [a b] [:typed t op a b]) vs))
+        one (fn [ty] (if (= ty :f64) 1.0 1))]
+    (case nm
+      ("+" "*" "-")
+      (let [vs (operands t)]
+        (cond (and (= nm "-") (= 1 (count vs))) [:typed t :neg (first vs)]
+              (= 1 (count vs)) (first vs)
+              :else (fold (case nm "+" :add "*" :mul :sub) vs)))
+      "/" (fold :div (operands :f64))
+      "inc" [:typed t :add (first (operands t)) [:typed t :const (one t)]]
+      "dec" [:typed t :sub (first (operands t)) [:typed t :const (one t)]]
+      ("<" ">" "<=" ">=" "==")
+      (let [k (contagion types)
+            vs (operands k)
+            op (case nm "<" :lt ">" :gt "<=" :le ">=" :ge :eq)]
+        [:typed :bool :and (mapv (fn [[a b]] [:typed :bool :compare op k a b])
+                                 (partition 2 1 vs))])
+      ("zero?" "pos?" "neg?")
+      [:typed :bool :sign (case nm "zero?" :zero "pos?" :pos :neg) (first types)
+       (first (operands (first types)))]
+      "not" [:typed :bool :not (lower-as c (first args) :bool)]
+      "sqrt" [:typed :f64 :sqrt (first (operands :f64))]
+      "aget" [:typed t :aget (lower (first args) c) (lower-as c (second args) :int)]
+      "aset!" [:typed t :aset (lower (first args) c) (lower-as c (second args) :int)
+               (lower-as c (nth args 2) t)]
+      "count" [:typed :int :count (lower (first args) c)])))
+
+(defn- lower-typed*
+  "Lowered code computing node, whose static type is t (scalar), as a raw value."
+  [c n t]
+  (case (:op n)
+    :const [:typed t :const (:value n)]
+    :local-ref [:typed t :slot (:slot (get @(:locals c) (id-of (:local n))))]
+    :the (lower-as c (:expr n) t true)
+    :locally (lower-typed c (:body n) t)
+    :let (let [[bs] (lower-bindings c (:bindings n))]
+           [:typed t :let bs (lower-typed c (:body n) t)])
+    :do [:typed t :do (mapv (fn [f] (lower-as c f :void)) (butlast (:forms n)))
+         (lower-as c (last (:forms n)) t)]
+    :if [:typed t :if (lower-as c (:test n) :bool) (lower-as c (:then n) t)
+         (lower-as c (:else n) t)]
+    :loop (let [[bs targets] (lower-bindings c (:bindings n))]
+            (swap! (:targets c) assoc (:id n) targets)
+            [:typed t :loop bs (lower-as c (:body n) t)])
+    :call (lower-primitive c n t)))
+
+(def ^:private lower-typed lower-typed*)
+
 (defn- lower*
-  "Lowered code for the Core IR node n in the context c."
+  "Lowered code for the Core IR node n in the context c, as a Value."
   [n c]
   (let [l (fn [x] (lower x c))]
     (case (:op n)
       :const [:const (:value n)]
       :local-ref (ref c (id-of (:local n)) true)
       :var-ref (var-node (:var n) (:loc n))
-      :if [:if (l (:test n)) (l (:then n)) (l (:else n))]
-      :do (if (empty? (:forms n)) [:const nil] [:do (mapv l (:forms n))])
+      :if (if (= :bool (node-type c (:test n)))
+            [:if-bool (lower-as c (:test n) :bool) (l (:then n)) (l (:else n))]
+            [:if (l (:test n)) (l (:then n)) (l (:else n))])
+      :do (if (empty? (:forms n))
+            [:const nil]
+            [:do (conj (mapv (fn [f] (lower-as c f :void)) (butlast (:forms n)))
+                       (l (last (:forms n))))])
       :def [:def (%runtime-var (:var n)) (when (:init n) (l (:init n))) (%var-dynamic? (:var n))]
       :fn [:fn (first (lower-fn n c))]
-      :let (let [bs (lower-bindings c (:bindings n))] [:let bs (l (:body n))])
-      :loop (let [bs (lower-bindings c (:bindings n))]
-              (swap! (:targets c) assoc (:id n) (mapv (fn [[slot boxed]] [slot boxed]) bs))
+      :let (let [[bs] (lower-bindings c (:bindings n))] [:let bs (l (:body n))])
+      :loop (let [[bs targets] (lower-bindings c (:bindings n))]
+              (swap! (:targets c) assoc (:id n) targets)
               [:loop bs (l (:body n))])
-      :recur [:recur (get @(:targets c) (:target n)) (mapv l (:args n))]
+      :recur (lower-recur n c)
       :letfn (lower-letfn n c)
-      :set (let [id (id-of (:local n))
-                 info (get @(:locals c) id)
-                 v (l (:value n))]
-             (if (map? info)
-               [:set-slot (:slot info) (:box info) v]
-               [:set-capt (capture! c id) v]))
-      :call (lower-call n c)
-      :unwind-protect [:unwind-protect (l (:body n)) (l (:cleanup n))]
+      :set (let [local (:local n)
+                 id (id-of local)
+                 info (get @(:locals c) id)]
+             (cond (and (map? info) (:rep info))
+                   [:box (:rep info) [:typed (:rep info) :set (:slot info)
+                                      (local-store c local (:value n))]]
+                   (map? info) [:set-slot (:slot info) (:box info) (l (:value n))]
+                   :else [:set-capt (capture! c id) (l (:value n))]))
+      ;; A primitive on typed values is computed unboxed, then boxed.
+      :call (let [t (node-type c n)]
+              (if (and (scalar-type? t) (not (overflowing? c n)))
+                [:box t (lower-typed c n t)]
+                (lower-call n c)))
+      :unwind-protect [:unwind-protect (l (:body n)) (lower-as c (:cleanup n) :void)]
       :block (let [[slot] (bind-local! c (:tag n))]
                [:block (id-of (:tag n)) slot (l (:body n))])
       :return-from [:return-from (id-of (:tag n)) (ref c (id-of (:tag n)) false) (l (:value n))]
       :values [:values (mapv l (:args n))]
       :let-values [:let-values (mapv (fn [[ls init]]
-                                       (let [i (l init)] [(mapv (fn [x] (bind-local! c x)) ls) i]))
+                                       (let [i (l init)]
+                                         [(mapv (fn [x] (vec (take 2 (bind-local! c x)))) ls) i]))
                                      (:bindings n))
                    (l (:body n))]
-      :the (l (:expr n))
+      :the (let [t (declared-type (:type n))]
+             (if (scalar-type? t)
+               [:box t (lower-as c (:expr n) t true)]
+               (l (:expr n))))
       :locally (l (:body n))
       :throw-condition [:throw (l (:condition n))]
       :handler-bind [:handler-bind (mapv (fn [[t h]] [(l t) (l h)]) (:bindings n)) (l (:body n))]
@@ -288,10 +554,12 @@ backend finds it (D-077): a name nothing defines yet gets a var of its own."
 (defn- lower-toplevel
   "A top-level Core IR node, lowered as a function of no arguments."
   [node]
-  (let [c (make-context (make-fn-context) (boxed-ids node))
+  (let [c (make-context (make-fn-context) (captures node))
+        _ (infer-locals! c node)
         body (lower node c)]
-    {:name "toplevel" :loc (reader/format-location (:loc node)) :captures []
-     :arities [{:params 0 :rest false :slots @(:slots c) :boxes [] :body body}]}))
+    {:name "toplevel" :loc (loc-string node) :captures []
+     :arities [{:params 0 :rest false :slots @(:slots c) :boxes [] :unbox [] :loc ""
+                :body body}]}))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; eval, load-file and reload, as Phase 0's (backend-cl/driver.lisp, repl/repl.lisp)

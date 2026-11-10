@@ -1,0 +1,17 @@
+(ns native-eval.typed
+  "Typed functions that native-eval.skn also compiles: evaluated from source (which keeps
+their type hints), they must give the same results and errors.")
+
+(defn typed-sum ^f64 [xs]
+  (declare (type (array f64) xs))
+  (loop [^fixnum i 0 ^f64 acc 0.0]
+    (if (< i (count xs)) (recur (inc i) (+ acc (* 2.0 (aget xs i)))) acc)))
+
+(defn mixed [^fixnum n ^f64 x]
+  (let [a (* n 2) b (/ n 4) c (+ x n) d (if (< x n) :less :more) e (sqrt (* x x))]
+    [a b c d e (zero? (- n n)) (pos? x) (neg? x) (- x) (inc n) (dec x)]))
+
+(defn index-at [^fixnum i] (let [a (make-array f64 2)] (aset! a 0 1.5) (aget a i)))
+(defn divide [^f64 x ^f64 y] (/ x y))
+(defn squared [^f64 x] (the f64 (* x x)))
+(defn int-box [^fixnum n] (* n 3))

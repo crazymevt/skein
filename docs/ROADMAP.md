@@ -325,7 +325,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   2. ✅ The program's namespaces: `skeinc build --eval` (dev profile) includes the reader, the expander and skein.core's macros, compiles the program's own macros in, and registers the program's namespaces and vars, from which `skein.compiler.env` builds its model; `macroexpand` and its relatives natively; without `--eval`, `eval` and its relatives are errors.
   3. ✅ The closure compiler (`runtime/src/eval/`, D-079): every Core IR node (functions and closures, loops, `letfn`, `def`, `set!`, blocks, `unwind-protect`, handlers and restarts, multiple values, dynamic vars, the FFI's type definitions; a re-evaluated `defcfun` keeps its compiled function); `eval`, `load-file`, `reload` and `require` from source natively; a fixture that evaluates code prints what `skein run` prints.
   4. ✅ Redefinition (DESIGN §15, D-080): `defclass` updates existing instances natively, subclasses included, `defmethod` clears dispatch caches, `defonce` keeps state; a native program reloads a changed namespace and runs the new code.
-  5. Typed closures: unboxed `f64` and integer paths for declared types; `make bench` compares n-body interpreted and compiled in the same dev build.
+  5. ✅ Typed closures: unboxed `f64` and integer paths for declared types; `make bench` compares n-body interpreted and compiled in the same dev build (about 20×, D-079).
 
 **Exit:** a native program reloads a changed namespace from source and runs the new code; interpreted code runs within 10× of compiled code on the n-body benchmark (both in a dev build).
 

@@ -1,0 +1,33 @@
+(ns eval
+  "M2.5's exit benchmark (D-078, D-079): n-body compiled, then the same functions loaded
+from nbody.skn and run by the evaluator, in one program built with skeinc --eval (the dev
+profile). Run from the repository root by bench/nbody/eval.lisp (make bench); prints a
+Markdown table."
+  (:require [nbody]
+            [skein.time :as time]))
+
+(defn- best-time
+  "The result of (nbody/run steps) and the best of runs wall-clock times, in seconds."
+  [steps runs]
+  (loop [i 0 best nil result nil]
+    (if (< i runs)
+      (let [start (time/now-ns)
+            r (nbody/run steps)
+            s (/ (- (time/now-ns) start) 1.0e9)]
+        (recur (inc i) (if (or (nil? best) (< s best)) s best) r))
+      [result best])))
+
+(defn -main [& args]
+  (let [steps (parse-long (or (first args) "200000"))
+        runs 5
+        [compiled-result compiled] (best-time steps runs)]
+    ;; Loading the source again makes nbody's functions interpreted.
+    (load-file "bench/nbody/nbody.skn")
+    (let [[evaluated-result evaluated] (best-time steps runs)]
+      (when-not (= compiled-result evaluated-result)
+        (println "the energies differ:" compiled-result evaluated-result))
+      (println (str "| n-body, " steps " steps | Best of " runs " (s) |"))
+      (println "|---|---|")
+      (println (str "| compiled (dev profile) | " compiled " |"))
+      (println (str "| evaluated (same build) | " evaluated " |"))
+      (println (str "| ratio | " (/ evaluated compiled) " |")))))

@@ -73,3 +73,40 @@
 (prn (message-of (fn [] (load-file "no/such/file.skn"))))
 (prn (message-of (fn [] (reload 'no.such.namespace))))
 (prn (message-of (fn [] (reload "x"))))
+
+;; Typed code (step 5): evaluated code computes declared and inferred types unboxed, with
+;; the C backend's checks. native-eval.typed (evaluated from source, required by code
+;; evaluated here) has the same functions as these compiled ones; their results and error
+;; messages must be the same. Only that is printed: Phase 0's messages for typed code are
+;; SBCL's, and SBCL doesn't check a fixnum parameter's range.
+(defn typed-sum ^f64 [xs]
+  (declare (type (array f64) xs))
+  (loop [^fixnum i 0 ^f64 acc 0.0]
+    (if (< i (count xs)) (recur (inc i) (+ acc (* 2.0 (aget xs i)))) acc)))
+(defn mixed [^fixnum n ^f64 x]
+  (let [a (* n 2) b (/ n 4) c (+ x n) d (if (< x n) :less :more) e (sqrt (* x x))]
+    [a b c d e (zero? (- n n)) (pos? x) (neg? x) (- x) (inc n) (dec x)]))
+(defn index-at [^fixnum i] (let [a (make-array f64 2)] (aset! a 0 1.5) (aget a i)))
+(defn divide [^f64 x ^f64 y] (/ x y))
+(defn squared [^f64 x] (the f64 (* x x)))
+(defn int-box [^fixnum n] (* n 3))
+
+(let [_ (eval '(ns native-eval.typed-user (:require [native-eval.typed])))]
+  (eval '(ns native-eval)))
+(defn without-location
+  "A message without its \" at file:line:col\" (the functions are defined in two files)."
+  [m]
+  (loop [i 0]
+    (cond (> (+ i 4) (count m)) m
+          (= " at " (subs m i (+ i 4))) (subs m 0 i)
+          :else (recur (inc i)))))
+(defn outcome [f & args]
+  (try (apply f args) (catch error e [:error (without-location (condition-message e))])))
+(def float-array (let [a (make-array f64 4)] (dotimes [i 4] (aset! a i (* 1.5 i))) a))
+(prn (outcome typed-sum float-array) (outcome mixed 3 2.5) (outcome mixed 8 -1.0))
+(doseq [[nm & args] [['typed-sum float-array] ['mixed 3 2.5] ['mixed 8 -1.0]
+                     ['index-at 0] ['index-at 5] ['divide 1.0 4.0] ['divide 1.0 0.0]
+                     ['squared 3.0] ['int-box 4611686018427387903]]]
+  (let [compiled (apply outcome (eval (symbol "native-eval" (name nm))) args)
+        evaluated (apply outcome (eval (symbol "native-eval.typed" (name nm))) args)]
+    (prn nm (= compiled evaluated))))

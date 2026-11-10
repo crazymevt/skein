@@ -191,6 +191,10 @@ fn compile(ctx: *Context, v: Value, mv: bool) *const Node {
     if (op == kw("with-bindings")) return WithBindings.make(ctx, v, mv);
     if (op == kw("set-dynamic")) return single(SetDynamic.make(ctx, v), mv);
     if (op == kw("var-bound")) return single(VarBound.make(v), mv);
+    if (op == kw("box")) return single(compileBox(ctx, v), mv);
+    if (op == kw("discard")) return single(compileDiscard(ctx, v), mv);
+    if (op == kw("if-bool")) return IfBool.make(ctx, v, mv);
+    if (op == kw("check-array")) return single(CheckArray.make(ctx, v), mv);
     fail("an unknown operation");
 }
 
@@ -356,8 +360,15 @@ const Arity = struct {
     slots: u32,
     /// The slots of parameters that live in boxes.
     boxes: []u32,
+    /// Parameters with declared types: checked, and unboxed, on entry.
+    unbox: []Unbox,
+    loc: [*:0]const u8,
     body: *const Node,
 };
+
+/// A parameter's slot and what it must hold: a raw f64 or int, or an array of a kind
+/// (sk_check_array's: 9 f64, 10 fixnum).
+const Unbox = struct { slot: u32, rep: Rep, kind: u32 };
 
 const Lambda = struct {
     name: [*:0]const u8,
@@ -376,11 +387,23 @@ fn compileLambda(ctx: *Context, m: Value) *Lambda {
         const boxes = field(am, "boxes");
         const bs = alloc.alloc(u32, count(boxes)) catch rt.fatal("out of memory (eval)", .{});
         for (bs, 0..) |*b, j| b.* = int(at(boxes, j));
+        const ub = field(am, "unbox");
+        const us = alloc.alloc(Unbox, count(ub)) catch rt.fatal("out of memory (eval)", .{});
+        for (us, 0..) |*u, j| {
+            const e = at(ub, j);
+            const what = at(e, 1);
+            u.* = if (what.isFixnum())
+                .{ .slot = int(at(e, 0)), .rep = .value, .kind = int(what) }
+            else
+                .{ .slot = int(at(e, 0)), .rep = repOf(what), .kind = 0 };
+        }
         a.* = .{
             .params = int(field(am, "params")),
             .rest = field(am, "rest").isTruthy(),
             .slots = int(field(am, "slots")),
             .boxes = bs,
+            .unbox = us,
+            .loc = cString(field(am, "loc")),
             // A function's values are those of its body.
             .body = compile(ctx, field(am, "body"), true),
         };
@@ -468,6 +491,11 @@ fn callArity(a: *const Arity, self: Value, argc: u32, argv: [*]const Value, slot
     var f: Frame = .{ .slots = slots, .self = self };
     for (0..a.params) |i| slots[i] = argv[i];
     if (a.rest) slots[a.params] = sk_rest_list(argc, argv, a.params);
+    for (a.unbox) |u| slots[u.slot] = switch (u.rep) {
+        .f64 => fromF64(sk_to_f64(slots[u.slot], a.loc)),
+        .int => fromI64(sk_to_fixnum(slots[u.slot], a.loc)),
+        .value => sk_check_array(slots[u.slot], u.kind, a.loc),
+    };
     for (a.boxes) |i| slots[i] = box(slots[i]);
     while (true) {
         poll();
@@ -480,15 +508,47 @@ fn callArity(a: *const Arity, self: Value, argc: u32, argv: [*]const Value, slot
 // ---------------------------------------------------------------------------------------
 // Binding forms
 
-const Binding = struct { slot: u32, boxed: bool, init: *const Node };
+/// Code that computes a value to store in a slot of a given representation.
+const Init = union(Rep) {
+    value: *const Node,
+    f64: *const FNode,
+    int: *const INode,
 
+    fn make(ctx: *Context, r: Rep, v: Value) Init {
+        return switch (r) {
+            .value => .{ .value = compile(ctx, v, false) },
+            .f64 => .{ .f64 = compileTyped(f64, ctx, v) },
+            .int => .{ .int = compileTyped(i64, ctx, v) },
+        };
+    }
+
+    /// The value for a slot (raw for a typed one).
+    fn get(i: Init, f: *Frame) Value {
+        return switch (i) {
+            .value => |n| n.run(n, f),
+            .f64 => |n| fromF64(n.run(n, f)),
+            .int => |n| fromI64(n.run(n, f)),
+        };
+    }
+};
+
+const Binding = struct { slot: u32, boxed: bool, init: Init };
+
+/// [[slot boxed? init rep]...]
 fn compileBindings(ctx: *Context, v: Value) []Binding {
     const out = alloc.alloc(Binding, count(v)) catch rt.fatal("out of memory (eval)", .{});
     for (out, 0..) |*b, i| {
         const x = at(v, i);
-        b.* = .{ .slot = int(at(x, 0)), .boxed = at(x, 1).isTruthy(), .init = compile(ctx, at(x, 2), false) };
+        b.* = .{ .slot = int(at(x, 0)), .boxed = at(x, 1).isTruthy(), .init = Init.make(ctx, repOf(at(x, 3)), at(x, 2)) };
     }
     return out;
+}
+
+fn bindAll(bindings: []const Binding, f: *Frame) void {
+    for (bindings) |b| {
+        const x = b.init.get(f);
+        f.slots[b.slot] = if (b.boxed) box(x) else x;
+    }
 }
 
 /// [:let [[slot boxed? init]...] body] and [:loop ...], which recur runs again.
@@ -501,20 +561,14 @@ const Let = struct {
         s.* = .{ .base = .{ .run = if (is_loop) runLoop else run }, .bindings = compileBindings(ctx, at(v, 1)), .body = compile(ctx, at(v, 2), mv) };
         return &s.base;
     }
-    fn bind(s: *const Let, f: *Frame) void {
-        for (s.bindings) |b| {
-            const x = b.init.run(b.init, f);
-            f.slots[b.slot] = if (b.boxed) box(x) else x;
-        }
-    }
     fn run(n: *const Node, f: *Frame) Value {
         const s: *const Let = @fieldParentPtr("base", n);
-        s.bind(f);
+        bindAll(s.bindings, f);
         return s.body.run(s.body, f);
     }
     fn runLoop(n: *const Node, f: *Frame) Value {
         const s: *const Let = @fieldParentPtr("base", n);
-        s.bind(f);
+        bindAll(s.bindings, f);
         while (true) {
             poll();
             const v = s.body.run(s.body, f);
@@ -524,22 +578,24 @@ const Let = struct {
     }
 };
 
-/// [:recur [[slot boxed?]...] [args]]: rebind the target's locals, then say so.
+/// [:recur [[slot boxed? rep]...] [args]]: rebind the target's locals, then say so.
 const Recur = struct {
     base: Node,
     targets: []u32,
     boxed: []bool,
-    args: []*const Node,
+    args: []Init,
     fn make(ctx: *Context, v: Value) *const Node {
         const s = create(Recur);
         const ts = at(v, 1);
         const targets = alloc.alloc(u32, count(ts)) catch rt.fatal("out of memory (eval)", .{});
         const boxed = alloc.alloc(bool, count(ts)) catch rt.fatal("out of memory (eval)", .{});
-        for (targets, boxed, 0..) |*t, *b, i| {
+        const vs = at(v, 2);
+        const args = alloc.alloc(Init, count(vs)) catch rt.fatal("out of memory (eval)", .{});
+        for (targets, boxed, args, 0..) |*t, *b, *a, i| {
             t.* = int(at(at(ts, i), 0));
             b.* = at(at(ts, i), 1).isTruthy();
+            a.* = Init.make(ctx, repOf(at(at(ts, i), 2)), at(vs, i));
         }
-        const args = compileAll(ctx, at(v, 2), false);
         if (args.len > max_args) rt.raise(.unsupported_operation_error, "a recur with more than {d} values can't be evaluated", .{max_args});
         s.* = .{ .base = .{ .run = if (args.len <= 8) runN(8) else runN(max_args) }, .targets = targets, .boxed = boxed, .args = args };
         return &s.base;
@@ -549,7 +605,7 @@ const Recur = struct {
             fn run(n: *const Node, f: *Frame) Value {
                 const s: *const Recur = @fieldParentPtr("base", n);
                 var buf: [size]Value = undefined;
-                for (s.args, 0..) |a, i| buf[i] = a.run(a, f);
+                for (s.args, 0..) |a, i| buf[i] = a.get(f);
                 for (s.targets, s.boxed, 0..) |t, b, i| f.slots[t] = if (b) box(buf[i]) else buf[i];
                 f.recur = true;
                 return Value.nil;
@@ -944,6 +1000,764 @@ const VarBound = struct {
     fn run(n: *const Node, _: *Frame) Value {
         const s: *const VarBound = @fieldParentPtr("base", n);
         return Value.fromBool(names.varValue(s.v) != Value.unbound);
+    }
+};
+
+// ---------------------------------------------------------------------------------------
+// Typed code (step 5 of M2.5, D-056): where the lowering found static types as the C
+// backend does, values are computed raw (f64, int64, bool), with the C backend's checks:
+// overflow, division by zero, array bounds, declared types. A typed local's slot holds
+// its raw bits.
+
+extern fn sk_to_f64(v: Value, location: [*:0]const u8) f64;
+extern fn sk_to_fixnum(v: Value, location: [*:0]const u8) i64;
+extern fn sk_check_array(a: Value, kind: u32, location: [*:0]const u8) Value;
+extern fn sk_f64(x: f64) Value;
+extern fn sk_integer_from_i64(n: i64) Value;
+extern fn sk_fixnum_range_error(n: i64, location: [*:0]const u8) noreturn;
+extern fn sk_array_index_error(i: i64, n: i64) noreturn;
+extern fn sk_integer_overflow() noreturn;
+extern fn sk_division_by_zero() noreturn;
+
+/// How a slot holds its value.
+const Rep = enum { value, f64, int };
+
+fn repOf(v: Value) Rep {
+    if (v == Value.nil) return .value;
+    if (v == kw("f64")) return .f64;
+    if (v == kw("int")) return .int;
+    fail("a representation");
+}
+
+fn fromF64(x: f64) Value {
+    return @enumFromInt(@as(u64, @bitCast(x)));
+}
+fn toF64(v: Value) f64 {
+    return @bitCast(@intFromEnum(v));
+}
+fn fromI64(x: i64) Value {
+    return @enumFromInt(@as(u64, @bitCast(x)));
+}
+fn toI64(v: Value) i64 {
+    return @bitCast(@intFromEnum(v));
+}
+
+fn TNode(comptime T: type) type {
+    return struct { run: *const fn (n: *const @This(), f: *Frame) T };
+}
+const FNode = TNode(f64);
+const INode = TNode(i64);
+const BNode = TNode(bool);
+
+fn typeKeyword(comptime T: type) []const u8 {
+    return switch (T) {
+        f64 => "f64",
+        i64 => "int",
+        bool => "bool",
+        else => @compileError("no such type"),
+    };
+}
+
+fn zero(comptime T: type) T {
+    return switch (T) {
+        f64 => 0.0,
+        i64 => 0,
+        bool => false,
+        else => unreachable,
+    };
+}
+
+fn fromRaw(comptime T: type, v: Value) T {
+    return switch (T) {
+        f64 => toF64(v),
+        i64 => toI64(v),
+        else => unreachable,
+    };
+}
+
+fn toRaw(comptime T: type, x: T) Value {
+    return switch (T) {
+        f64 => fromF64(x),
+        i64 => fromI64(x),
+        else => unreachable,
+    };
+}
+
+/// A typed node's function: `run` of struct S, through its `base`.
+fn Typed(comptime T: type, comptime S: type) type {
+    return struct {
+        fn of(n: *const TNode(T)) *const S {
+            return @fieldParentPtr("base", n);
+        }
+    };
+}
+
+/// [:typed type op ...]: the node computing a raw T.
+fn compileTyped(comptime T: type, ctx: *Context, v: Value) *const TNode(T) {
+    if (at(v, 0) != kw("typed") or at(v, 1) != kw(typeKeyword(T))) fail("typed code of another type");
+    const op = at(v, 2);
+    if (op == kw("const")) return TConst(T).make(at(v, 3));
+    if (op == kw("slot")) return TSlot(T).make(int(at(v, 3)));
+    if (op == kw("escape")) return TEscape(T).make(ctx, at(v, 3));
+    if (op == kw("if")) return TIf(T).make(ctx, v);
+    if (op == kw("let")) return TLet(T).make(ctx, v, false);
+    if (op == kw("loop")) return TLet(T).make(ctx, v, true);
+    if (op == kw("do")) return TDo(T).make(ctx, v);
+    if (T != bool) {
+        if (op == kw("unbox")) return TUnbox(T).make(ctx, v);
+        if (op == kw("set")) return TSet(T).make(ctx, v);
+        if (op == kw("add") or op == kw("sub") or op == kw("mul") or op == kw("div"))
+            return Arith(T).make(ctx, v);
+        if (op == kw("neg")) return Neg(T).make(ctx, v);
+        if (op == kw("aget")) return AGet(T).make(ctx, v);
+        if (op == kw("aset")) return ASet(T).make(ctx, v);
+    }
+    if (T == f64) {
+        if (op == kw("from-int")) return FromInt.make(ctx, v);
+        if (op == kw("sqrt")) return Sqrt.make(ctx, v);
+    }
+    if (T == i64) {
+        if (op == kw("count")) return Count.make(ctx, v);
+        if (op == kw("fixnum-range")) return FixnumRange.make(ctx, v);
+    }
+    if (T == bool) {
+        if (op == kw("truthy")) return Truthy.make(ctx, v);
+        if (op == kw("not")) return Not.make(ctx, v);
+        if (op == kw("and")) return And.make(ctx, v);
+        if (op == kw("compare")) return compileCompare(ctx, v);
+        if (op == kw("sign")) return compileSign(ctx, v);
+        if (op == kw("after")) return compileAfter(ctx, v);
+    }
+    fail("an unknown typed operation");
+}
+
+fn TConst(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        x: T,
+        fn make(v: Value) *const TNode(T) {
+            const s = create(@This());
+            const x: T = switch (T) {
+                f64 => if (v.isFixnum()) @floatFromInt(v.toFixnum()) else toF64(sk_to_f64_bits(v)),
+                i64 => v.toFixnum(),
+                else => fail("a typed constant"),
+            };
+            s.* = .{ .base = .{ .run = run }, .x = x };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), _: *Frame) T {
+            return Typed(T, @This()).of(n).x;
+        }
+    };
+}
+
+/// The raw bits of the f64 v, as a Value (for constants).
+fn sk_to_f64_bits(v: Value) Value {
+    return fromF64(sk_to_f64(v, "<constant>"));
+}
+
+fn TSlot(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        i: u32,
+        fn make(i: u32) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .i = i };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            return fromRaw(T, f.slots[Typed(T, @This()).of(n).i]);
+        }
+    };
+}
+
+/// A recur where a raw value is wanted: it sets the frame's flag; the value is unused.
+fn TEscape(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        g: *const Node,
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .g = compile(ctx, v, false) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            _ = s.g.run(s.g, f);
+            return zero(T);
+        }
+    };
+}
+
+fn TIf(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        t: *const BNode,
+        then: *const TNode(T),
+        els: *const TNode(T),
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .t = compileTyped(bool, ctx, at(v, 3)), .then = compileTyped(T, ctx, at(v, 4)), .els = compileTyped(T, ctx, at(v, 5)) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            const b = if (s.t.run(s.t, f)) s.then else s.els;
+            return b.run(b, f);
+        }
+    };
+}
+
+/// [:typed T :let bindings body] and :loop.
+fn TLet(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        bindings: []Binding,
+        body: *const TNode(T),
+        fn make(ctx: *Context, v: Value, is_loop: bool) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = if (is_loop) runLoop else run }, .bindings = compileBindings(ctx, at(v, 3)), .body = compileTyped(T, ctx, at(v, 4)) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            bindAll(s.bindings, f);
+            return s.body.run(s.body, f);
+        }
+        fn runLoop(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            bindAll(s.bindings, f);
+            while (true) {
+                poll();
+                const x = s.body.run(s.body, f);
+                if (!f.recur) return x;
+                f.recur = false;
+            }
+        }
+    };
+}
+
+/// [:typed T :do [forms] last]: the forms are Values, run for their effects.
+fn TDo(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        forms: []*const Node,
+        last: *const TNode(T),
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .forms = compileAll(ctx, at(v, 3), false), .last = compileTyped(T, ctx, at(v, 4)) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            for (s.forms) |x| {
+                _ = x.run(x, f);
+                if (f.recur) return zero(T);
+            }
+            return s.last.run(s.last, f);
+        }
+    };
+}
+
+/// [:typed T :unbox value loc]: a Value as T, a type error if it isn't one.
+fn TUnbox(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        g: *const Node,
+        loc: [*:0]const u8,
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .g = compile(ctx, at(v, 3), false), .loc = cString(at(v, 4)) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            const x = s.g.run(s.g, f);
+            return if (T == f64) sk_to_f64(x, s.loc) else sk_to_fixnum(x, s.loc);
+        }
+    };
+}
+
+/// [:typed T :set slot value]: set! of a typed local.
+fn TSet(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        i: u32,
+        value: *const TNode(T),
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .i = int(at(v, 3)), .value = compileTyped(T, ctx, at(v, 4)) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            const x = s.value.run(s.value, f);
+            f.slots[s.i] = toRaw(T, x);
+            return x;
+        }
+    };
+}
+
+/// An operand of a typed operation, read in place when it's a local or a constant: most
+/// operands are, and reading them saves a node call.
+fn Operand(comptime T: type) type {
+    return union(enum) {
+        node: *const TNode(T),
+        slot: u32,
+        konst: T,
+        /// (aget a i) with the array and the index in locals.
+        aget: [2]u32,
+        fn make(ctx: *Context, v: Value) @This() {
+            if (at(v, 0) == kw("typed") and at(v, 2) == kw("slot")) return .{ .slot = int(at(v, 3)) };
+            if (T != bool and at(v, 0) == kw("typed") and at(v, 2) == kw("aget")) {
+                const arr = at(v, 3);
+                const idx = at(v, 4);
+                if (at(arr, 0) == kw("slot") and at(idx, 0) == kw("typed") and at(idx, 2) == kw("slot"))
+                    return .{ .aget = .{ int(at(arr, 1)), int(at(idx, 3)) } };
+            }
+            if (T != bool and at(v, 0) == kw("typed") and at(v, 2) == kw("const")) {
+                const c = TConst(T).make(at(v, 3));
+                return .{ .konst = c.run(c, undefined) };
+            }
+            return .{ .node = compileTyped(T, ctx, v) };
+        }
+        inline fn get(o: @This(), f: *Frame) T {
+            return switch (o) {
+                .node => |n| n.run(n, f),
+                .slot => |i| fromRaw(T, f.slots[i]),
+                .konst => |x| x,
+                .aget => |ai| if (T == bool) unreachable else element(T, f.slots[ai[0]], toI64(f.slots[ai[1]])),
+            };
+        }
+    };
+}
+
+/// A Value operand, read in place when it's a local.
+const ValueOperand = union(enum) {
+    node: *const Node,
+    slot: u32,
+    fn make(ctx: *Context, v: Value) ValueOperand {
+        if (at(v, 0) == kw("slot")) return .{ .slot = int(at(v, 1)) };
+        return .{ .node = compile(ctx, v, false) };
+    }
+    inline fn get(o: ValueOperand, f: *Frame) Value {
+        return switch (o) {
+            .node => |n| n.run(n, f),
+            .slot => |i| f.slots[i],
+        };
+    }
+};
+
+/// [:typed T op a b] for op :add :sub :mul :div. Integer arithmetic is checked for
+/// overflow and f64 division for a zero divisor, as the C backend checks them.
+fn Arith(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        a: Operand(T),
+        b: Operand(T),
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            const op = at(v, 2);
+            const runner = if (op == kw("add")) runOp(.add) else if (op == kw("sub")) runOp(.sub) else if (op == kw("mul")) runOp(.mul) else runOp(.div);
+            s.* = .{ .base = .{ .run = runner }, .a = Operand(T).make(ctx, at(v, 3)), .b = Operand(T).make(ctx, at(v, 4)) };
+            return &s.base;
+        }
+        const Op = enum { add, sub, mul, div };
+        fn runOp(comptime op: Op) *const fn (*const TNode(T), *Frame) T {
+            return struct {
+                fn run(n: *const TNode(T), f: *Frame) T {
+                    const s = Typed(T, @This().Outer).of(n);
+                    const x = s.a.get(f);
+                    const y = s.b.get(f);
+                    if (T == f64) return switch (op) {
+                        .add => x + y,
+                        .sub => x - y,
+                        .mul => x * y,
+                        .div => if (y == 0.0) sk_division_by_zero() else x / y,
+                    };
+                    const r = switch (op) {
+                        .add => @addWithOverflow(x, y),
+                        .sub => @subWithOverflow(x, y),
+                        .mul => @mulWithOverflow(x, y),
+                        .div => fail("integer division"),
+                    };
+                    if (r[1] != 0) sk_integer_overflow();
+                    return r[0];
+                }
+                const Outer = Arith(T);
+            }.run;
+        }
+    };
+}
+
+fn Neg(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        a: *const TNode(T),
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .a = compileTyped(T, ctx, at(v, 3)) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            const x = s.a.run(s.a, f);
+            if (T == f64) return -x;
+            const r = @subWithOverflow(@as(i64, 0), x);
+            if (r[1] != 0) sk_integer_overflow();
+            return r[0];
+        }
+    };
+}
+
+/// A primitive array's elements (after its header and words [count, kind, hash]) and
+/// count. The typed code that calls this checks the index itself.
+inline fn arrayElements(comptime T: type, a: Value) struct { [*]T, i64 } {
+    @setRuntimeSafety(false);
+    const words: [*]u64 = @ptrFromInt(@intFromEnum(a) - 1);
+    return .{ @ptrCast(@alignCast(words + 4)), @bitCast(words[1]) };
+}
+
+/// Element i of the primitive array a, checking the index as the C backend does.
+inline fn element(comptime T: type, a: Value, i: i64) T {
+    @setRuntimeSafety(false);
+    const e = arrayElements(T, a);
+    if (i < 0 or i >= e[1]) sk_array_index_error(i, e[1]);
+    return e[0][@intCast(i)];
+}
+
+/// [:typed T :aget array index]
+fn AGet(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        arr: ValueOperand,
+        idx: Operand(i64),
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .arr = ValueOperand.make(ctx, at(v, 3)), .idx = Operand(i64).make(ctx, at(v, 4)) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            return element(T, s.arr.get(f), s.idx.get(f));
+        }
+    };
+}
+
+/// [:typed T :aset array index value]
+fn ASet(comptime T: type) type {
+    return struct {
+        base: TNode(T),
+        arr: ValueOperand,
+        idx: Operand(i64),
+        value: Operand(T),
+        fn make(ctx: *Context, v: Value) *const TNode(T) {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .arr = ValueOperand.make(ctx, at(v, 3)), .idx = Operand(i64).make(ctx, at(v, 4)), .value = Operand(T).make(ctx, at(v, 5)) };
+            return &s.base;
+        }
+        fn run(n: *const TNode(T), f: *Frame) T {
+            const s = Typed(T, @This()).of(n);
+            const a = s.arr.get(f);
+            const i = s.idx.get(f);
+            const x = s.value.get(f);
+            // After the value: computing it may have moved the array.
+            @setRuntimeSafety(false);
+            const e = arrayElements(T, a);
+            if (i < 0 or i >= e[1]) sk_array_index_error(i, e[1]);
+            e[0][@intCast(i)] = x;
+            return x;
+        }
+    };
+}
+
+const FromInt = struct {
+    base: FNode,
+    a: *const INode,
+    fn make(ctx: *Context, v: Value) *const FNode {
+        const s = create(FromInt);
+        s.* = .{ .base = .{ .run = run }, .a = compileTyped(i64, ctx, at(v, 3)) };
+        return &s.base;
+    }
+    fn run(n: *const FNode, f: *Frame) f64 {
+        const s: *const FromInt = @fieldParentPtr("base", n);
+        return @floatFromInt(s.a.run(s.a, f));
+    }
+};
+
+const Sqrt = struct {
+    base: FNode,
+    a: *const FNode,
+    fn make(ctx: *Context, v: Value) *const FNode {
+        const s = create(Sqrt);
+        s.* = .{ .base = .{ .run = run }, .a = compileTyped(f64, ctx, at(v, 3)) };
+        return &s.base;
+    }
+    fn run(n: *const FNode, f: *Frame) f64 {
+        const s: *const Sqrt = @fieldParentPtr("base", n);
+        return @sqrt(s.a.run(s.a, f));
+    }
+};
+
+const Count = struct {
+    base: INode,
+    arr: *const Node,
+    fn make(ctx: *Context, v: Value) *const INode {
+        const s = create(Count);
+        s.* = .{ .base = .{ .run = run }, .arr = compile(ctx, at(v, 3), false) };
+        return &s.base;
+    }
+    fn run(n: *const INode, f: *Frame) i64 {
+        const s: *const Count = @fieldParentPtr("base", n);
+        return arrayElements(u64, s.arr.run(s.arr, f))[1];
+    }
+};
+
+/// A declared fixnum local gets an int64 that must fit a fixnum.
+const FixnumRange = struct {
+    base: INode,
+    a: *const INode,
+    loc: [*:0]const u8,
+    fn make(ctx: *Context, v: Value) *const INode {
+        const s = create(FixnumRange);
+        s.* = .{ .base = .{ .run = run }, .a = compileTyped(i64, ctx, at(v, 3)), .loc = cString(at(v, 4)) };
+        return &s.base;
+    }
+    fn run(n: *const INode, f: *Frame) i64 {
+        const s: *const FixnumRange = @fieldParentPtr("base", n);
+        const x = s.a.run(s.a, f);
+        if (x < -(@as(i64, 1) << 61) or x > (@as(i64, 1) << 61) - 1) sk_fixnum_range_error(x, s.loc);
+        return x;
+    }
+};
+
+const Truthy = struct {
+    base: BNode,
+    g: *const Node,
+    fn make(ctx: *Context, v: Value) *const BNode {
+        const s = create(Truthy);
+        s.* = .{ .base = .{ .run = run }, .g = compile(ctx, at(v, 3), false) };
+        return &s.base;
+    }
+    fn run(n: *const BNode, f: *Frame) bool {
+        const s: *const Truthy = @fieldParentPtr("base", n);
+        return s.g.run(s.g, f).isTruthy();
+    }
+};
+
+const Not = struct {
+    base: BNode,
+    a: *const BNode,
+    fn make(ctx: *Context, v: Value) *const BNode {
+        const s = create(Not);
+        s.* = .{ .base = .{ .run = run }, .a = compileTyped(bool, ctx, at(v, 3)) };
+        return &s.base;
+    }
+    fn run(n: *const BNode, f: *Frame) bool {
+        const s: *const Not = @fieldParentPtr("base", n);
+        return !s.a.run(s.a, f);
+    }
+};
+
+/// [:typed :bool :and [bools]]: a chained comparison's pairs.
+const And = struct {
+    base: BNode,
+    parts: []*const BNode,
+    fn make(ctx: *Context, v: Value) *const BNode {
+        const s = create(And);
+        const ps = at(v, 3);
+        const parts = alloc.alloc(*const BNode, count(ps)) catch rt.fatal("out of memory (eval)", .{});
+        for (parts, 0..) |*p, i| p.* = compileTyped(bool, ctx, at(ps, i));
+        if (parts.len == 1) return parts[0];
+        s.* = .{ .base = .{ .run = run }, .parts = parts };
+        return &s.base;
+    }
+    fn run(n: *const BNode, f: *Frame) bool {
+        const s: *const And = @fieldParentPtr("base", n);
+        for (s.parts) |p| if (!p.run(p, f)) return false;
+        return true;
+    }
+};
+
+const CompareOp = enum { lt, gt, le, ge, eq };
+
+fn Compare(comptime T: type, comptime op: CompareOp) type {
+    return struct {
+        base: BNode,
+        a: Operand(T),
+        b: Operand(T),
+        fn make(ctx: *Context, x: Value, y: Value) *const BNode {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .a = Operand(T).make(ctx, x), .b = Operand(T).make(ctx, y) };
+            return &s.base;
+        }
+        fn run(n: *const BNode, f: *Frame) bool {
+            const s: *const @This() = @fieldParentPtr("base", n);
+            const x = s.a.get(f);
+            const y = s.b.get(f);
+            return switch (op) {
+                .lt => x < y,
+                .gt => x > y,
+                .le => x <= y,
+                .ge => x >= y,
+                .eq => x == y,
+            };
+        }
+    };
+}
+
+/// [:typed :bool :compare op type a b]
+fn compileCompare(ctx: *Context, v: Value) *const BNode {
+    const op = at(v, 3);
+    const is_f64 = at(v, 4) == kw("f64");
+    inline for (.{ .lt, .gt, .le, .ge, .eq }) |o| {
+        if (op == kw(@tagName(@as(CompareOp, o)))) {
+            return if (is_f64) Compare(f64, o).make(ctx, at(v, 5), at(v, 6)) else Compare(i64, o).make(ctx, at(v, 5), at(v, 6));
+        }
+    }
+    fail("a comparison");
+}
+
+fn Sign(comptime T: type) type {
+    return struct {
+        base: BNode,
+        a: *const TNode(T),
+        which: enum { zero, pos, neg },
+        fn make(ctx: *Context, v: Value) *const BNode {
+            const s = create(@This());
+            const w = at(v, 3);
+            s.* = .{ .base = .{ .run = run }, .a = compileTyped(T, ctx, at(v, 5)), .which = if (w == kw("zero")) .zero else if (w == kw("pos")) .pos else .neg };
+            return &s.base;
+        }
+        fn run(n: *const BNode, f: *Frame) bool {
+            const s: *const @This() = @fieldParentPtr("base", n);
+            const x = s.a.run(s.a, f);
+            return switch (s.which) {
+                .zero => x == zero(T),
+                .pos => x > zero(T),
+                .neg => x < zero(T),
+            };
+        }
+    };
+}
+
+/// [:typed :bool :sign which type x]
+fn compileSign(ctx: *Context, v: Value) *const BNode {
+    return if (at(v, 4) == kw("f64")) Sign(f64).make(ctx, v) else Sign(i64).make(ctx, v);
+}
+
+/// [:typed :bool :after type x]: compute x for its effects; true.
+fn After(comptime T: type) type {
+    return struct {
+        base: BNode,
+        a: *const TNode(T),
+        fn make(ctx: *Context, v: Value) *const BNode {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .a = compileTyped(T, ctx, at(v, 4)) };
+            return &s.base;
+        }
+        fn run(n: *const BNode, f: *Frame) bool {
+            const s: *const @This() = @fieldParentPtr("base", n);
+            _ = s.a.run(s.a, f);
+            return true;
+        }
+    };
+}
+
+fn compileAfter(ctx: *Context, v: Value) *const BNode {
+    const t = at(v, 3);
+    if (t == kw("f64")) return After(f64).make(ctx, v);
+    if (t == kw("int")) return After(i64).make(ctx, v);
+    return After(bool).make(ctx, v);
+}
+
+/// [:box type typed]: a raw value as a Value.
+fn Box(comptime T: type) type {
+    return struct {
+        base: Node,
+        t: *const TNode(T),
+        fn make(ctx: *Context, v: Value) *const Node {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .t = compileTyped(T, ctx, at(v, 2)) };
+            return &s.base;
+        }
+        fn run(n: *const Node, f: *Frame) Value {
+            const s: *const @This() = @fieldParentPtr("base", n);
+            const x = s.t.run(s.t, f);
+            return switch (T) {
+                f64 => sk_f64(x),
+                i64 => if (x >= -(@as(i64, 1) << 61) and x <= (@as(i64, 1) << 61) - 1) Value.fromFixnum(x) else sk_integer_from_i64(x),
+                bool => Value.fromBool(x),
+                else => unreachable,
+            };
+        }
+    };
+}
+
+fn compileBox(ctx: *Context, v: Value) *const Node {
+    const t = at(v, 1);
+    if (t == kw("f64")) return Box(f64).make(ctx, v);
+    if (t == kw("int")) return Box(i64).make(ctx, v);
+    return Box(bool).make(ctx, v);
+}
+
+/// [:discard type typed]: a raw value computed for its effects; nil.
+fn Discard(comptime T: type) type {
+    return struct {
+        base: Node,
+        t: *const TNode(T),
+        fn make(ctx: *Context, v: Value) *const Node {
+            const s = create(@This());
+            s.* = .{ .base = .{ .run = run }, .t = compileTyped(T, ctx, at(v, 2)) };
+            return &s.base;
+        }
+        fn run(n: *const Node, f: *Frame) Value {
+            const s: *const @This() = @fieldParentPtr("base", n);
+            _ = s.t.run(s.t, f);
+            return Value.nil;
+        }
+    };
+}
+
+fn compileDiscard(ctx: *Context, v: Value) *const Node {
+    const t = at(v, 1);
+    if (t == kw("f64")) return Discard(f64).make(ctx, v);
+    if (t == kw("int")) return Discard(i64).make(ctx, v);
+    return Discard(bool).make(ctx, v);
+}
+
+/// [:if-bool test then else]: an if whose test is a raw bool.
+const IfBool = struct {
+    base: Node,
+    t: *const BNode,
+    then: *const Node,
+    els: *const Node,
+    fn make(ctx: *Context, v: Value, mv: bool) *const Node {
+        const s = create(IfBool);
+        s.* = .{ .base = .{ .run = run }, .t = compileTyped(bool, ctx, at(v, 1)), .then = compile(ctx, at(v, 2), mv), .els = compile(ctx, at(v, 3), mv) };
+        return &s.base;
+    }
+    fn run(n: *const Node, f: *Frame) Value {
+        const s: *const IfBool = @fieldParentPtr("base", n);
+        const b = if (s.t.run(s.t, f)) s.then else s.els;
+        return b.run(b, f);
+    }
+};
+
+/// [:check-array kind value loc]: a value that must be a primitive array of that kind.
+const CheckArray = struct {
+    base: Node,
+    kind: u32,
+    g: *const Node,
+    loc: [*:0]const u8,
+    fn make(ctx: *Context, v: Value) *const Node {
+        const s = create(CheckArray);
+        s.* = .{ .base = .{ .run = run }, .kind = int(at(v, 1)), .g = compile(ctx, at(v, 2), false), .loc = cString(at(v, 3)) };
+        return &s.base;
+    }
+    fn run(n: *const Node, f: *Frame) Value {
+        const s: *const CheckArray = @fieldParentPtr("base", n);
+        return sk_check_array(s.g.run(s.g, f), s.kind, s.loc);
     }
 };
 

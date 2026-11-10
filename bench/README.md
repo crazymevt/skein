@@ -55,3 +55,15 @@ Recorded 2026-11-09 on Apple M4, Zig 0.17.1, macOS, by `bench/nbody/native.lisp`
 | C (zig cc -O2) | 0.184 |
 | Skein, native release build | 0.249 |
 | Ratio | 1.35x |
+
+## n-body evaluated natively (M2.5)
+
+Recorded 2026-11-10 on Apple M4, Zig 0.17.1, macOS, by `bench/nbody/eval.lisp`: one program built with `skeinc build --eval` (dev profile) runs n-body compiled, then loads `nbody.skn` again so the same functions run in the evaluator (D-079). Both compute the same energies. M2.5's exit criterion asked for a ratio of at most 10.
+
+| n-body, 200,000 steps | Best of 5 (s) |
+|---|---|
+| compiled (dev profile) | 0.0104 |
+| evaluated (same build) | 0.211 |
+| Ratio | 20.2x |
+
+Before step 5's typed closures the ratio was about 137×: every float was boxed. Typed nodes compute raw `f64` and integers as the C backend does, and read locals, constants and `(aget a i)` operands in place. What's left is mostly one indirect call per node.
