@@ -1,0 +1,37 @@
+(+ 1 2)
+(defn f [x] (* x 10))
+(f 4)
+(+ *1 1)
+"s"
+(println "out")
+(ns repl.test.a)
+(def x 1)
+(in-ns 'user)
+repl.test.a/x
+(+ 1 2))
+(+ 2 3)
+(let [a 1
+      b 2]
+  (+ a b))
+"a string
+over two lines"
+(defn g [x] (/ x 0))
+(defn h [x] (inc (g x)))
+(h 5)
+:bt
+(+ 40 2)
+0
+(+ 1 1)
+(restart-case (error "oops") (use-default [] :report "Use 7" 7))
+0
+(error "one")
+(error "two")
+0
+:quit
+(error "remember me")
+0
+(condition-message *e)
+:no-such-restart-number
+5
+0
+(error "last")

@@ -1,0 +1,7 @@
+(ns repl
+  "Built with --eval, run with repl.input on its standard input and compared with
+repl.expected (M2.6 step 2): the native REPL and debugger, with Phase 0's transcripts
+(host/tests/repl.lisp)."
+  (:require [skein.dev :as dev]))
+
+(defn -main [& args] (dev/run-repl))

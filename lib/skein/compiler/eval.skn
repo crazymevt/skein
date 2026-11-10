@@ -564,7 +564,7 @@ and the targets a loop's recur rebinds."
 ;;; ------------------------------------------------------------------------------------
 ;;; eval, load-file and reload, as Phase 0's (backend-cl/driver.lisp, repl/repl.lisp)
 
-(defn- eval-syntax
+(defn evaluate-syntax
   "Expand and evaluate the top-level syntax object form in the current namespace; a
 (do ...) expansion's forms are top-level forms, each expanded after the one before runs."
   [form]
@@ -572,13 +572,13 @@ and the targets a loop's recur rebinds."
         expanded (expander/macroexpand form (expander/make-env ns))]
     (if (expander/toplevel-do? expanded)
       (loop [forms (rest (:datum expanded)) value nil]
-        (if (seq forms) (recur (rest forms) (eval-syntax (first forms))) value))
+        (if (seq forms) (recur (rest forms) (evaluate-syntax (first forms))) value))
       (%eval-run (lower-toplevel (expander/analyze-toplevel expanded ns))))))
 
 (defn- eval-form
   "(eval form): the form, given as data, evaluated in the current namespace."
   [form]
-  (eval-syntax (expander/data->syntax form)))
+  (evaluate-syntax (expander/data->syntax form)))
 
 (defn- ns-form? [form]
   (and (= :list (:kind form)) (seq (:datum form))
@@ -600,7 +600,7 @@ restored afterwards; the last value. A namespace declared in it records it as it
         (let [form (reader/read-form r false ::eof)]
           (if (= form ::eof)
             value
-            (let [v (eval-syntax form)]
+            (let [v (evaluate-syntax form)]
               (when (ns-form? form) (%set-namespace-file! (%current-namespace) file))
               (recur v)))))
       (finally (%in-ns (symbol saved))))))

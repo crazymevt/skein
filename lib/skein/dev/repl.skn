@@ -1,0 +1,6 @@
+(ns skein.dev.repl
+  "The program behind `skein repl` (M2.6, D-081): built once with --eval, it runs the REPL
+on the terminal, in user."
+  (:require [skein.dev :as dev]))
+
+(defn -main [& args] (dev/run-repl))

@@ -1,0 +1,54 @@
+Skein 0.0.1 REPL. Type :quit or end the input to leave.
+user=> 3
+user=> #'user/f
+user=> 40
+user=> 41
+user=> "s"
+user=> out
+nil
+user=> #<namespace repl.test.a>
+repl.test.a=> #'repl.test.a/x
+repl.test.a=> #<namespace user>
+user=> 1
+user=> 3
+user=> 
+error: unexpected `)` at repl:11:8
+user=> 5
+user=> 3
+user=> "a string\nover two lines"
+user=> #'user/g
+user=> #'user/h
+user=> 
+error: division by zero
+restarts (type a number to choose one):
+  0: abort  Return to the REPL
+Also: :bt for a backtrace, or any form to evaluate it here.
+debug[1] user=>   0: g
+  1: h
+debug[1] user=> 42
+debug[1] user=> 
+; aborted
+user=> 2
+user=> 
+error: oops
+restarts (type a number to choose one):
+  0: use-default  Use 7
+  1: abort  Return to the REPL
+Also: :bt for a backtrace, or any form to evaluate it here.
+debug[1] user=> 7
+user=> 
+error: one
+restarts (type a number to choose one):
+  0: abort  Return to the REPL
+Also: :bt for a backtrace, or any form to evaluate it here.
+debug[1] user=> 
+error: two
+restarts (type a number to choose one):
+  0: abort  Return to debug level 1
+  1: abort  Return to the REPL
+Also: :bt for a backtrace, or any form to evaluate it here.
+debug[2] user=> 
+; aborted
+debug[1] user=> 
+; aborted
+user=> 

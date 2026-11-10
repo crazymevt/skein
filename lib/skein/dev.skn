@@ -1,0 +1,254 @@
+(ns skein.dev
+  "The REPL and debugger of native programs built with --eval (DESIGN §15, M2.6, D-081),
+with Phase 0's behavior (host/src/repl/repl.lisp, D-039): a `namespace=> ` prompt per
+form, *1 *2 *3 and *e, :quit, and on an error the active restarts, numbered innermost
+first, which a number invokes, :bt for a backtrace, and any other form evaluated there,
+in nested debug[N] levels.
+
+A console is a source of text and a place to write: the terminal, or (with skein dev) a
+client of the REPL server. A fiber per console reads its text and sends complete forms
+over a channel to the console's loop."
+  (:require [skein.compiler.reader :as reader]
+            [skein.compiler.eval :as evaluator]))
+
+;;; ------------------------------------------------------------------------------------
+;;; Consoles
+
+(defn- make-console
+  "A console that reads text with (read-text), nil at its end, and writes it with (write
+text)."
+  [console-name read-text write]
+  {:name console-name
+   :read-text read-text
+   :write write
+   :inbox (chan)
+   ;; Messages put aside while debugging, handled before new ones.
+   :deferred (atom [])
+   :ns (atom "user")
+   :quit (atom false)
+   ;; Whether what the console last wrote ended a line.
+   :fresh (atom true)})
+
+(defn- write! [console & parts]
+  (let [text (apply str parts)]
+    (when (seq text)
+      ((:write console) text)
+      (reset! (:fresh console) (= \newline (last text))))))
+
+(defn- fresh-line!
+  "Start a new line unless the console's output is at the start of one."
+  [console]
+  (when-not @(:fresh console) (write! console "\n")))
+
+(defn- model-namespace?
+  "True for a namespace as skein.compiler.env models it: an atom holding its map."
+  [x]
+  (and (atom? x) (map? @x) (contains? @x :mappings) (string? (:name @x))))
+
+(defn- show
+  "The printed form of a value, as Phase 0's REPL prints it."
+  [x]
+  (if (model-namespace? x) (str "#<namespace " (:name @x) ">") (pr-str x)))
+
+(defn- incomplete?
+  "True if a read error only says that the input ended inside a form."
+  [message]
+  (let [has (fn [s] (loop [i 0]
+                      (cond (> (+ i (count s)) (count message)) false
+                            (= s (subs message i (+ i (count s)))) true
+                            :else (recur (inc i)))))]
+    (or (has "unterminated") (has "end of input"))))
+
+(defn- line-end
+  "The index just after the end of the line containing index i of text."
+  [text i]
+  (loop [j i]
+    (cond (>= j (count text)) j
+          (= (nth text j) \newline) (inc j)
+          :else (recur (inc j)))))
+
+(defn- read-forms
+  "Read the console's text and send [:form syntax], [:read-error message] and finally
+[:eof] to its inbox."
+  [console]
+  (loop [text "" line 1 column 1 more true]
+    (let [r (reader/make-reader text {:file "repl" :namespace @(:ns console)})
+          _ (reset! (:line r) line)
+          _ (reset! (:column r) column)
+          outcome (try [:form (reader/read-form r false ::none)]
+                       (catch reader/read-error e
+                         [:error (condition-message e)]))
+          pos @(:pos r)
+          rest-text (subs text pos)]
+      (cond (and (= :form (first outcome)) (not= ::none (second outcome)))
+            (do (>! (:inbox console) [:form (second outcome)])
+                (recur rest-text @(:line r) @(:column r) more))
+            ;; Only whitespace and comments so far, or a form that isn't finished.
+            (and more (or (= :form (first outcome)) (incomplete? (second outcome))))
+            (if-let [chunk ((:read-text console))]
+              (recur (str text chunk) line column true)
+              (recur text line column false))
+            (= :error (first outcome))
+            ;; Skip the rest of the bad line.
+            (let [skip (line-end text pos)]
+              (>! (:inbox console) [:read-error (second outcome)])
+              (recur (subs text skip) (inc @(:line r)) 1 more))
+            :else (>! (:inbox console) [:eof])))))
+
+(defn- next-message [console]
+  (let [deferred @(:deferred console)]
+    (if (seq deferred)
+      (do (reset! (:deferred console) (vec (rest deferred))) (first deferred))
+      (<! (:inbox console)))))
+
+(defn- prompt [console prefix]
+  (write! console prefix @(:ns console) "=> "))
+
+(defn- keyword-name
+  "If syntax is a keyword like :quit, its name, else nil."
+  [syntax]
+  (let [d (:datum syntax)]
+    (when (and (keyword? d) (nil? (namespace d))) (name d))))
+
+(defn- integer-form [syntax]
+  (let [d (:datum syntax)] (when (integer? d) d)))
+
+;;; ------------------------------------------------------------------------------------
+;;; History: *1, *2, *3 and *e are skein.core vars, which every namespace sees.
+
+(defn- core-var [nm]
+  (let [var (%intern-var (%find-namespace "skein.core") nm)]
+    (%runtime-var var)
+    var))
+
+(defn- set-core-var! [nm value] (%set-var-value! (core-var nm) value))
+
+(defn- core-value [nm]
+  (let [v (%var-value (core-var nm))] (if (%var-defined? (core-var nm)) v nil)))
+
+(defn- record-value! [value]
+  (set-core-var! "*3" (core-value "*2"))
+  (set-core-var! "*2" (core-value "*1"))
+  (set-core-var! "*1" value))
+
+;;; ------------------------------------------------------------------------------------
+;;; Evaluating
+
+(def ^:dynamic *level*
+  "How many debugger loops are active in this console's fiber."
+  0)
+
+(def ^:private debug)
+
+(defn- eval-in
+  "Evaluate the syntax form in the console's namespace, which follows the ns and in-ns
+forms it evaluates."
+  [console form]
+  (let [saved (%current-namespace-name)]
+    (%in-ns (symbol @(:ns console)))
+    (try (evaluator/evaluate-syntax form)
+         (finally
+           (reset! (:ns console) (%current-namespace-name))
+           (%in-ns (symbol saved))))))
+
+(defn- eval-print
+  "Evaluate form and print its value, with an abort restart around it and the debugger
+for an error no handler in it handles."
+  [console form abort-report]
+  (restart-case
+   (handler-bind [error (fn repl-handler [c] (debug console c (rest (%backtrace))))]
+     (let [value (eval-in console form)]
+       (record-value! value)
+       (write! console (show value) "\n")))
+   (abort [] :report abort-report (fresh-line! console) (write! console "; aborted\n"))))
+
+;;; ------------------------------------------------------------------------------------
+;;; The debugger
+
+(defn- describe-error [console c restarts]
+  (fresh-line! console)
+  (write! console "error: " (condition-message c) "\n")
+  (when (seq restarts)
+    (write! console "restarts (type a number to choose one):\n")
+    (doseq [[i r] (map-indexed vector restarts)]
+      (write! console "  " i ": " (restart-name r)
+              (if-let [report (restart-report r)] (str "  " report) "") "\n")))
+  (write! console "Also: :bt for a backtrace, or any form to evaluate it here.\n"))
+
+(defn- print-backtrace
+  "The Skein functions between the error and the REPL, innermost first."
+  [console frames]
+  (let [shown (take-while (fn [[nm]] (not= nm "evaluate-syntax")) frames)]
+    (if (seq shown)
+      (doseq [[i [nm]] (map-indexed vector shown)] (write! console "  " i ": " nm "\n"))
+      (write! console "  (no Skein frames)\n"))))
+
+(defn- outermost-abort [restarts]
+  (last (filter (fn [r] (= "abort" (name (restart-name r)))) restarts)))
+
+(defn- leave!
+  "Input ended or :quit: unwind to the top, where the console loop sees the end."
+  [console restarts]
+  (swap! (:deferred console) (fn [d] (into [[:eof]] d)))
+  (when-let [abort (outermost-abort restarts)] (invoke-restart abort)))
+
+(defn- debug*
+  "The debugger loop for the error c in the console's own fiber; frames is the backtrace
+from where it was signaled."
+  [console c frames]
+  (binding [*level* (inc *level*)]
+    (set-core-var! "*e" c)
+    (let [restarts (vec (compute-restarts c))
+          prefix (str "debug[" *level* "] ")]
+      (describe-error console c restarts)
+      (loop []
+        (prompt console prefix)
+        (let [[kind x] (next-message console)]
+          (case kind
+            :eof (leave! console restarts)
+            :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
+            (let [n (integer-form x)
+                  k (keyword-name x)]
+              (cond (and n (< -1 n (count restarts))) (invoke-restart (nth restarts n))
+                    n (do (write! console "no restart " n "\n") (recur))
+                    (= k "bt") (do (print-backtrace console frames) (recur))
+                    (= k "quit") (leave! console restarts)
+                    :else (do (eval-print console x (str "Return to debug level " *level*))
+                              (recur))))))))))
+
+(def ^:private debug debug*)
+
+;;; ------------------------------------------------------------------------------------
+;;; The console loop and skein repl
+
+(defn console-loop
+  "Run the console's read-eval-print loop in this fiber until its input ends or :quit."
+  [console]
+  (future (read-forms console))
+  (loop []
+    (prompt console "")
+    (let [[kind x] (next-message console)]
+      (case kind
+        :eof nil
+        :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
+        (if (= (keyword-name x) "quit")
+          (reset! (:quit console) true)
+          (do (eval-print console x "Return to the REPL") (recur)))))))
+
+(defn terminal-console
+  "The console on the terminal: standard input and output."
+  []
+  (let [in (%stdin)]
+    (make-console "terminal" (fn [] (%read-text in)) (fn [text] (print text)))))
+
+(def version
+  "Skein's version, as host/skein.asd gives it (keep the two the same)."
+  "0.0.1")
+
+(defn run-repl
+  "skein repl: a REPL on the terminal, in user, until the input ends or :quit."
+  []
+  (doseq [nm ["*1" "*2" "*3" "*e"]] (set-core-var! nm nil))
+  (println (str "Skein " version " REPL. Type :quit or end the input to leave."))
+  (console-loop (terminal-console))
+  (println))

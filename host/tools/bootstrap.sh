@@ -143,15 +143,18 @@ test_compiler() {
   fi
   echo "skeinc: ring-fibers ok"
   # The dev fixtures (M2.6, D-081) test what only native --eval builds have, such as
-  # backtraces and the debugger: each prints what its .expected file says.
+  # backtraces, the debugger and the REPL: each, given its .input file (if it has one) on
+  # standard input, prints what its .expected file says.
   for program in host/tests/fixtures/dev/*.skn; do
     name=dev-$(basename "$program" .skn)
+    input="${program%.skn}.input"
+    [ -f "$input" ] || input=/dev/null
     "$skeinc" build "$program" --eval -o "build/examples/$name$exe" > /dev/null
-    if ! "build/examples/$name$exe" 2>&1 \
-         | diff --strip-trailing-cr "${program%.skn}.expected" - > /dev/null; then
+    "build/examples/$name$exe" < "$input" > "build/examples/$name.out" 2>&1
+    if ! diff --strip-trailing-cr "${program%.skn}.expected" "build/examples/$name.out" \
+         > /dev/null; then
       echo "skeinc: $name differs from its .expected"
-      "build/examples/$name$exe" 2>&1 | diff --strip-trailing-cr "${program%.skn}.expected" - \
-        | head -20
+      diff --strip-trailing-cr "${program%.skn}.expected" "build/examples/$name.out" | head -20
       exit 1
     fi
     echo "skeinc: $name ok"
