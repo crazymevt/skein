@@ -729,6 +729,7 @@ Backend
   - The C backend is `skein.compiler.c` (`lib/skein/compiler/c.skn`, D-059). It turns those maps into the same C as the Lisp backend, keeping its state in a map passed down each call rather than in dynamic vars.
   - Natively, the compiler's namespaces and vars are a model in `skein.compiler.env` (`lib/skein/compiler/env.skn`, D-060), separate from the vars of the compiler itself, so compiling a program never changes the running compiler. Its skein.core holds the runtime's functions, the library's, and the macros of `core.skn`, which are compiled into any program that includes the model.
   - Phase-1 code, a program's own macros and the functions they call, runs in `skein.compiler.interp` (`lib/skein/compiler/interp.skn`, D-061), which evaluates the expander's Core IR maps. Interpreted functions are ordinary functions, so compiled code calls them directly.
+  - The driver is `skein.compiler.main` (`lib/skein/compiler/main.skn`, D-062); built natively it is `skeinc`. It translates a program as `skein build` does, loading required namespaces at phase 1 and running zig.
 - **Compilation unit:** the namespace. Compiled output is cached per namespace, keyed by a source hash plus the hashes of its macro dependencies.
 
 ## 17. Runtime architecture (Phase 1+)

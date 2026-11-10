@@ -183,6 +183,18 @@ pub const Entry = struct {
 };
 
 pub const entries = [_]Entry{
+    .{ .name = "%getenv", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            // The environment variable's value, or nil. (Internal: the native compiler
+            // reads SKEIN_HOME and SKEIN_ZIG.)
+            const n = copyString(a[0], "%getenv needs a name");
+            defer alloc.free(n);
+            const z = alloc.dupeSentinel(u8, n, 0) catch rt.fatal("out of memory", .{});
+            defer alloc.free(z);
+            const v = std.c.getenv(z.ptr) orelse return Value.nil;
+            return decoded(std.mem.span(v)) orelse Value.nil;
+        }
+    }.f },
     .{ .name = "%read-file", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return readFile(a[0]);

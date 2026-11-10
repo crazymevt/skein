@@ -183,3 +183,20 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore gf qualifier specializers rest-p fn))
   (skein-error 'skein-error nil "%add-method is only used by the native compiler"))
 
+(defcore "%getenv" (name)
+  ;; The environment variable NAME's value, or nil. For the native compiler's driver.
+  (uiop:getenv name))
+
+;;; skein.compiler.env's %define-struct and %define-soa use these natively; in Phase 0
+;;; %define-struct and %define-soa do the work themselves.
+
+(macrolet ((native-only (&rest names)
+             `(progn
+                ,@(loop for name in names
+                        collect `(defcore ,name (&rest args)
+                                   (declare (ignore args))
+                                   (skein-error 'skein-error nil "~A is only used by the native ~
+                                                                  compiler" ,name))))))
+  (native-only "%make-struct-def" "%struct-constructor" "%struct-predicate" "%struct-accessor"
+               "%make-soa-def" "%soa-maker" "%soa-field"))
+

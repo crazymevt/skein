@@ -1,0 +1,367 @@
+(ns skein.compiler.main
+  "The native compiler's driver (M1.9 step 5, D-062): `skeinc build file.skn [-o out]
+[--release] [--keep-c]`. It reads a program and the namespaces it requires, runs their
+phase-1 code (D-058) in the interpreter, translates them to C with skein.compiler.c, and
+compiles the C with zig against the runtime, as host/src/backend-c/build.lisp does.
+
+Translation follows build.lisp function by function, so the C is the same:
+skein.core.native first, then the program; after each ns form, the namespaces it
+requires, each before the code that uses it. ns and defmacro forms run at phase 1 and
+make no code; the rest is compiled, and defs of functions and the %define- forms also run
+at phase 1. A program that includes skein.compiler.env gets skein.core's macros compiled
+in (D-060).
+
+Natively, required namespaces are loaded at phase 1 by this namespace's loader; on the
+host, Phase 0 loads them."
+  (:require [skein.io :as io]
+            [skein.compiler.reader :as reader]
+            [skein.compiler.expander :as expander]
+            [skein.compiler.c :as c]
+            [skein.compiler.interp :as interp]
+            [skein.compiler.env :as env]))
+
+;;; ------------------------------------------------------------------------------------
+;;; Errors
+
+(defcondition build-error [error]
+  "A program that can't be found, translated or compiled."
+  (message :reader build-error-message)
+  (:report (fn [c] (build-error-message c))))
+
+(defn- fail [& parts] (error build-error :message (apply str parts)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Files and paths. Paths are strings with / separators, which every OS accepts; a
+;;; directory ends with /.
+
+(defn- index-of-last [s ch]
+  (loop [i (dec (count s))]
+    (cond (neg? i) nil
+          (= (nth s i) ch) i
+          :else (recur (dec i)))))
+
+(defn- directory-of
+  "The directory part of path, ending with / (\"\" for a bare file name)."
+  [path]
+  (let [path (apply str (map (fn [c] (if (= c \\) \/ c)) path))]
+    (if-let [i (index-of-last path \/)] (subs path 0 (inc i)) "")))
+
+(defn- file-name
+  "The last part of path."
+  [path]
+  (subs path (count (directory-of path))))
+
+(defn- stem
+  "file-name without its extension."
+  [path]
+  (let [n (file-name path)]
+    (if-let [i (index-of-last n \.)] (subs n 0 i) n)))
+
+(defn namespace-file-name
+  "The relative source path for namespace nm: a.b-c becomes a/b-c.skn."
+  [nm]
+  (str (apply str (map (fn [c] (if (= c \.) \/ c)) nm)) ".skn"))
+
+(defn find-home
+  "The Skein checkout the compiler uses (its lib/ and runtime/): SKEIN_HOME, else the
+current directory or the nearest parent with lib/skein/core.skn."
+  []
+  (or (when-let [h (%getenv "SKEIN_HOME")]
+        (if (= (last h) \/) h (str h "/")))
+      (loop [dir "" n 0]
+        (cond (io/file-exists? (str dir "lib/skein/core.skn")) dir
+              (< n 8) (recur (str dir "../") (inc n))
+              :else (fail "cannot find the Skein checkout: run skeinc inside it, or set "
+                          "SKEIN_HOME")))))
+
+;;; ------------------------------------------------------------------------------------
+;;; The build state
+
+(defn- make-build
+  "The state of one translation: the C unit, the namespaces already in it, the source
+paths, and whether lib/skein/core.skn is being translated with its macros (D-060)."
+  [source-paths]
+  {:unit (c/make-unit)
+   :translated (atom #{"skein.core.native"})
+   :paths source-paths
+   :core-macro-mode (atom false)})
+
+(defn- find-namespace-file
+  "The source file of namespace nm on the source paths, or nil."
+  [build nm]
+  (some (fn [dir]
+          (let [p (str dir (namespace-file-name nm))]
+            (when (io/file-exists? p) p)))
+        (:paths build)))
+
+(defn- form-head
+  "The unqualified name at the head of a list form, or nil."
+  [form]
+  (when (and (= :list (:kind form)) (seq (:datum form)))
+    (let [h (:datum (first (:datum form)))]
+      (when (and (symbol? h) (nil? (namespace h))) (name h)))))
+
+(defn- defining-call?
+  "True if ir calls one of skein.core's %define- functions (defstruct, defclass, ...)."
+  [ir]
+  (and (= :call (:op ir)) (= :var-ref (:op (:fn ir)))
+       (= "skein.core" (%namespace-name (%var-namespace (:var (:fn ir)))))
+       (let [nm (%var-name (:var (:fn ir)))]
+         (and (> (count nm) 8) (= "%define-" (subs nm 0 8))))))
+
+(defn- phase-1?
+  "Whether a compiled top-level form also runs at phase 1 (D-058): a def of a function
+that isn't defined yet at phase 1, or a definition of a struct, class, generic function or
+condition type."
+  [ir]
+  (or (and (= :def (:op ir)) (:init ir) (= :fn (:op (:init ir)))
+           (not (%var-defined? (:var ir))))
+      (defining-call? ir)
+      (and (= :def (:op ir)) (:init ir) (defining-call? (:init ir)))))
+
+(defn- run-phase-1
+  "Expand form and run all of it at phase 1, in the current namespace."
+  [form]
+  (let [ns (%current-namespace)
+        expanded (expander/macroexpand form (expander/make-env ns))]
+    (if (expander/toplevel-do? expanded)
+      (doseq [sub (rest (:datum expanded))] (run-phase-1 sub))
+      (interp/evaluate (expander/analyze-toplevel expanded ns)))))
+
+(defn- read-file-forms
+  "Call (f form) for each top-level form of the file at path, starting in namespace
+user; the reader follows the namespace each form leaves current. Returns the namespace
+current at the end. The namespace current before is restored."
+  [path f]
+  (let [saved (%current-namespace-name)
+        text (io/read-file path)
+        r (reader/make-reader text {:file path :namespace "user"
+                                    :resolve-alias
+                                    (fn [alias]
+                                      (when-let [ns (%find-alias (%current-namespace) alias)]
+                                        (%namespace-name ns)))})]
+    (%in-ns 'user)
+    (try
+      (loop []
+        (reader/set-reader-namespace! r (%current-namespace-name))
+        (let [form (reader/read-form r false ::eof)]
+          (if (= form ::eof)
+            (%current-namespace)
+            (do (f form) (recur)))))
+      (finally (%in-ns (symbol saved))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Phase-1 loading (native only): what %require does for a namespace not loaded yet.
+
+(defn- load-for-syntax
+  "Load namespace nm at phase 1: run its ns and defmacro forms, and the phase-1 forms
+among the rest (D-058). Nothing is compiled."
+  [build nm]
+  (let [path (or (find-namespace-file build nm)
+                 (fail "cannot find namespace " nm))]
+    (read-file-forms path
+                     (fn [form]
+                       (if (contains? #{"ns" "defmacro"} (form-head form))
+                         (run-phase-1 form)
+                         (let [ns (%current-namespace)
+                               expanded (expander/macroexpand form (expander/make-env ns))]
+                           (loop [forms (if (expander/toplevel-do? expanded)
+                                          (rest (:datum expanded))
+                                          [expanded])]
+                             (when (seq forms)
+                               (let [e (expander/macroexpand (first forms)
+                                                             (expander/make-env ns))]
+                                 (if (expander/toplevel-do? e)
+                                   (recur (concat (rest (:datum e)) (rest forms)))
+                                   (let [ir (expander/analyze-toplevel e ns)]
+                                     (when (phase-1? ir) (interp/evaluate ir))
+                                     (recur (rest forms)))))))))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Translation (build.lisp)
+
+(def ^:private translate-form)
+(def ^:private translate-source)
+
+(defn- core-source-names
+  "The names that the top-level defmacro, defn, defn- and def forms of path define."
+  [path]
+  (let [r (reader/make-reader (io/read-file path) {:file path :namespace "skein.core"})]
+    (loop [names []]
+      (let [form (reader/read-form r false ::eof)]
+        (if (= form ::eof)
+          names
+          (recur (if (contains? #{"defmacro" "defn" "defn-" "def"} (form-head form))
+                   (conj names (name (:datum (second (:datum form)))))
+                   names)))))))
+
+(defn- translate-core-macros
+  "Translate lib/skein/core.skn into the program with its macros compiled, so that
+skein.compiler.env can give the native compiler's skein.core its macros (D-060)."
+  [build]
+  (let [path (or (find-namespace-file build "skein.core") (fail "cannot find skein.core"))]
+    (c/note-core-names! (:unit build) (core-source-names path))
+    (reset! (:core-macro-mode build) true)
+    (try (translate-source build path)
+         (finally (reset! (:core-macro-mode build) false)))))
+
+(defn- translate-core-macro
+  "Compile one defmacro of lib/skein/core.skn: only its function is analyzed, since
+analyzing its def would clear the var's macro flag."
+  [build form]
+  (let [ns (%current-namespace)
+        expanded (expander/macroexpand form (expander/make-env ns))
+        def-items (:datum (second (:datum expanded)))
+        nm (name (:datum (second def-items)))
+        fn-form (last def-items)]
+    (c/emit-core-macro (:unit build) (%find-own-var ns nm)
+                       (expander/analyze-toplevel fn-form ns) ns)))
+
+(defn- translate-requires
+  "Translate the namespaces that ns requires and the program doesn't include yet, in the
+order its ns form requires them, each one's own requires first."
+  [build ns]
+  (doseq [dep (%namespace-requires ns)]
+    (let [nm (%namespace-name dep)]
+      (when-not (or (= nm "skein.core") (contains? @(:translated build) nm))
+        (swap! (:translated build) conj nm)
+        (let [path (or (find-namespace-file build nm)
+                       (fail "cannot find namespace " nm))]
+          ;; The native compiler's environment needs skein.core's macros compiled in.
+          (when (= nm "skein.compiler.env")
+            (translate-core-macros build))
+          (translate-source build path))))))
+
+(defn- translate-compiled
+  "Translate form to C, expanding it; a (do ...) expansion's forms are top-level forms."
+  [build form]
+  (let [ns (%current-namespace)
+        expanded (expander/macroexpand form (expander/make-env ns))]
+    (if (expander/toplevel-do? expanded)
+      (doseq [sub (rest (:datum expanded))] (translate-form build sub))
+      (let [ir (expander/analyze-toplevel expanded ns)]
+        (when (and (not @(:core-macro-mode build)) (phase-1? ir))
+          (interp/evaluate ir))
+        (c/emit-toplevel (:unit build) ir ns)))))
+
+(defn- translate-form*
+  "Translate one top-level form. ns and defmacro forms run at phase 1 and make no code;
+everything else becomes C. After an ns form, the namespaces it requires are translated."
+  [build form]
+  (let [head (form-head form)]
+    (cond (and @(:core-macro-mode build) (= head "defmacro")) (translate-core-macro build form)
+          (contains? #{"ns" "defmacro"} head)
+          (do (run-phase-1 form)
+              (when (= head "ns") (translate-requires build (%current-namespace))))
+          :else (translate-compiled build form))))
+
+(def ^:private translate-form translate-form*)
+
+(defn- translate-source* [build path]
+  (read-file-forms path (fn [form] (translate-form build form))))
+
+(def ^:private translate-source translate-source*)
+
+(defn translate-file
+  "The C program for the Skein program at path, with the namespaces it requires and
+skein.core's library in Skein; source-paths are the directories searched for namespaces.
+Its -main, if any, is called with the command-line arguments."
+  [path source-paths]
+  (let [build (make-build source-paths)
+        library (or (find-namespace-file build "skein.core.native")
+                    (fail "cannot find skein.core.native"))]
+    (reset! env/namespace-loader (fn [nm] (load-for-syntax build nm)))
+    (translate-source build library)
+    (let [ns (translate-source build path)
+          main (%find-own-var ns "-main")]
+      (c/program-text (:unit build) (file-name path) main))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Compiling with zig (build.lisp). The runtime and the C file are kept in the checkout's
+;;; .skein-cache/, which zig build makes; the Lisp backend keeps them in the current
+;;; directory's (D-062).
+
+(defn- zig [] (or (%getenv "SKEIN_ZIG") "zig"))
+
+(defn- windows? [] (= (%getenv "OS") "Windows_NT"))
+
+(defn- run-tool
+  "Run argv (in dir, if given); fail with its output if it fails."
+  [argv dir]
+  (let [result (try (io/run-process argv (if dir {:dir dir} {}))
+                    (catch io/io-error e
+                      (fail "could not run " (first argv) ": " (condition-message e)
+                            " (install Zig 0.17.1, or set SKEIN_ZIG)")))]
+    (when-not (zero? (:exit result))
+      (fail (first argv) " failed:\n" (:out result) (:err result)))
+    (:out result)))
+
+(defn- build-runtime
+  "Build the runtime library with zig build; return its install prefix, relative to the
+current directory."
+  [home optimize]
+  (let [dir (str "runtime/native-" (if (= optimize "ReleaseFast") "releasefast" "releasesafe")
+                 "/")]
+    ;; zig build runs in runtime/, so the prefix is given from there.
+    (run-tool [(zig) "build" (str "-Doptimize=" optimize) "--prefix" (str "../.skein-cache/" dir)]
+              (str home "runtime"))
+    (str home ".skein-cache/" dir)))
+
+(defn- runtime-library [prefix]
+  (or (some (fn [n] (let [p (str prefix "lib/" n)] (when (io/file-exists? p) p)))
+            ["libskein_runtime.a" "skein_runtime.lib"])
+      (fail "the runtime library is missing from " prefix "lib/")))
+
+(defn build-program
+  "Compile the Skein program at path to an executable at output (default: the file's
+name, in the current directory). Options: :output, :release (optimize more) and :keep-c
+(leave the C file next to the executable). Returns the executable's path."
+  [path {:keys [output release keep-c]}]
+  (let [home (find-home)
+        windows (windows?)
+        output (or output (str (stem path) (if windows ".exe" "")))
+        source-paths (vec (distinct [(directory-of path) "" (str home "lib/")]))
+        c-source (translate-file path source-paths)
+        optimize (if release "ReleaseFast" "ReleaseSafe")
+        prefix (build-runtime home optimize)
+        c-file (if keep-c
+                 (str (directory-of output) (stem output) ".c")
+                 (str home ".skein-cache/" (stem path) ".c"))]
+    (io/write-file c-file c-source)
+    ;; No fused multiply-adds: floating-point results must be exactly Phase 0's.
+    (run-tool (vec (concat [(zig) "cc" "-std=c11" "-ffp-contract=off" (if release "-O2" "-O1")
+                            "-I" (str prefix "include") c-file (runtime-library prefix)
+                            "-o" output]
+                           (when-not windows ["-lm"])))
+              nil)
+    output))
+
+;;; ------------------------------------------------------------------------------------
+;;; The command line
+
+(def ^:private usage
+  "Usage: skeinc build file.skn [-o output] [--release] [--keep-c]")
+
+(defn- parse-build-args [args]
+  (loop [args (seq args) opts {}]
+    (if-let [arg (first args)]
+      (cond (= arg "--release") (recur (next args) (assoc opts :release true))
+            (= arg "--keep-c") (recur (next args) (assoc opts :keep-c true))
+            (= arg "-o") (if (next args)
+                           (recur (nnext args) (assoc opts :output (second args)))
+                           (fail "skeinc build: -o needs a value"))
+            (= (first arg) \-) (fail "skeinc build: unknown option " arg)
+            (:file opts) (fail "skeinc build: expected one file")
+            :else (recur (next args) (assoc opts :file arg)))
+      opts)))
+
+(defn -main
+  "skeinc build file.skn [-o output] [--release] [--keep-c]."
+  [& args]
+  (let [[command & more] args]
+    (when-not (= command "build") (fail usage))
+    (let [opts (parse-build-args more)
+          file (or (:file opts)
+                   (fail "skeinc build: expected a file, e.g. `skeinc build hello.skn`"))]
+      (when-not (io/file-exists? file) (fail "skeinc build: file not found: " file))
+      (println "built" (build-program file opts)))))

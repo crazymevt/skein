@@ -11,7 +11,11 @@
 (defun interp-function (name)
   "The function skein.compiler.interp/NAME, loading the namespace the first time."
   (let ((ns (skein.runtime:find-namespace "skein.compiler.interp")))
-    (unless (and ns (skein.runtime:find-own-var ns name))
+    ;; Translating the file to C (other suites) makes the namespace and its vars without
+    ;; values, so load it unless the var has one.
+    (unless (and ns (skein.runtime:find-own-var ns name)
+                 (skein.runtime:var-bound-p (skein.runtime:find-own-var ns name)))
+      (skein.runtime::remove-namespace "skein.compiler.interp")
       (ev "(ns interp-bridge (:require [skein.compiler.interp]))")
       (setf ns (skein.runtime:find-namespace "skein.compiler.interp")))
     (skein.runtime:var-get (skein.runtime:find-own-var ns name) nil)))

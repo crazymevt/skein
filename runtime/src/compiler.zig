@@ -472,6 +472,42 @@ pub const entries = [_]Entry{
             return objects.defineMethod(a[0], a[1], a[2], a[3], a[4]);
         }
     }.f },
+    // Structs and defsoa at phase 1 (skein.compiler.env's %define-struct, M1.9 step 5)
+    .{ .name = "%make-struct-def", .min = 3, .max = 3, .impl = struct {
+        fn f(a: Args) Value {
+            return @import("structs.zig").defineStruct(a[0], a[1].isTruthy(), a[2]);
+        }
+    }.f },
+    .{ .name = "%struct-constructor", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return @import("structs.zig").constructor(a[0]);
+        }
+    }.f },
+    .{ .name = "%struct-predicate", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return @import("structs.zig").predicate(a[0]);
+        }
+    }.f },
+    .{ .name = "%struct-accessor", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return @import("structs.zig").accessor(a[0], ux(a[1]));
+        }
+    }.f },
+    .{ .name = "%make-soa-def", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return @import("structs.zig").defineSoa(a[0], a[1]);
+        }
+    }.f },
+    .{ .name = "%soa-maker", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return @import("structs.zig").soaMaker(a[0]);
+        }
+    }.f },
+    .{ .name = "%soa-field", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return @import("structs.zig").soaFieldFn(a[0], ux(a[1]));
+        }
+    }.f },
     .{ .name = "%arity-error", .min = 3, .max = 3, .impl = struct {
         fn f(a: Args) Value {
             arityError(a[0], a[1], a[2]);

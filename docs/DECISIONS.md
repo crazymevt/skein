@@ -809,3 +809,24 @@ Date: 2026-11-09 · Status: Accepted
   - Natively, the native-compiler test program runs samples' own macros, with helpers, several arities, recursion, an arity error and a phase warning, and prints the same C as under `skein run`.
   - A program's own structs aren't available to its macros natively yet.
 
+## D-062: The native compiler's driver
+Date: 2026-11-09 · Status: Accepted
+- **Context:** Step 5 of M1.9 adds the driver, `skeinc build file.skn [-o out]` (D-058). It must read a program and the namespaces it requires, run their phase-1 code, translate them to the same C as `skein build`, and compile it with zig. Natively there is no `getcwd`, no `mkdir` and no image to load namespaces into.
+- **Decision:**
+  - **`skein.compiler.main`** (`lib/skein/compiler/main.skn`) ports `host/src/backend-c/build.lisp`: skein.core.native first, then the program; after each `ns` form, the namespaces it requires, in require order and each one's requires first; `core.skn`'s macros when the program includes `skein.compiler.env`.
+  - **Phase 1:** `ns` and `defmacro` forms run in the interpreter and make no code. Other forms are compiled, and a def of a function not yet defined at phase 1, or a `%define-` form, also runs at phase 1 (D-058).
+  - **Loading required namespaces:** natively, `skein.compiler.env`'s loader loads a required namespace at phase 1 (its `ns`, `defmacro` and phase-1 forms); translation then compiles it. On the host, Phase 0 loads it.
+  - **Structs at phase 1:** natively, `skein.compiler.env` defines `%define-struct` and `%define-soa` on new runtime functions, making the same vars as Phase 0. `%struct-def-name` finds them.
+  - **Building:**
+    - The same zig commands and flags as `skein build`, with `--release` and `--keep-c`.
+    - The runtime and the C file go in the checkout's `.skein-cache/`, which `zig build` creates: skein.io has no `mkdir`, and `zig build` runs in `runtime/`, where a path relative to the current directory would be wrong.
+    - The checkout comes from `SKEIN_HOME`, or the current directory or a parent that has `lib/skein/core.skn`.
+    - `%getenv` (internal) reads `SKEIN_HOME`, `SKEIN_ZIG` and `OS`.
+  - **Testing:** on the host, the driver's C for every native test program equals `skein build`'s, up to local and gensym numbering.
+- **Alternatives:**
+  - `getcwd` and `mkdir` in skein.io. They are user-visible API, so they wait for skein.io's next additions.
+  - A path baked into `skeinc` at build time. A moved checkout would break it, and the two bootstrap builds would differ by path.
+- **Consequences:**
+  - `skeinc`, built by Phase 0, builds every example natively, and each prints its `.expected` output. It builds itself in about 13 seconds.
+  - **Bootstrapping:** the compiler that Phase 0 builds and the ones `skeinc` builds differ in one way. `core.skn`'s macros are compiled into each compiler, and the `x#` names in their syntax-quotes are numbered from the gensym counter of the process that compiled them: Phase 0's for the first, `skeinc`'s for the rest. So the first compiler's C output differs from later ones only in those local names. From `skeinc` on, rebuilding is a fixed point: the C of the second rebuild equals the first's. Step 6 bootstraps that way.
+
