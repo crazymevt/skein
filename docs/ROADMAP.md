@@ -31,7 +31,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.11 `skein build` and `skein package` | ✅ |
 | M1.12 Driftrock native | ✅ |
 | M2.1 Phase 1 follow-ups | ✅ |
-| M2.2 Fibers | 🟨 |
+| M2.2 Fibers | ✅ |
 | M2.3 Work-stealing scheduler | ⬜ |
 | M2.4 Dynamic vars natively | ⬜ |
 | M2.5 Evaluating code in native programs | ⬜ |
