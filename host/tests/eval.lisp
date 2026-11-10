@@ -228,7 +228,7 @@ when they are given."
   (evals-to "((fn [^:mutable x] (set! x 5) x) 1)" 5)
   (compile-fails "(let* [x 1] (set! x 2))"
                  "cannot set! the immutable local x; declare it ^:mutable")
-  (compile-fails "(do (def v 1) (set! v 2))" "set! of a var needs a dynamic binding")
+  (compile-fails "(do (def v 1) (set! v 2))" "/v: it isn't ^:dynamic")
   (compile-fails "(set! (f x) 1)" "set! needs a ^:mutable local or a slot like (:name obj)"))
 
 ;;; unwind-protect, block*, return-from*

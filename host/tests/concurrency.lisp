@@ -162,6 +162,26 @@
            (try @(future (error 'local-oops)) (catch local-oops e :found-in-namespace))"
           ":found-in-namespace"))
 
+(test tasks-get-a-copy-of-the-bindings
+  ;; D-076: a task sees the bindings in force where it was spawned; its set! changes only
+  ;; what it, and the tasks it spawns afterwards, see.
+  (evp-is "(def ^:dynamic *x* 1)
+           (binding [*x* 2]
+             [(with-nursery [n]
+                @(spawn n (let [before *x*]
+                            (set! *x* 3)
+                            [before *x* @(future *x*)])))
+              *x*])"
+          "[[2 3 3] 2]")
+  (evp-is "(def ^:dynamic *x* 1)
+           (binding [*x* 2]
+             (let [f (future (sleep 0.05) *x*)]
+               (set! *x* 5)
+               [@f *x*]))"
+          "[2 5]")
+  (evp-is "(def ^:dynamic *x* 1) [@(future *x*) (binding [*x* 2] @(future (binding [*x* 3] *x*)))]"
+          "[1 3]"))
+
 (test worker-threads-do-not-trap-on-nan
   ;; Regression: each worker thread must mask the invalid-operation trap (D-036).
   (evp-is "@(future [(< ##NaN 1.0) (== ##NaN ##NaN)])" "[false false]"))

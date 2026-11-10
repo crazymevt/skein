@@ -236,6 +236,40 @@
 (test lazy-seq-macro-in-core
   (evp-is "(do (defn nats [n] (lazy-seq (cons n (nats (inc n))))) (take 3 (nats 0)))" "(0 1 2)"))
 
+;;; Dynamic vars (DESIGN §4.3, D-076)
+
+(test binding-macro
+  (evp-is "(def ^:dynamic *x* 1) (defn f [] *x*) [(f) (binding [*x* 2] (f)) (f)]" "[1 2 1]")
+  ;; The values are evaluated before any of them is bound.
+  (evp-is "(def ^:dynamic *x* 1) (def ^:dynamic *y* 0) (binding [*x* 2 *y* *x*] [*x* *y*])"
+          "[2 1]")
+  (evp-is "(def ^:dynamic *x* 1) (binding [] *x*)" "1")
+  ;; Nested bindings; set! changes the innermost one.
+  (evp-is "(def ^:dynamic *x* 1)
+           (binding [*x* 2] [(binding [*x* 3] (set! *x* 4) *x*) *x*])"
+          "[4 2]")
+  (evp-is "(def ^:dynamic *x* 1) [(binding [*x* 2] (set! *x* (inc *x*)) *x*) *x*]" "[3 1]")
+  ;; Non-local exits drop the bindings they leave.
+  (evp-is "(def ^:dynamic *x* 1) [(block* b (binding [*x* 2] (return-from* b *x*))) *x*]"
+          "[2 1]")
+  (evp-is "(def ^:dynamic *x* 1)
+           [(try (binding [*x* 2] (error \"e\")) (catch error e *x*)) *x*]"
+          "[1 1]")
+  ;; Ordinary vars are read as before.
+  (evp-is "(def v 1) (def ^:dynamic *x* 2) (binding [*x* 3] [v *x*])" "[1 3]"))
+
+(test binding-errors
+  (compile-fails "(def v 1) (binding [v 2] v)" "binding needs a ^:dynamic var, and v isn't one")
+  (compile-fails "(binding [*x*] 1)" "binding needs a vector of vars and values")
+  (compile-fails "(binding [:k 1] 1)" "binding names vars with symbols, not :k")
+  (compile-fails "(def v 1) (set! v 2)" "it isn't ^:dynamic, and only dynamic vars can be set!")
+  ;; A var that doesn't exist when the binding is compiled is checked when it runs.
+  (fails "(defn g [] (binding [later 1] :ok)) (def later 2) (g)"
+         "binding needs a ^:dynamic var, and ")
+  (fails "(def ^:dynamic *x* 1) (set! *x* 2)" "/*x* outside a binding of it")
+  (fails "(def ^:dynamic *x* 1) (binding [*x* 2] (set! *x* 3)) (set! *x* 4)"
+         "/*x* outside a binding of it"))
+
 ;;; Destructuring (DESIGN §5.4)
 
 (test vector-destructuring

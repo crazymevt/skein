@@ -605,8 +605,16 @@ destructuring pattern gets a fresh local; patterns lists [pattern local] pairs."
                   (fail place "cannot set! the immutable local " nm "; declare it ^:mutable"))
                 (node :set (loc form) :local local :value (analyze value env)))
             (sym-datum place)
-            (do (resolve-global place env)
-                (fail place "set! of a var needs a dynamic binding, which is not supported yet"))
+            ;; (set! *x* v) changes the innermost binding of a ^:dynamic var (D-076).
+            (let [var (resolve-global place env)]
+              (when-not (%var-dynamic? var)
+                (fail place "cannot set! " (%var-qualified-name var)
+                      ": it isn't ^:dynamic, and only dynamic vars can be set!"))
+              (node :call (loc form)
+                    :fn (node :var-ref (loc form) :var (core-var "%set-dynamic!"))
+                    :args [(const (loc place) (symbol (%namespace-name (%var-namespace var))
+                                                      (%var-name var)))
+                           (analyze value env)]))
             (and (list-form? place) (= (count (items place)) 2)
                  (atom-syntax? (first (items place)))
                  (keyword? (:datum (first (items place)))))

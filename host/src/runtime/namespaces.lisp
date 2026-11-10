@@ -155,6 +155,38 @@ While a macro runs, also checks that VAR may be used at expansion time."
         (skein-error 'unbound-var-error location "var ~A is unbound" (var-qualified-name var))
         value)))
 
+;;; Dynamic bindings (DESIGN §4.3, D-076)
+
+(defvar *dynamic-bindings* '()
+  "The dynamic bindings in force: a list of (var . value) cells, innermost first. binding
+pushes cells, set! changes the innermost cell of its var, and a task starts with a copy of
+the cells in force where it was spawned.")
+
+(defun dynamic-var-get (var location)
+  "Return the value of the ^:dynamic var VAR: its innermost binding, else its root value."
+  (let ((cell (assoc var *dynamic-bindings* :test #'eq)))
+    (cond (cell
+           (when *expansion-context* (check-phase var))
+           (cdr cell))
+          (t (var-get var location)))))
+
+(defun copy-dynamic-bindings ()
+  "Return a copy of the bindings in force, one fresh cell per var, for a new task."
+  (let ((seen '()) (copy '()))
+    (dolist (cell *dynamic-bindings* (nreverse copy))
+      (unless (member (car cell) seen :test #'eq)
+        (push (car cell) seen)
+        (push (cons (car cell) (cdr cell)) copy)))))
+
+(defun set-dynamic (var value location)
+  "Set the innermost binding of the ^:dynamic var VAR to VALUE and return VALUE. Signals
+an error, reporting LOCATION, if VAR isn't bound by binding."
+  (let ((cell (assoc var *dynamic-bindings* :test #'eq)))
+    (unless cell
+      (skein-error 'skein-error location "cannot set! ~A outside a binding of it"
+                   (var-qualified-name var)))
+    (setf (cdr cell) value)))
+
 (defun def-var (var value)
   "Set VAR's root value to VALUE and return VAR."
   (setf (var-value var) value)

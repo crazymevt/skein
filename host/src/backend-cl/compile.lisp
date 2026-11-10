@@ -203,7 +203,10 @@ TRUTHY-P (only nil and false are false)."
   (etypecase node
     (const-node `',(const-node-value node))
     (local-ref-node (cl-symbol (local-ref-node-local node)))
-    (var-ref-node `(var-get ',(var-ref-node-var node) ',(node-location node)))
+    (var-ref-node (let ((var (var-ref-node-var node)))
+                    ;; A var that's ^:dynamic now reads its binding (D-076).
+                    `(,(if (skein.runtime:var-dynamic-p var) 'dynamic-var-get 'var-get)
+                      ',var ',(node-location node))))
     (if-node `(if ,(emit-test (if-node-test node))
                   ,(emit (if-node-then node))
                   ,(emit (if-node-else node))))

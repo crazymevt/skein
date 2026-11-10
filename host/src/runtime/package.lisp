@@ -25,6 +25,7 @@
    #:var #:var-p #:var-namespace #:var-name #:var-value #:var-macro-p #:var-dynamic-p
    #:var-private-p #:var-doc #:var-qualified-name
    #:+unbound+ #:intern-var #:find-own-var #:resolve-var #:var-bound-p #:var-get #:def-var
+   #:*dynamic-bindings* #:dynamic-var-get #:copy-dynamic-bindings
    ;; Collections (DESIGN §6.2)
    #:+empty-list+ #:+empty-vector+ #:+empty-map+ #:+empty-set+
    #:pvector-p #:plist-p #:empty-list-p #:array-map-p #:hash-map-p #:hash-set-p #:lazy-seq-p

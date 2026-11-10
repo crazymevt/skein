@@ -34,7 +34,7 @@ All nodes include `location`. "Body" fields hold one node; a multi-form body bec
 | `letfn-node` | `bindings`, `body` | `(letfn* [(f [..] ..)] ...)` | every local is in scope in every function; `bindings` is a list of `(local . fn-node)` |
 | `loop-node` | `bindings`, `body`, `recur-p` | `(loop* [x 0] ...)` | like `let-node`, and a target for `recur` |
 | `recur-node` | `target`, `args` | `(recur ...)` | jump to the innermost `loop-node` or `arity`, rebinding its locals. Always in tail position. For a variadic arity, the last argument is the rest value itself |
-| `set-node` | `local`, `value` | `(set! x v)` | assign a `^:mutable` local |
+| `set-node` | `local`, `value` | `(set! x v)` | assign a `^:mutable` local. `set!` of anything else is a `call-node`: `(set! *x* v)` of a `^:dynamic` var calls `skein.core/%set-dynamic!` with the var's qualified name and `v` (D-076), and `(set! (:slot obj) v)` calls `%set-slot!` |
 | `call-node` | `fn`, `args` | `(f a b)` | evaluate `fn`, then `args` left to right, then call. Functions are called directly; keywords look themselves up in their argument; anything else is an error |
 | `unwind-protect-node` | `body`, `cleanup` | `(unwind-protect body cleanup...)` | run `cleanup` however `body` exits |
 | `block-node` | `tag`, `body` | `(block* tag body...)` | establish a lexical exit point |
@@ -52,7 +52,6 @@ All nodes include `location`. "Body" fields hold one node; a multi-form body bec
 | Form | Milestone |
 |---|---|
 | `%ffi-call` | M0.10 (FFI) |
-| `set!` of a dynamic var binding or an `:unsynchronized` cell | Dynamic binding (M0.5 or later) and `defclass` cells (M0.7) |
 
 The expander reports a compile error with the source location if one of these forms is used before its milestone.
 

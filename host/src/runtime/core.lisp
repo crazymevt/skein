@@ -166,6 +166,50 @@
          (var (and ns (find-own-var ns (sym-name name)))))
     (bool (and var (not (eq (var-value var) +unbound+))))))
 
+(defun resolve-named-var (name namespace-name)
+  "Return the var that the symbol NAME means in the namespace called NAMESPACE-NAME, or
+NIL if there is none."
+  (let ((ns (find-namespace namespace-name)))
+    (and ns
+         (if (sym-namespace name)
+             (let ((target (or (find-alias ns (sym-namespace name))
+                               (find-namespace (sym-namespace name)))))
+               (and target (find-own-var target (sym-name name))))
+             (resolve-var ns (sym-name name))))))
+
+;;; Dynamic bindings (D-076). The binding macro in lib/skein/core.skn uses these.
+
+(defcore "%dynamic-var?" (name namespace-name)
+  ;; For the binding macro: whether the var NAME means is ^:dynamic, or nil when there is
+  ;; no such var yet.
+  (let ((var (resolve-named-var name namespace-name)))
+    (and var (bool (var-dynamic-p var)))))
+
+(defcore "%with-bindings" (names namespace-name values fn)
+  (let ((cells (loop for name in (seq-to-cl names)
+                     for value in (seq-to-cl values)
+                     collect (let ((var (resolve-named-var name namespace-name)))
+                               (cond ((null var)
+                                      (skein-error 'skein-error nil
+                                                   "unable to resolve symbol `~A` in binding"
+                                                   (display-string name)))
+                                     ((not (var-dynamic-p var))
+                                      (skein-error 'skein-error nil
+                                                   "binding needs a ^:dynamic var, and ~A ~
+                                                    isn't one"
+                                                   (var-qualified-name var))))
+                               (cons var value)))))
+    (let ((*dynamic-bindings* (append cells *dynamic-bindings*)))
+      (scall fn))))
+
+(defcore "%set-dynamic!" (name value)
+  ;; (set! *x* v) of a ^:dynamic var; NAME is the var's qualified name.
+  (let* ((ns (find-namespace (sym-namespace name)))
+         (var (and ns (find-own-var ns (sym-name name)))))
+    (unless var
+      (skein-error 'unbound-var-error nil "no var ~A" (display-string name)))
+    (set-dynamic var value nil)))
+
 (defcore "%require" (name alias)
   (let ((ns (require-namespace (sym-string name "a namespace name"))))
     (pushnew ns (namespace-requires *current-namespace*))

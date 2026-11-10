@@ -491,6 +491,25 @@ fields in place."
                     '[~@(map (fn [f] [(first f) (second f)]) fields)])
        nil))
 
+;;; Dynamic vars (DESIGN §4.3, D-076)
+
+(defmacro binding
+  "Run the body with the ^:dynamic vars given new values: (binding [*x* 1 *y* 2] body...).
+The values are evaluated first, then bound for the body and the tasks it spawns, each of
+which gets its own copy. (set! *x* v) changes the innermost binding."
+  [bindings & body]
+  (when-not (and (vector? bindings) (even? (count bindings)))
+    (error "binding needs a vector of vars and values"))
+  (let [ns (%current-namespace-name)
+        names (map first (partition 2 bindings))]
+    (doseq [n names]
+      (when-not (symbol? n)
+        (error (str "binding names vars with symbols, not " (pr-str n))))
+      (when (false? (%dynamic-var? n ns))
+        (error (str "binding needs a ^:dynamic var, and " n " isn't one"))))
+    `(%with-bindings '[~@names] ~ns [~@(map second (partition 2 bindings))]
+       (fn [] ~@body))))
+
 ;;; Concurrency (DESIGN §13). Phase 0 runs tasks on a pool of OS threads.
 
 (defmacro with-nursery

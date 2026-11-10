@@ -22,6 +22,7 @@
 (defcore "%var-qualified-name" (var) (var-qualified-name var))
 (defcore "%var-value" (var) (var-value var))
 (defcore "%var-private?" (var) (bool (var-private-p var)))
+(defcore "%var-dynamic?" (var) (bool (var-dynamic-p var)))
 
 (defcore "%var-macro" (var)
   ;; :syntax for the built-in macros written in CL, true for macros written in Skein,

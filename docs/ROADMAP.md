@@ -311,7 +311,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ### M2.4 Dynamic vars natively
 - `^:dynamic` vars and `binding`, fiber-local and inherited by fibers spawned inside the `binding` (DESIGN §4.3). Phase 0 never had `binding`, so it comes to both (D-076).
 - Steps, in order (D-076):
-  1. Phase 0: `binding`, `set!` of a binding, bindings copied into the tasks spawned inside one, and the errors; host tests.
+  1. ✅ Phase 0: `binding`, `set!` of a binding, bindings copied into the tasks spawned inside one, and the errors; host tests.
   2. Native: binding frames on the condition chain, reads of dynamic vars, `set!`, and the copy a task gets; the C backend compiles them.
   3. A native fixture (bindings, nested and in tasks, non-local exits, `set!`, the errors) prints what `skein run` prints.
 

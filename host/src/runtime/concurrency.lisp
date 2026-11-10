@@ -109,7 +109,9 @@ it. Returns :TIMEOUT instead if DEADLINE (internal time) passes first."
   "Special variables whose values a task takes from the code that spawned it.")
 
 (defun capture-context ()
-  (mapcar (lambda (s) (cons s (symbol-value s))) *inherited-specials*))
+  ;; A task gets a copy of the dynamic bindings, so its set! changes only its own (D-076).
+  (list* (cons '*dynamic-bindings* (copy-dynamic-bindings))
+         (mapcar (lambda (s) (cons s (symbol-value s))) *inherited-specials*)))
 
 (defun make-task (fn &key nursery (scopes '()))
   (%make-task fn scopes nursery (capture-context)))

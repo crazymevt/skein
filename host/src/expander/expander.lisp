@@ -437,9 +437,21 @@ that is a destructuring pattern gets a fresh local; PATTERNS lists (pattern . lo
                               name))
              (make-set-node :location (loc form) :local local :value (analyze value env)))
             ((sym-datum place)
-             (resolve-global place env)
-             (compile-error place "set! of a var needs a dynamic binding, which is not ~
-                                   supported yet"))
+             ;; (set! *x* v) changes the innermost binding of a ^:dynamic var (D-076).
+             (let ((var (resolve-global place env)))
+               (unless (var-dynamic-p var)
+                 (compile-error place "cannot set! ~A: it isn't ^:dynamic, and only ~
+                                       dynamic vars can be set!"
+                                (var-qualified-name var)))
+               (make-call-node :location (loc form)
+                               :fn (make-var-ref-node :location (loc form)
+                                                      :var (core-var "%set-dynamic!"))
+                               :args (list (make-const-node
+                                            :location (loc place)
+                                            :value (intern-sym
+                                                    (var-name var)
+                                                    (namespace-name (var-namespace var))))
+                                           (analyze value env)))))
             ((and (list-form-p place) (= (length (items place)) 2)
                   (eq (syntax-kind (first (items place))) :atom)
                   (kw-p (syntax-datum (first (items place)))))
