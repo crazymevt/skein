@@ -16,7 +16,8 @@ REPL on the terminal and localhost, and Swank (skein.swank) on the port SKEIN_SW
 reloads source files when they change, and runs -main under a \"Stop the program\"
 restart."
   (:require [skein.compiler.reader :as reader]
-            [skein.compiler.eval :as evaluator]))
+            [skein.compiler.eval :as evaluator]
+            [skein.compiler.module :as module]))
 
 (def version
   "Skein's version, as host/skein.asd gives it (keep the two the same)."

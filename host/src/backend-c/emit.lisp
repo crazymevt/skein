@@ -372,6 +372,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%utf8-length" "%utf8-split" "%absolute-path"
     ;; Supervisors (M2.8, D-088)
     "%install-task-runner!"
+    ;; Hot reload (M2.9, D-091)
+    "%load-module" "%evaluated?"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

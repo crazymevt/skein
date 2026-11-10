@@ -311,6 +311,41 @@ fn runAttached(argv: Value, env: Value) Value {
 }
 
 // ---------------------------------------------------------------------------------------
+// Hot reload of compiled code (M2.9, D-091): a module is a shared library compiled from one
+// namespace. Its sk_module_init(count, vars) gets the program's vars that its code uses (in
+// the order the compiler declared them; runtime vars aren't found by name), registers its
+// constants and functions, and runs the namespace's top-level forms, which rebind them.
+
+const ModuleInit = *const fn (count: u32, vars: [*]const Value) callconv(.c) void;
+
+/// Load the module at `path` and run its init function with `vars`, a vector of vars.
+/// Modules are never unloaded: running frames and closures may still use their code.
+fn loadModule(path: Value, vars: Value) Value {
+    if (!string.isString(path)) rt.raise(.type_error, "%load-module needs a path", .{});
+    if (!coll.isVector(vars)) rt.raise(.type_error, "%load-module needs a vector of vars", .{});
+    const n = coll.vectorCount(vars);
+    // Vars are permanent objects, which never move, so this copy needs no root.
+    const vs = alloc.alloc(Value, @max(n, 1)) catch rt.fatal("out of memory", .{});
+    defer alloc.free(vs);
+    for (0..n) |i| {
+        const v = coll.vectorNth(vars, i).?;
+        if (!v.isObjectOf(.@"var")) rt.raise(.type_error, "%load-module needs a vector of vars", .{});
+        vs[i] = v;
+    }
+    const p = alloc.dupeSentinel(u8, string.bytes(path), 0) catch rt.fatal("out of memory", .{});
+    defer alloc.free(p);
+    var why: [512]u8 = undefined;
+    @memset(&why, 0);
+    const handle = platform.loadLibrary(p, &why) orelse
+        rt.raise(.@"error", "cannot load the module {s}: {s}", .{ p, std.mem.sliceTo(&why, 0) });
+    const sym = platform.librarySymbol(handle, "sk_module_init") orelse
+        rt.raise(.@"error", "the module {s} has no sk_module_init", .{p});
+    const init: ModuleInit = @ptrCast(@alignCast(sym));
+    init(@intCast(n), vs.ptr);
+    return Value.true;
+}
+
+// ---------------------------------------------------------------------------------------
 // Swank's framing (M2.7, D-082) counts UTF-8 bytes
 
 /// [the first n bytes of the string, the rest], or nil if it has fewer than n bytes.
@@ -399,6 +434,17 @@ pub const entries = [_]CoreEntry{
     .{ .name = "%tcp-close", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return close(a[0]);
+        }
+    }.f },
+    .{ .name = "%load-module", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            return loadModule(a[0], a[1]);
+        }
+    }.f },
+    // (%evaluated? f): whether the evaluator made the function f (M2.9, D-091).
+    .{ .name = "%evaluated?", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return Value.fromBool(@import("eval/compile.zig").isEvaluated(a[0]));
         }
     }.f },
     .{ .name = "%absolute-path", .min = 1, .max = 1, .impl = struct {

@@ -468,6 +468,12 @@ fn chooseArity(lam: *const Lambda, argc: u32) ?*const Arity {
     return null;
 }
 
+/// True if `f` is a function the evaluator made (not compiled code): hot reload's tests
+/// tell evaluated and compiled definitions apart with it (M2.9, D-091).
+pub fn isEvaluated(f: Value) bool {
+    return f.isObjectOf(.function) and func.codeOf(f) == &lambdaEntry;
+}
+
 /// The code of every interpreted function.
 fn lambdaEntry(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
     const lam: *const Lambda = @ptrFromInt(@as(usize, @intCast(func.capturedOf(self, 0).toFixnum())));

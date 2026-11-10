@@ -322,14 +322,26 @@ makes each current while its code runs (D-078)."
 
 (def ^:private translate-source translate-source*)
 
+(defn- translate-module-info
+  "For a program built with --eval: a call that gives skein.compiler.module what building
+a module needs, module-info's :zig :include :flags :link :cache and :suffix (M2.9, D-091)."
+  [build module-info loc]
+  (let [atom-of (fn [x] {:kind :atom :datum x :loc loc})
+        strings (fn [xs] {:kind :vector :datum (mapv atom-of xs) :loc loc})
+        {:keys [zig include flags link cache suffix]} module-info]
+    (translate-compiled build (syntax-list loc (atom-of 'skein.compiler.module/set-build-info!)
+                                           (atom-of zig) (atom-of include) (strings flags)
+                                           (strings link) (atom-of cache) (atom-of suffix)))))
+
 (defn translate-file
   "The C program for the Skein program at path, with the namespaces it requires and
 skein.core's library in Skein; source-paths are the directories searched for namespaces.
 Its -main, if any, is called with the command-line arguments. Given main-name (a
 project's :main), that function of the program's namespace must exist, and is called
-instead."
-  ([path source-paths] (translate-file path source-paths nil false))
-  ([path source-paths main-name eval?]
+instead. A program built with --eval gets module-info (translate-module-info)."
+  ([path source-paths] (translate-file path source-paths nil false nil))
+  ([path source-paths main-name eval?] (translate-file path source-paths main-name eval? nil))
+  ([path source-paths main-name eval? module-info]
    (reset! files-read [])
    (let [build (make-build source-paths eval?)
          library (or (find-namespace-file build "skein.core.native")
@@ -342,7 +354,8 @@ instead."
        (c/note-eval! (:unit build))
        (swap! (:translated build) conj "skein.swank")
        (translate-source build (or (find-namespace-file build "skein.swank")
-                                   (fail "cannot find skein.swank"))))
+                                   (fail "cannot find skein.swank")))
+       (when module-info (translate-module-info build module-info nil)))
      (let [ns (translate-source build path)
            main (%find-own-var ns (or main-name "-main"))]
        (when (and main-name (nil? main))
@@ -473,8 +486,31 @@ function to call). Returns the executable's path."
                                                 (remove nil? [(namespace-root path)
                                                              (directory-of path) ""]))
                                             [(str home "lib/")])))
-        c-source (translate-file path source-paths main-name (boolean (:eval opts)))
         prefix (build-runtime home target profile)
+        os (target-os (or target (%host-target)))
+        library (runtime-library prefix)
+        c-flags (vec (concat ["-std=c11" "-ffp-contract=off" (:c (get profiles profile))]
+                             (when target ["-target" (zig-target target)])))
+        ;; A program built with --eval loads modules (hot reload, M2.9, D-091): it keeps
+        ;; the whole runtime and exports it for them. Paths are absolute, as the program
+        ;; may run elsewhere; on Windows a module links against the executable's import
+        ;; library.
+        module-info (when (:eval opts)
+                      (let [abs (fn [p] (or (%absolute-path p) p))
+                            implib (str (abs (let [d (directory-of output)]
+                                               (if (= d "") "." d)))
+                                        "/" (stem output) ".lib")]
+                        {:zig (zig)
+                         :include (abs (str prefix "include"))
+                         :flags (if (= os :linux) (conj c-flags "-fPIC") c-flags)
+                         :link (case os
+                                 :macos ["-Wl,-undefined,dynamic_lookup"]
+                                 :windows [implib]
+                                 [])
+                         :implib implib
+                         :cache (str (abs (str home ".skein-cache")) "/modules/")
+                         :suffix (case os :macos ".dylib" :windows ".dll" ".so")}))
+        c-source (translate-file path source-paths main-name (boolean (:eval opts)) module-info)
         ;; The cached C is named after the file and its path, so programs that share a file
         ;; name (every main.skn) keep their own (D-073).
         c-file (if keep-c
@@ -482,11 +518,18 @@ function to call). Returns the executable's path."
                  (str home ".skein-cache/" (stem path) "-" (path-hash path) ".c"))]
     (io/write-file c-file c-source)
     ;; No fused multiply-adds: floating-point results must be exactly Phase 0's.
-    (run-tool (vec (concat [(zig) "cc" "-std=c11" "-ffp-contract=off"
-                            (:c (get profiles profile))]
-                           (when target ["-target" (zig-target target)])
-                           ["-I" (str prefix "include") c-file (runtime-library prefix)
-                            "-o" output]
+    (run-tool (vec (concat [(zig) "cc"] c-flags
+                           ["-I" (str prefix "include") c-file]
+                           (if (:eval opts)
+                             (case os
+                               :macos [(str "-Wl,-force_load," library) "-rdynamic"]
+                               :windows ["-Wl,--whole-archive" library "-Wl,--no-whole-archive"
+                                         "-Wl,--export-all-symbols"
+                                         (str "-Wl,--out-implib," (:implib module-info))]
+                               ["-Wl,--whole-archive" library "-Wl,--no-whole-archive"
+                                "-rdynamic"])
+                             [library])
+                           ["-o" output]
                            (when-not windows ["-lm"])))
               nil)
     output))

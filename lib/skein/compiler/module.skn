@@ -1,0 +1,149 @@
+(ns skein.compiler.module
+  "Hot reload of compiled code (DESIGN §15, M2.9, D-091). A program built with --eval
+compiles a namespace's source file into a module, a shared library, and loads it: the
+module's code is compiled C, like the program's, and its top-level forms rebind the
+namespace's vars, so callers run compiled code from their next call.
+
+The program translates the file itself, with its live model of the program
+(skein.compiler.env) and the C backend, and runs zig cc on the C. skeinc gives it what the
+build needs (set-build-info!): zig, the runtime's headers, the C flags of the program's
+build and, on Windows, the import library of the program's executable, which exports the
+runtime's functions for modules. Modules are never unloaded."
+  (:require [skein.compiler.reader :as reader]
+            [skein.compiler.expander :as expander]
+            [skein.compiler.c :as c]
+            [skein.io :as io]))
+
+(defcondition module-error [error]
+  "A namespace couldn't be compiled into a module and loaded."
+  (message :reader module-error-message)
+  (:report (fn [c] (module-error-message c))))
+
+(defn- fail [& parts] (error module-error :message (apply str parts)))
+
+(def ^:private build-info
+  "What compiling a module needs, which skeinc gives a program built with --eval
+(set-build-info!): {:zig :include :flags :link :cache :suffix}, or nil."
+  (atom nil))
+
+(defn set-build-info!
+  "Called by a program built with --eval at start-up (skeinc emits the call): zig, the
+runtime's include directory, the C flags of the program's build (a vector), the link flags
+of a module (a vector), the directory modules are built in, and their file suffix."
+  [zig include flags link cache suffix]
+  (reset! build-info {:zig zig :include include :flags flags :link link :cache cache
+                      :suffix suffix}))
+
+(defn available?
+  "True if this program can compile modules (it was built with --eval by skeinc)."
+  []
+  (some? @build-info))
+
+;;; ------------------------------------------------------------------------------------
+;;; Translating a namespace's file into a module's C
+
+(defn- form-head
+  "The unqualified name at the head of a list form, or nil."
+  [form]
+  (when (and (= :list (:kind form)) (seq (:datum form)))
+    (let [h (:datum (first (:datum form)))]
+      (when (and (symbol? h) (nil? (namespace h))) (name h)))))
+
+(defn- emit-form!
+  "Emit form, a top-level form of the namespace now current, into unit. The program has
+already evaluated the file (the reload before the module), so nothing runs here: ns forms
+only make their namespace current for the forms after them, and a defmacro's function is
+compiled as a program built with --eval compiles one (D-078)."
+  [unit form]
+  (let [head (form-head form)
+        ns (%current-namespace)]
+    (cond (= head "ns")
+          (%in-ns (:datum (second (:datum form))))
+          (= head "defmacro")
+          (let [expanded (expander/macroexpand form (expander/make-env ns))
+                def-items (:datum (second (:datum expanded)))
+                var (%find-own-var ns (name (:datum (second def-items))))]
+            (c/emit-program-macro unit var (expander/analyze-toplevel (last def-items) ns) ns))
+          :else
+          (let [expanded (expander/macroexpand form (expander/make-env ns))]
+            (if (expander/toplevel-do? expanded)
+              (doseq [sub (rest (:datum expanded))] (emit-form! unit sub))
+              (c/emit-toplevel unit (expander/analyze-toplevel expanded ns) ns))))))
+
+(defn translate
+  "The module for the source file at path, which the program has loaded: {:c text :vars
+vars}, the C text and the vars its init function takes. Translates in the current
+namespace, which the file's ns form changes; the caller restores it."
+  [path]
+  (let [unit (c/make-unit)
+        r (reader/make-reader (io/read-file path)
+                              {:file path :namespace (%current-namespace-name)
+                               :resolve-alias
+                               (fn [alias]
+                                 (when-let [ns (%find-alias (%current-namespace) alias)]
+                                   (%namespace-name ns)))})]
+    (c/note-eval! unit)
+    (loop []
+      (reader/set-reader-namespace! r (%current-namespace-name))
+      (let [form (reader/read-form r false ::eof)]
+        (when-not (= form ::eof)
+          (emit-form! unit form)
+          (recur))))
+    {:c (c/module-text unit path)
+     :vars (mapv (fn [[ns-name nm]]
+                   (let [ns (or (%find-namespace ns-name) (fail "no namespace " ns-name))]
+                     (%runtime-var (%intern-var ns nm))))
+                 (c/module-vars unit))}))
+
+;;; ------------------------------------------------------------------------------------
+;;; Building and loading
+
+(def ^:private builds
+  "How many modules this program has built: each gets a file of its own, since a loaded
+library's file can't be replaced or loaded again."
+  (atom 0))
+
+(def ^:private run-id
+  "A number for this run of the program, so programs sharing the cache don't share files."
+  (rand-int 1000000000))
+
+(defn- file-stem
+  "A file name made of the characters of s that are safe in one."
+  [s]
+  (apply str (map (fn [ch] (if (or (<= 97 (int ch) 122) (<= 65 (int ch) 90)
+                                   (<= 48 (int ch) 57) (= ch \-))
+                             ch
+                             \_))
+                  s)))
+
+(defn build!
+  "Compile the C text of a module, from the namespace ns-name, into a shared library;
+its path."
+  [ns-name text]
+  (let [{:keys [zig include flags link cache suffix]}
+        (or @build-info (fail "this program can't compile modules: build it with --eval"))
+        _ (when-not (%make-directories cache) (fail "cannot make the directory " cache))
+        stem (str cache (file-stem ns-name) "-" run-id "-" (swap! builds inc))
+        c-file (str stem ".c")
+        lib (str stem suffix)
+        _ (io/write-file c-file text)
+        argv (vec (concat [zig "cc"] flags ["-I" include "-shared" c-file "-o" lib] link))
+        result (try (io/run-process argv {})
+                    (catch io/io-error e
+                      (fail "cannot run " zig ": " (condition-message e))))]
+    (when-not (zero? (:exit result))
+      (fail "compiling " ns-name " failed:\n" (:out result) (:err result)))
+    lib))
+
+(defn load-file!
+  "Compile the namespace in the source file at path, which the program has loaded, into a
+module and load it: its vars now hold compiled code. The current namespace is restored."
+  [path]
+  (let [saved (%current-namespace-name)]
+    (try
+      (let [{text :c vars :vars} (translate path)
+            ns-name (%current-namespace-name)]
+        (%in-ns (symbol saved))
+        (%load-module (build! ns-name text) vars)
+        ns-name)
+      (finally (%in-ns (symbol saved))))))

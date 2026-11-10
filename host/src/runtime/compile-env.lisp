@@ -160,7 +160,12 @@ received to that form's metadata (as data), for %syntax-meta.")
                                                      ,name))))))
   (native-only "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen"
                "%tcp-accept" "%tcp-port" "%tcp-close" "%exit" "%main-thread?"
-               "%run-attached" "%utf8-length" "%utf8-split" "%absolute-path"))
+               "%run-attached" "%utf8-length" "%utf8-split" "%absolute-path" "%load-module"))
+
+(defcore "%evaluated?" (f)
+  ;; Phase 0 compiles everything it evaluates (D-091).
+  (declare (ignore f))
+  nil)
 
 (defcore "%install-task-runner!" (f)
   ;; Phase 0's REPL doesn't debug tasks (D-088).

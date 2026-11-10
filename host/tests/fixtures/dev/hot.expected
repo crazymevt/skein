@@ -1,0 +1,7 @@
+can compile modules: true
+loaded: [2 true true 1]
+compiled hotlib [2 false false 2]
+reloaded: [101 true true 3]
+compiled again: [101 false false 4] 6
+error: unable to resolve symbol `no-such-function` at build/examples/hotlib.skn:9:18
+still: [101 false false 7]

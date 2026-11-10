@@ -1,0 +1,36 @@
+(ns hot
+  "Built with --eval and compared with hot.expected (M2.9 step 1, D-091): a namespace
+loaded from its file runs in the evaluator; compiled into a module and loaded, its vars
+hold compiled code, which callers see, and defonce keeps its value. It writes its library
+namespace to build/examples/hotlib.skn (the tests run from the checkout)."
+  (:require [skein.compiler.module :as module]))
+
+(def path "build/examples/hotlib.skn")
+
+(defn source [n]
+  (str "(ns hotlib)\n"
+       "(defonce counter (atom 0))\n"
+       "(defn f\n  \"Adds " n ".\"\n  [x] (+ x " n "))\n"
+       "(defn g [] (swap! counter inc) (f 1))\n"
+       "(defmacro twice [x] `(do ~x ~x))\n"
+       "(defn h [] (twice (swap! counter inc)) @counter)\n"))
+
+(defn state []
+  (eval '[(hotlib/g) (%evaluated? hotlib/f) (%evaluated? hotlib/g) @hotlib/counter]))
+
+(defn -main [& args]
+  (println "can compile modules:" (module/available?))
+  (%write-file path (source 1))
+  (load-file path)
+  (println "loaded:" (state))
+  (println "compiled" (module/load-file! path) (state))
+  ;; An edit: evaluated at once, then compiled.
+  (%write-file path (source 100))
+  (load-file path)
+  (println "reloaded:" (state))
+  (module/load-file! path)
+  (println "compiled again:" (state) (eval '(hotlib/h)))
+  ;; A compile error leaves what was loaded.
+  (%write-file path (str (source 100) "(defn broken [] (no-such-function))\n"))
+  (println "error:" (try (module/load-file! path) (catch error e (condition-message e))))
+  (println "still:" (state)))
