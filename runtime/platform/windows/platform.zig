@@ -300,6 +300,8 @@ fn fiberStart(parameter: ?*anyopaque) callconv(.winapi) void {
 // put back once the fiber's stack is shallow again (_resetstkoflw).
 
 extern fn sk_stack_overflow() callconv(.c) noreturn;
+/// fibers.c: calls sk_stack_overflow from a frame Windows' unwinder can walk (x86_64).
+extern fn sk_stack_overflow_trampoline() callconv(.c) noreturn;
 
 /// Whether this thread runs a fiber now (not its own stack), and whether it overflowed.
 threadlocal var in_fiber = false;
@@ -314,8 +316,10 @@ fn onException(info: *std.os.windows.EXCEPTION_POINTERS) callconv(.winapi) c_lon
     const ctx = info.ContextRecord;
     switch (builtin.cpu.arch) {
         .x86_64 => {
-            ctx.Rsp = (ctx.Rsp & ~@as(u64, 15)) - 8;
-            ctx.Rip = @intFromPtr(&sk_stack_overflow);
+            // As if the code that overflowed had called the trampoline.
+            ctx.Rsp -= 8;
+            @as(*u64, @ptrFromInt(ctx.Rsp)).* = ctx.Rip;
+            ctx.Rip = @intFromPtr(&sk_stack_overflow_trampoline);
         },
         .aarch64 => {
             ctx.Sp &= ~@as(u64, 15);
@@ -353,7 +357,9 @@ pub fn fiberSwitchingIn(ctx: *const FiberContext) void {
 /// when it's first switched to. Windows commits its pages as the fiber touches them.
 pub fn createFiber(ctx: *FiberContext, size: usize, entry: FiberEntry, arg: ?*anyopaque) MemoryError!void {
     ctx.* = .{ .entry = entry, .arg = arg };
-    ctx.handle = CreateFiberEx(pageSize(), size, FIBER_FLAG_FLOAT_SWITCH, fiberStart, ctx) orelse
+    // The stack guarantee comes out of the reservation, so reserve it on top.
+    const reserve_size = size + overflow_guarantee + 2 * pageSize();
+    ctx.handle = CreateFiberEx(pageSize(), reserve_size, FIBER_FLAG_FLOAT_SWITCH, fiberStart, ctx) orelse
         return error.OutOfMemory;
 }
 
