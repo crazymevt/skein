@@ -655,7 +655,8 @@ fn runBlocking(arg: ?*anyopaque) void {
 /// collections may go ahead without this thread (DESIGN §14.3).
 export fn sk_ffi_blocking(f: *const fn (?*anyopaque) callconv(.c) void, arg: ?*anyopaque) void {
     var b: Blocking = .{ .f = f, .arg = arg };
-    gc.blocking(runBlocking, &b);
+    // If it lasts, a spare worker runs fibers meanwhile (M2.3, D-075).
+    @import("sched.zig").blocking(runBlocking, &b);
 }
 
 export fn sk_ffi_now() u64 {
@@ -682,15 +683,53 @@ fn warnCode(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
     return Value.nil;
 }
 
-/// For the C backend's callbacks (defcallback, M1.10 step 3, D-068): call `body` with a
-/// pointer to `frame`, the C call's arguments and result, which body converts. Neither an
-/// error nor any other non-local exit can unwind through C: one is caught or stopped
-/// here, and C gets the zero the frame holds. That warns, naming the callback `name` and
-/// `zero` (none if it's empty), as in Phase 0. The warning is signaled inside a barrier
-/// too, so a handler outside that tries to exit is stopped silently.
-export fn sk_ffi_callback(body: Value, frame: usize, name: [*:0]const u8, zero: [*:0]const u8) void {
+/// For the C backend's callbacks (defcallback, M1.10 step 3, D-068): call the body in
+/// the global `body_slot` with a pointer to `frame`, the C call's arguments and result,
+/// which body converts. Neither an error nor any other non-local exit can unwind through
+/// C: one is caught or stopped here, and C gets the zero the frame holds. That warns,
+/// naming the callback `name` and `zero` (none if it's empty), as in Phase 0. The warning
+/// is signaled inside a barrier too, so a handler outside that tries to exit is stopped
+/// silently.
+///
+/// A thread the runtime doesn't know runs the callback as a temporary fiber on the
+/// scheduler and waits for it (DESIGN §14.3, M2.3), so the callback can wait on channels
+/// and tasks like any fiber. The body is read from its global there, where the collector
+/// keeps it up to date.
+export fn sk_ffi_callback(body_slot: *const Value, frame: usize, name: [*:0]const u8, zero: [*:0]const u8) void {
+    if (!gc.isAttached()) return callbackInFiber(body_slot, frame, name, zero);
     const entry = gc.enterFromC();
     defer gc.leaveToC(entry);
+    runCallback(body_slot.*, frame, name, zero);
+}
+
+const ForeignCall = struct {
+    body_slot: *const Value,
+    frame: usize,
+    name: [*:0]const u8,
+    zero: [*:0]const u8,
+    lock: platform.Mutex = .{},
+    finished: platform.Condition = .{},
+    done: bool = false,
+
+    fn job(arg: ?*anyopaque) void {
+        const c: *ForeignCall = @ptrCast(@alignCast(arg));
+        runCallback(c.body_slot.*, c.frame, c.name, c.zero);
+        c.lock.lock();
+        defer c.lock.unlock();
+        c.done = true;
+        c.finished.broadcast();
+    }
+};
+
+fn callbackInFiber(body_slot: *const Value, frame: usize, name: [*:0]const u8, zero: [*:0]const u8) void {
+    var c: ForeignCall = .{ .body_slot = body_slot, .frame = frame, .name = name, .zero = zero };
+    @import("sched.zig").spawn(ForeignCall.job, &c);
+    c.lock.lock();
+    defer c.lock.unlock();
+    while (!c.done) c.finished.wait(&c.lock);
+}
+
+fn runCallback(body: Value, frame: usize, name: [*:0]const u8, zero: [*:0]const u8) void {
     const cond = @import("cond.zig");
     var types = [_]Value{cond.builtinType(.@"error")};
     const args = [_]Value{makePointer(frame)};

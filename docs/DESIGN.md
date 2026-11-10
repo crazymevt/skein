@@ -651,9 +651,9 @@ Further rules:
 - **Handles:** `(ffi/handle obj)` produces a stable integer token that C can hold and later turn back into the Skein object. Use this instead of raw pointers to GC objects.
 
 ### 14.3 Blocking calls and threads
-- A call marked `^:blocking` releases its worker thread to the scheduler, which starts a replacement if needed. Unmarked calls are assumed to be short. In dev mode, unmarked calls that take longer than 10 ms produce a warning.
+- A call marked `^:blocking` releases its worker thread to the scheduler, which starts a replacement if needed (natively: if the call lasts a millisecond while fibers wait, D-075). Unmarked calls are assumed to be short. In dev mode, unmarked calls that take longer than 10 ms produce a warning.
 - Phase 0 (D-038) has no scheduler to hand the thread to, so `^:blocking` only silences the warning; unmarked calls warn once per function.
-- **Callbacks from foreign threads:** a C thread entering Skein through a callback is attached to the runtime on first entry and runs the callback as a temporary fiber. Phase 1 has no fibers: natively such a thread is attached for each callback and detached when it returns to C, and a callback made during a `^:blocking` call takes its thread out of the blocking state while it runs (D-068).
+- **Callbacks from foreign threads:** a C thread entering Skein through a callback is attached to the runtime on first entry and runs the callback as a temporary fiber. Natively (M2.3, D-075) the callback runs as a fiber on the scheduler while the C thread waits for it; a callback made during a `^:blocking` call runs on that call's thread, which leaves the blocking state while it runs (D-068).
 
 ### 14.4 Binding generator
 

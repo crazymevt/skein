@@ -88,6 +88,11 @@ const Deque = struct {
 const Worker = struct {
     index: usize,
     deque: Deque = .{},
+    /// A spare that has exited leaves its slot for the next one.
+    alive: std.atomic.Value(bool) = .init(false),
+    /// When its fiber went into a blocking call (0: it isn't in one): the monitor starts a
+    /// spare worker if one stays blocked while work waits (DESIGN §14.3).
+    blocked_since: std.atomic.Value(u64) = .init(0),
     /// The fiber it runs now, and since when (for preemption).
     running: std.atomic.Value(?*Fiber) = .init(null),
     slice_start: std.atomic.Value(u64) = .init(0),
@@ -95,7 +100,20 @@ const Worker = struct {
     preempt: std.atomic.Value(bool) = .init(false),
 };
 
-var workers: []Worker = &.{};
+/// Worker slots: the first `base_workers` (one per CPU) always run; spares come and go.
+const max_workers = 256;
+var worker_slots: [max_workers]Worker = undefined;
+var slot_count = std.atomic.Value(usize).init(0);
+var base_workers: usize = 0;
+var spawn_lock: platform.Mutex = .{};
+/// How long a blocked worker waits before a spare takes its place.
+const handoff_ns: u64 = std.time.ns_per_ms;
+
+/// The slots in use (some may be dead spares: check `alive`).
+fn workerSlots() []Worker {
+    return worker_slots[0..slot_count.load(.acquire)];
+}
+
 var injection: Deque = .{};
 
 var start_lock: platform.Mutex = .{};
@@ -118,10 +136,17 @@ noinline fn myWorker() ?*Worker {
     return my_worker_tls;
 }
 
-/// How many workers there are (starting them if needed).
+/// How many workers run fibers normally: one per CPU, at least two.
 pub fn workerCount() usize {
     ensureStarted();
-    return workers.len;
+    return base_workers;
+}
+
+/// How many workers are alive now, spares included (for tests).
+pub fn liveWorkers() usize {
+    var n: usize = 0;
+    for (workerSlots()) |*w| n += @intFromBool(w.alive.load(.acquire));
+    return n;
 }
 
 fn ensureStarted() void {
@@ -129,13 +154,8 @@ fn ensureStarted() void {
     start_lock.lock();
     defer start_lock.unlock();
     if (started.load(.acquire)) return;
-    const n = @max(platform.cpuCount(), 2);
-    workers = alloc.alloc(Worker, n) catch rt.fatal("out of memory (workers)", .{});
-    for (workers, 0..) |*w, i| w.* = .{ .index = i };
-    for (workers) |*w| {
-        if (!platform.spawnThread(workerMain, w, worker_stack_size))
-            rt.fatal("could not start a worker thread", .{});
-    }
+    base_workers = @min(@max(platform.cpuCount(), 2), max_workers / 2);
+    for (0..base_workers) |_| startWorker();
     // As large a stack as the workers': on Linux a thread's stack also holds its
     // thread-local storage, and a small one made pthread_create fail in CI.
     if (!platform.spawnThread(monitorMain, null, worker_stack_size))
@@ -143,21 +163,68 @@ fn ensureStarted() void {
     started.store(true, .release);
 }
 
+/// Start a worker in a free slot (a dead spare's, or a new one).
+fn startWorker() void {
+    spawn_lock.lock();
+    defer spawn_lock.unlock();
+    const w = for (workerSlots()) |*slot| {
+        if (!slot.alive.load(.acquire)) break slot;
+    } else blk: {
+        const i = slot_count.load(.acquire);
+        if (i == max_workers) return;
+        worker_slots[i] = .{ .index = i };
+        slot_count.store(i + 1, .release);
+        break :blk &worker_slots[i];
+    };
+    // A reused slot keeps its (empty) deque: other workers may be looking at it.
+    w.running.store(null, .release);
+    w.blocked_since.store(0, .release);
+    w.preempt.store(false, .release);
+    w.alive.store(true, .release);
+    if (!platform.spawnThread(workerMain, w, worker_stack_size))
+        rt.fatal("could not start a worker thread", .{});
+}
+
+/// How many live workers are running fibers (not stuck in a blocking call).
+fn runningWorkers(now: u64) usize {
+    var n: usize = 0;
+    for (workerSlots()) |*w| {
+        if (!w.alive.load(.acquire)) continue;
+        const since = w.blocked_since.load(.acquire);
+        if (since == 0 or now -| since < handoff_ns) n += 1;
+    }
+    return n;
+}
+
+/// An idle worker leaves if there are more running than the base: a spare whose blocked
+/// worker came back. Returns true if this one should exit.
+fn retireIfSpare(w: *Worker) bool {
+    spawn_lock.lock();
+    defer spawn_lock.unlock();
+    if (runningWorkers(platform.monotonicNanos()) <= base_workers) return false;
+    w.alive.store(false, .release);
+    return true;
+}
+
 extern fn sk_mv_buffer() [*]Value;
 
 fn workerMain(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
     const w: *Worker = @ptrCast(@alignCast(arg));
     _ = gc.attachThread();
-    gc.addRoots(sk_mv_buffer()[0..64]);
+    const mv = sk_mv_buffer()[0..64];
+    gc.addRoots(mv);
     my_worker_tls = w;
     _ = fiber.current();
     while (true) {
         const f = findWork(w) orelse {
-            sleepUntilWork();
+            if (!sleepUntilWork() and retireIfSpare(w)) break;
             continue;
         };
         runFiber(w, f);
     }
+    gc.removeRoots(mv);
+    gc.detachThread();
+    return null;
 }
 
 /// Run `f` until it finishes, yields or parks, then put it where it belongs.
@@ -189,8 +256,9 @@ fn findWork(w: *Worker) ?*Fiber {
     if (w.deque.popBack()) |f| return f;
     if (injection.popFront()) |f| return f;
     // Steal the oldest fiber of another worker, starting after this one.
-    for (1..workers.len) |k| {
-        const other = &workers[(w.index + k) % workers.len];
+    const slots = workerSlots();
+    for (1..slots.len) |k| {
+        const other = &slots[(w.index + k) % slots.len];
         if (other.deque.popFront()) |f| return f;
     }
     return null;
@@ -198,11 +266,11 @@ fn findWork(w: *Worker) ?*Fiber {
 
 fn anyWork() bool {
     if (injection.len() > 0) return true;
-    for (workers) |*w| if (w.deque.len() > 0) return true;
+    for (workerSlots()) |*w| if (w.deque.len() > 0) return true;
     return false;
 }
 
-const Sleep = struct { epoch: u64 };
+const Sleep = struct { epoch: u64, woken: bool = true };
 
 fn sleepBlocking(arg: ?*anyopaque) void {
     const s: *Sleep = @ptrCast(@alignCast(arg));
@@ -212,13 +280,16 @@ fn sleepBlocking(arg: ?*anyopaque) void {
     sleepers += 1;
     idle_wake.timedWait(&idle_lock, idle_ns);
     sleepers -= 1;
+    s.woken = work_epoch.load(.acquire) != s.epoch;
 }
 
 /// Sleep until work is queued (or a while has passed), letting collections go on.
-fn sleepUntilWork() void {
+/// Returns false if it slept the whole while with nothing queued.
+fn sleepUntilWork() bool {
     var s: Sleep = .{ .epoch = work_epoch.load(.acquire) };
-    if (anyWork()) return;
+    if (anyWork()) return true;
     gc.blocking(sleepBlocking, &s);
+    return s.woken;
 }
 
 /// Work was queued: wake one sleeping worker (it steals the rest of the work as needed).
@@ -259,7 +330,10 @@ fn monitorMain(_: ?*anyopaque) callconv(.c) ?*anyopaque {
         monitor_wake.timedWait(&monitor_lock, sleep_ns);
         const now = platform.monotonicNanos();
         next_timer = wait.fireTimers(now);
-        for (workers) |*w| {
+        // A worker stuck in a blocking call while work waits: start a spare.
+        if (anyWork() and runningWorkers(now) < base_workers) startWorker();
+        for (workerSlots()) |*w| {
+            if (!w.alive.load(.acquire) or w.blocked_since.load(.acquire) != 0) continue;
             if (w.running.load(.acquire) == null) continue;
             if (now -| w.slice_start.load(.acquire) < slice_ns) continue;
             if (w.preempt.swap(true, .acq_rel)) continue;
@@ -348,6 +422,16 @@ pub fn wake(f: *Fiber) void {
             .queued, .wake_requested => return,
         }
     }
+}
+
+/// Run `f(arg)`, a call that may block for a while (a ^:blocking C call, a file or a
+/// process), so that collections go on without this thread and, if it lasts, a spare
+/// worker runs fibers meanwhile (DESIGN §14.3). `f` must not touch the heap.
+pub fn blocking(f: *const fn (?*anyopaque) void, arg: ?*anyopaque) void {
+    const w = myWorker();
+    if (w) |me| me.blocked_since.store(platform.monotonicNanos(), .release);
+    gc.blocking(f, arg);
+    if (w) |me| me.blocked_since.store(0, .release);
 }
 
 /// Waits, on a thread that isn't a worker (the main thread, a test), until `done` has

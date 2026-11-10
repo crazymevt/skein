@@ -186,6 +186,11 @@ pub var verify_tables: ?*const fn (*const fn (Value, []const u8) void) void = nu
 
 threadlocal var current: ?*Mutator = null;
 
+/// Whether the calling thread is attached (a thread C started isn't, until it calls in).
+pub fn isAttached() bool {
+    return current != null;
+}
+
 /// This thread's mutator, attaching the thread if needed. Not inlined, so code that
 /// allocates on both sides of a fiber switch finds the right thread's (D-075).
 noinline fn currentMutator() *Mutator {

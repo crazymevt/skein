@@ -71,7 +71,8 @@ uint64_t sk_ffi_now(void);
 void sk_ffi_check_slow(uint64_t start, int *warned, const char *c_name);
 /* Compiled callbacks (defcallback, M1.10, D-068): call body with a pointer to the C call's
  * frame; an error warns, naming the callback and the zero it returns (none if ""). */
-void sk_ffi_callback(sk_value body, uintptr_t frame, const char *name, const char *zero);
+void sk_ffi_callback(const sk_value *body_slot, uintptr_t frame, const char *name,
+                     const char *zero);
 sk_value sk_unbound(const char *name, const char *location);
 
 sk_value sk_add_slow(sk_value a, sk_value b);

@@ -1504,7 +1504,7 @@ namespace is set to a pointer to the C function."
     (line signature " {")
     (line "  struct " code "_frame c = {0"
           (concat-strings (map (fn [i] (str ", a" i)) (range n))) "};")
-    (line "  sk_ffi_callback(" body ", (uintptr_t)&c, " (c-string-literal qualified) ", "
+    (line "  sk_ffi_callback(&" body ", (uintptr_t)&c, " (c-string-literal qualified) ", "
           (c-string-literal (get callback-zeros (:kind rdesc))) ");")
     (when-not void? (line "  return c.r;"))
     (line "}")

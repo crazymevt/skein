@@ -517,3 +517,84 @@ test "interrupting a parked fiber wakes it" {
     s.group.wait();
     try testing.expectEqual(wait.Outcome.notified, s.outcome);
 }
+
+// ---------------------------------------------------------------------------------------
+// Blocking calls and foreign callbacks (M2.3 step 4)
+
+/// Sleep this thread for `ms` milliseconds.
+fn sleepMs(ms: u64) void {
+    var m: platform.Mutex = .{};
+    var c: platform.Condition = .{};
+    const until = platform.monotonicNanos() + ms * std.time.ns_per_ms;
+    m.lock();
+    defer m.unlock();
+    while (platform.monotonicNanos() < until) c.timedWait(&m, until - platform.monotonicNanos());
+}
+
+fn sleepBlocking(arg: ?*anyopaque) void {
+    const ms: *const u64 = @ptrCast(@alignCast(arg));
+    sleepMs(ms.*);
+}
+
+test "a blocking call hands its worker off to a spare, which leaves afterwards" {
+    setup();
+    const Blocker = struct {
+        group: *sched.WaitGroup,
+        fn job(arg: ?*anyopaque) void {
+            const b: *@This() = @ptrCast(@alignCast(arg));
+            const ms: u64 = 150;
+            sched.blocking(sleepBlocking, @constCast(&ms));
+            b.group.done();
+        }
+    };
+    const n = sched.workerCount();
+    var group = sched.WaitGroup.init(2 * n);
+    var blocker: Blocker = .{ .group = &group };
+    const start = platform.monotonicNanos();
+    for (0..2 * n) |_| sched.spawn(Blocker.job, &blocker);
+    group.wait();
+    const took = platform.monotonicNanos() - start;
+    // Without spares the second half would wait for the first: at least 300 ms.
+    try testing.expect(took < 290 * std.time.ns_per_ms);
+    try testing.expect(sched.liveWorkers() > n);
+    // Idle spares leave again.
+    const deadline = platform.monotonicNanos() + 5 * std.time.ns_per_s;
+    while (sched.liveWorkers() > n and platform.monotonicNanos() < deadline) sleepMs(20);
+    try testing.expectEqual(n, sched.liveWorkers());
+}
+
+const ForeignFrame = struct { in_fiber: bool = false, result: i64 = 0 };
+
+extern fn sk_ffi_callback(body_slot: *const Value, frame: usize, name: [*:0]const u8, zero: [*:0]const u8) void;
+extern fn sk_ffi_to_address(v: Value) usize;
+
+fn foreignBody(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
+    _ = self;
+    _ = argc;
+    const frame: *ForeignFrame = @ptrFromInt(sk_ffi_to_address(argv[0]));
+    frame.in_fiber = sched.inFiber();
+    // In a fiber it can yield (or wait on a channel) like any other.
+    for (0..3) |_| sched.yield();
+    frame.result = 42;
+    return Value.nil;
+}
+
+test "a callback from a thread the runtime doesn't know runs as a fiber" {
+    setup();
+    var body: [1]Value = .{func.make(foreignBody, "foreign")};
+    gc.addRoots(&body);
+    defer gc.removeRoots(&body);
+    const Foreign = struct {
+        fn run(slot: *const Value, frame: *ForeignFrame) void {
+            sk_ffi_callback(slot, @intFromPtr(frame), "t/foreign", "0");
+        }
+    };
+    var frames: [4]ForeignFrame = @splat(.{});
+    var threads: [4]std.Thread = undefined;
+    for (&threads, &frames) |*t, *f| t.* = try std.Thread.spawn(.{}, Foreign.run, .{ &body[0], f });
+    for (&threads) |*t| t.join();
+    for (frames) |f| {
+        try testing.expect(f.in_fiber);
+        try testing.expectEqual(@as(i64, 42), f.result);
+    }
+}

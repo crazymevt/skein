@@ -12,6 +12,7 @@ const builtin = @import("builtin");
 const platform = @import("platform");
 const rt = @import("rt.zig");
 const gc = @import("gc.zig");
+const sched = @import("sched.zig");
 const coll = @import("coll.zig");
 const names = @import("names.zig");
 const print = @import("print.zig");
@@ -82,7 +83,7 @@ fn readFile(path: Value) Value {
     const p = copyPath(path);
     defer alloc.free(p);
     var call: ReadCall = .{ .path = p };
-    gc.blocking(readBlocking, &call);
+    sched.blocking(readBlocking, &call);
     const data = call.data orelse return Value.nil;
     defer alloc.free(data);
     return decoded(data) orelse Value.nil;
@@ -103,7 +104,7 @@ fn writeFile(path: Value, text: Value) Value {
     const p = copyPath(path);
     defer alloc.free(p);
     var call: WriteCall = .{ .path = p, .text = t };
-    gc.blocking(writeBlocking, &call);
+    sched.blocking(writeBlocking, &call);
     return Value.fromBool(call.ok);
 }
 
@@ -120,7 +121,7 @@ fn fileExists(path: Value) Value {
     const p = copyPath(path);
     defer alloc.free(p);
     var call: ExistsCall = .{ .path = p };
-    gc.blocking(existsBlocking, &call);
+    sched.blocking(existsBlocking, &call);
     return Value.fromBool(call.exists);
 }
 
@@ -154,7 +155,7 @@ fn pathCall(f: *const fn (?*anyopaque) void, a: Value, b: ?Value) Value {
     const pb = if (b) |v| copyPath(v) else "";
     defer if (b != null) alloc.free(pb);
     var call: PathCall = .{ .a = pa, .b = pb };
-    gc.blocking(f, &call);
+    sched.blocking(f, &call);
     return Value.fromBool(call.ok);
 }
 
@@ -190,7 +191,7 @@ fn listDirectory(path: Value) Value {
         for (call.names.items) |n| alloc.free(n);
         call.names.deinit(alloc);
     }
-    gc.blocking(listBlocking, &call);
+    sched.blocking(listBlocking, &call);
     if (!call.ok) return Value.nil;
     std.mem.sort([]u8, call.names.items, {}, lessThan);
     var out = coll.vectorOf(&.{});
@@ -250,7 +251,7 @@ fn runProcess(argv: Value, dir: Value) Value {
     const d: ?[]u8 = if (dir == Value.nil) null else copyPath(dir);
     defer if (d) |x| alloc.free(x);
     var call: RunCall = .{ .argv = args.items, .dir = d };
-    gc.blocking(runBlocking, &call);
+    sched.blocking(runBlocking, &call);
     const r = call.result orelse return Value.nil;
     defer alloc.free(r.stdout);
     defer alloc.free(r.stderr);
