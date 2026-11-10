@@ -42,6 +42,18 @@ pub const Frame = extern struct {
     b: ?[*]const Value,
     c: ?[*]const Value,
     target: ?*Frame,
+    /// The top of the shadow stack when the frame was pushed, which an unwind to it
+    /// restores.
+    shadow: ?*Shadow,
+};
+
+/// A Skein function's entry on the shadow stack, which backtraces read (M2.6, D-081):
+/// programs built with --eval push one per call of a compiled function, and the
+/// evaluator one per call of an interpreted function. It lives in the caller's C frame.
+pub const Shadow = extern struct {
+    prev: ?*Shadow,
+    name: [*:0]const u8,
+    loc: [*:0]const u8,
 };
 
 /// While a handler runs, the frames from `from` (the top of the chain when the condition
@@ -50,6 +62,7 @@ const Skip = struct { from: ?*Frame, to: ?*Frame, next: ?*Skip };
 
 threadlocal var top_tls: ?*Frame = null;
 threadlocal var skips_tls: ?*Skip = null;
+threadlocal var shadow_tls: ?*Shadow = null;
 
 // The chain and the skips are reached through functions that aren't inlined: code here
 // calls handlers and restarts, which can switch fibers, and a fiber can continue on
@@ -66,6 +79,12 @@ noinline fn getSkips() ?*Skip {
 noinline fn setSkips(s: ?*Skip) void {
     skips_tls = s;
 }
+noinline fn getShadow() ?*Shadow {
+    return shadow_tls;
+}
+noinline fn setShadow(s: ?*Shadow) void {
+    shadow_tls = s;
+}
 threadlocal var next_serial: u64 = 0;
 
 /// Each thread numbers frames in a range of its own, so serials stay unique when fibers
@@ -80,15 +99,35 @@ noinline fn nextSerial() u64 {
 
 /// The running fiber's chain of frames and skipped handler clusters, which a fiber switch
 /// saves and restores (M2.2, D-074).
-pub const FiberState = struct { top: ?*Frame = null, skips: ?*anyopaque = null };
+pub const FiberState = struct { top: ?*Frame = null, skips: ?*anyopaque = null, shadow: ?*Shadow = null };
 
 pub fn saveFiberState() FiberState {
-    return .{ .top = getTop(), .skips = getSkips() };
+    return .{ .top = getTop(), .skips = getSkips(), .shadow = getShadow() };
 }
 
 pub fn restoreFiberState(s: FiberState) void {
     setTop(s.top);
     setSkips(@ptrCast(@alignCast(s.skips)));
+    setShadow(s.shadow);
+}
+
+pub fn pushShadow(s: *Shadow, name: [*:0]const u8, loc: [*:0]const u8) void {
+    s.* = .{ .prev = getShadow(), .name = name, .loc = loc };
+    setShadow(s);
+}
+
+pub fn popShadow(s: *Shadow) void {
+    setShadow(s.prev);
+}
+
+/// [[name location]...] for the Skein functions on this fiber's stack, innermost first.
+pub fn backtrace() Value {
+    var out = coll.vectorOf(&.{});
+    var s = getShadow();
+    while (s) |x| : (s = x.prev) {
+        out = coll.vectorConj(out, coll.vectorOf(&.{ string.make(std.mem.span(x.name)), string.make(std.mem.span(x.loc)) }));
+    }
+    return out;
 }
 
 extern fn sk_jump(f: *Frame) noreturn;
@@ -111,6 +150,7 @@ fn push(f: *Frame, kind: Kind) void {
         .b = null,
         .c = null,
         .target = null,
+        .shadow = getShadow(),
     };
     setTop(f);
 }
@@ -158,6 +198,7 @@ pub fn unwindTo(target: *Frame, v: Value) noreturn {
         if (f == target) {
             f.value = v;
             setSkips(skipsOf(f));
+            setShadow(f.shadow);
             sk_jump(f);
         }
         setTop(f.prev);
@@ -165,6 +206,7 @@ pub fn unwindTo(target: *Frame, v: Value) noreturn {
             f.target = target;
             f.value = v;
             setSkips(skipsOf(f));
+            setShadow(f.shadow);
             sk_jump(f);
         }
     }
@@ -592,9 +634,27 @@ pub fn reportWarning(c: Value) void {
     platform.writeStderr(out.items);
 }
 
+/// [the debugger]: a function that `unhandled` calls first, in the failing fiber, if a
+/// program installed one (skein.dev, M2.6, D-081). It returns only if it doesn't handle
+/// the error.
+var debugger: [1]Value = .{Value.nil};
+var debugger_ready = false;
+
+pub fn installDebugger(f: Value) void {
+    if (!debugger_ready) {
+        gc.addRoots(&debugger);
+        debugger_ready = true;
+    }
+    debugger[0] = f;
+}
+
 /// What `skein run` prints for an unhandled error: the message and the restarts that are
-/// active. The program then exits with status 1.
+/// active. The program then exits with status 1. An installed debugger runs first.
 fn unhandled(c: Value) noreturn {
+    if (debugger[0] != Value.nil) {
+        const args = [_]Value{c};
+        _ = func.call(debugger[0], 1, &args);
+    }
     var out: std.ArrayList(u8) = .empty;
     print.put(&out, "error: ");
     writeReport(c, &out);
@@ -778,6 +838,14 @@ pub fn write(v: Value, out: *std.ArrayList(u8)) void {
 
 // ---------------------------------------------------------------------------------------
 // The C interface
+
+export fn sk_shadow_push(s: *Shadow, name: [*:0]const u8, loc: [*:0]const u8) void {
+    pushShadow(s, name, loc);
+}
+
+export fn sk_shadow_pop(s: *Shadow) void {
+    popShadow(s);
+}
 
 export fn sk_frame_push(f: *Frame, kind: u32) void {
     push(f, @enumFromInt(kind));

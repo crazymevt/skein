@@ -135,6 +135,23 @@ received to that form's metadata (as data), for %syntax-meta.")
   ;; Natively the closure compiler runs lowered code (D-079); Phase 0 compiles to CL.
   (declare (ignore code))
   (skein-error 'skein-error nil "%eval-run is native only"))
+(defcore "%install-debugger!" (f)
+  ;; Phase 0's REPL has its own debugger (repl/repl.lisp).
+  (declare (ignore f))
+  nil)
+(defcore "%backtrace" () (vector-from-list '()))
+
+;;; The REPL and skein dev natively (M2.6, D-081) use these; Phase 0's REPL is in CL
+;;; (repl/repl.lisp), so here they only say so.
+(macrolet ((native-only (&rest names)
+             `(progn ,@(loop for name in names
+                             collect `(defcore ,name (&rest args)
+                                        (declare (ignore args))
+                                        (skein-error 'skein-error nil "~A is native only"
+                                                     ,name))))))
+  (native-only "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen"
+               "%tcp-accept" "%tcp-port" "%tcp-close"))
+
 (defcore "%install-evaluator!" (hooks)
   ;; Phase 0 evaluates code itself (backend-cl/driver.lisp).
   (declare (ignore hooks))

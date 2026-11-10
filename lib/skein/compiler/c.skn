@@ -682,7 +682,11 @@ is the Lisp backend's list."
     ;; Evaluating code (M2.5, D-078; runtime/src/evaluate.zig)
     "eval" "load-file" "reload" "macroexpand-1" "macroexpand" "macroexpand-all"
     "%install-evaluator!" "%eval-registry" "%runtime-var-value" "%set-runtime-var-value!"
-    "%make-runtime-var" "%set-runtime-var-dynamic!" "%eval-run"
+    "%make-runtime-var" "%set-runtime-var-dynamic!" "%eval-run" "%install-debugger!"
+    "%backtrace"
+    ;; The REPL and skein dev (M2.6, D-081; runtime/src/devio.zig)
+    "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen" "%tcp-accept" "%tcp-port"
+    "%tcp-close"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
@@ -918,17 +922,30 @@ it captured]. A function that captures nothing is made once, at startup."
     (doseq [[i l] (map-indexed vector captured)]
       (set-local! fst l (str "SK_CAPTURED(self, " i ")"))
       (swap! (:ctx fst) update :captured conj (id-of l)))
-    (swap! out conj (str "static sk_value " code
-                         "(sk_value self, uint32_t argc, const sk_value *argv) {\n"))
-    (stmt fst "(void)self; (void)argv;")
-    (doseq [arity (:arities node)] (emit-arity fst arity))
-    (stmt fst "return sk_arity_error(self, argc, " (location-literal node) ");")
-    (swap! out conj "}\n")
-    (swap! (:unit st) (fn [u] (-> u
-                                  (update :prototypes conj
-                                          (str "static sk_value " code "(sk_value self, "
-                                               "uint32_t argc, const sk_value *argv);"))
-                                  (update :functions conj (concat-strings @out)))))
+    ;; In a program built with --eval, the function's code is a wrapper that records the
+    ;; call on the shadow stack, which backtraces read (D-081), around its body.
+    (let [shadow (:eval @(:unit st))
+          body (if shadow (str code "_body") code)
+          signature "(sk_value self, uint32_t argc, const sk_value *argv)"]
+      (swap! out conj (str "static sk_value " body signature " {\n"))
+      (stmt fst "(void)self; (void)argv;")
+      (doseq [arity (:arities node)] (emit-arity fst arity))
+      (stmt fst "return sk_arity_error(self, argc, " (location-literal node) ");")
+      (swap! out conj "}\n")
+      (when shadow
+        (swap! out conj (str "static sk_value " code signature " {\n"
+                             "    sk_shadow_frame shadow;\n"
+                             "    sk_shadow_push(&shadow, " (c-string-literal (str display)) ", "
+                             (location-literal node) ");\n"
+                             "    sk_value r = " body "(self, argc, argv);\n"
+                             "    sk_shadow_pop(&shadow);\n"
+                             "    return r;\n}\n")))
+      (swap! (:unit st) (fn [u] (-> u
+                                    (update :prototypes into
+                                            (map (fn [nm] (str "static sk_value " nm signature
+                                                               ";"))
+                                                 (distinct [body code])))
+                                    (update :functions conj (concat-strings @out))))))
     (if (empty? captured)
       (let [fobj (fresh st "fobj")]
         (swap! (:unit st) update :fn-objects conj [fobj code display])

@@ -374,6 +374,8 @@ const Lambda = struct {
     name: [*:0]const u8,
     loc: [*:0]const u8,
     arities: []Arity,
+    /// A function of the program, which backtraces show (not a top-level form's).
+    shown: bool,
 };
 
 const Ref = union(enum) { slot: u32, capt: u32, self };
@@ -409,7 +411,7 @@ fn compileLambda(ctx: *Context, m: Value) *Lambda {
         };
         if (a.slots > max_slots) rt.raise(.unsupported_operation_error, "a function with more than {d} locals can't be evaluated", .{max_slots});
     }
-    lam.* = .{ .name = cString(field(m, "name")), .loc = cString(field(m, "loc")), .arities = out };
+    lam.* = .{ .name = cString(field(m, "name")), .loc = cString(field(m, "loc")), .arities = out, .shown = !field(m, "toplevel").isTruthy() };
     return lam;
 }
 
@@ -470,12 +472,21 @@ fn chooseArity(lam: *const Lambda, argc: u32) ?*const Arity {
 fn lambdaEntry(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
     const lam: *const Lambda = @ptrFromInt(@as(usize, @intCast(func.capturedOf(self, 0).toFixnum())));
     const a = chooseArity(lam, argc) orelse return sk_arity_error(self, argc, lam.loc);
+    // Backtraces show the call (an unwind past it restores the shadow stack).
+    var shadow: cond.Shadow = undefined;
+    if (lam.shown) cond.pushShadow(&shadow, lam.name, lam.loc);
     // The frame, on this stack, in the smallest size that holds the arity's locals; each
     // size has its own function, so a call reserves only that much stack.
-    if (a.slots <= 8) return @call(.never_inline, withSlots(8), .{ a, self, argc, argv });
-    if (a.slots <= 32) return @call(.never_inline, withSlots(32), .{ a, self, argc, argv });
-    if (a.slots <= 128) return @call(.never_inline, withSlots(128), .{ a, self, argc, argv });
-    return @call(.never_inline, withSlots(max_slots), .{ a, self, argc, argv });
+    const r = if (a.slots <= 8)
+        @call(.never_inline, withSlots(8), .{ a, self, argc, argv })
+    else if (a.slots <= 32)
+        @call(.never_inline, withSlots(32), .{ a, self, argc, argv })
+    else if (a.slots <= 128)
+        @call(.never_inline, withSlots(128), .{ a, self, argc, argv })
+    else
+        @call(.never_inline, withSlots(max_slots), .{ a, self, argc, argv });
+    if (lam.shown) cond.popShadow(&shadow);
+    return r;
 }
 
 fn withSlots(comptime size: usize) fn (*const Arity, Value, u32, [*]const Value) Value {

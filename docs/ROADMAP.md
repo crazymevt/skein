@@ -333,7 +333,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - The REPL on the terminal and on a localhost socket, the file watcher and the debugger (an unhandled error suspends its fiber; restarts and a backtrace), with Phase 0's behavior (D-039).
 - `./skein run`, `dev` and `repl` run on the native runtime; SBCL only bootstraps, and runs `./skein host ...` as a reference.
 - Steps, in order (D-081):
-  1. The runtime: a localhost TCP server, file modification dates, reading the terminal without blocking a worker, an unhandled error calling an installed debugger in its fiber, and backtraces (compiled functions' names and locations in `--eval` builds; interpreted frames).
+  1. ✅ The runtime: a localhost TCP server, file modification dates, reading the terminal without blocking a worker, an unhandled error calling an installed debugger in its fiber, and backtraces (compiled functions' names and locations in `--eval` builds; interpreted frames).
   2. The REPL (`skein.dev`) natively, with Phase 0's behavior: prompts, `*1` `*2` `*3` `*e`, `:quit`, read errors, the debugger (numbered restarts, `:bt`, nested levels); `skein repl`.
   3. `skein dev` natively: the server on `localhost:5555`, the file watcher, an error in the program's fiber suspended and debugged from an attached REPL, output that doesn't interleave mid-line.
   4. The command line: `./skein run`, `dev`, `repl`, `build` and `package` natively through skeinc (programs built with `--eval`, cached by their sources), `./skein host ...` on SBCL; the bootstrap check's references from `skein host run`; M0.11's exit test natively.

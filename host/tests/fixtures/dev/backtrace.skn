@@ -1,0 +1,33 @@
+(ns backtrace)
+
+;; Built with --eval and compared with backtrace.expected (M2.6 step 1, D-081): the
+;; shadow stack that backtraces read, and the debugger an unhandled error calls. Phase 0
+;; has neither (its REPL uses SBCL's), so this has no `skein run` reference.
+
+(def shown #{"inner" "middle" "outer" "thrower" "evaluated"})
+(defn inner [] (filterv shown (mapv first (%backtrace))))
+(defn middle [] (inner))
+(defn outer [] (middle))
+(prn (outer))
+
+;; Functions that an unwind leaves are gone from it.
+(defn thrower [] (middle) (error "from thrower"))
+(prn (try (thrower) (catch error e (outer))))
+(prn (block* b (outer) ((fn [] (return-from* b (inner))))))
+
+;; Evaluated functions are on it too.
+(eval '(defn evaluated [] (backtrace/middle)))
+(prn (eval '(evaluated)))
+
+;; Each location is where the function is defined.
+(defn where [] (second (first (%backtrace))))
+(prn (where))
+
+;; An error that no handler handles calls the installed debugger, in its fiber, which can
+;; invoke a restart.
+(%install-debugger! (fn [c]
+                      (println "debugger:" (condition-message c)
+                               (filterv shown (mapv first (%backtrace))))
+                      (invoke-restart 'skip)))
+(prn (restart-case (thrower) (skip [] :skipped)))
+(prn @(future (restart-case (outer) (skip [] :unused))))

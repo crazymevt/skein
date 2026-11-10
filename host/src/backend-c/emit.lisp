@@ -363,7 +363,11 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     ;; Evaluating code (M2.5, D-078; runtime/src/evaluate.zig)
     "eval" "load-file" "reload" "macroexpand-1" "macroexpand" "macroexpand-all"
     "%install-evaluator!" "%eval-registry" "%runtime-var-value" "%set-runtime-var-value!"
-    "%make-runtime-var" "%set-runtime-var-dynamic!" "%eval-run"
+    "%make-runtime-var" "%set-runtime-var-dynamic!" "%eval-run" "%install-debugger!"
+    "%backtrace"
+    ;; The REPL and skein dev (M2.6, D-081; runtime/src/devio.zig)
+    "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen" "%tcp-accept" "%tcp-port"
+    "%tcp-close"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

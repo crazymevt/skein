@@ -144,8 +144,19 @@ typedef struct sk_frame {
     const sk_value *b;        /* handler or restart functions */
     const sk_value *c;        /* restart reports */
     struct sk_frame *target;  /* unwind-protect: where the interrupted unwind is going */
+    void *shadow;             /* the shadow stack's top when pushed, restored by an unwind */
     jmp_buf jb;
 } sk_frame;
+
+/* The shadow stack (M2.6, D-081): a program built with --eval pushes an entry for each
+ * call of a compiled function, which backtraces read. */
+typedef struct sk_shadow_frame {
+    struct sk_shadow_frame *prev;
+    const char *name;
+    const char *location;
+} sk_shadow_frame;
+void sk_shadow_push(sk_shadow_frame *s, const char *name, const char *location);
+void sk_shadow_pop(sk_shadow_frame *s);
 
 void sk_frame_push(sk_frame *f, uint32_t kind);
 void sk_frame_push_handlers(sk_frame *f, uint32_t count, sk_value *types, const sk_value *fns);

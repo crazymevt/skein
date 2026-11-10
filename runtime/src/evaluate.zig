@@ -124,6 +124,21 @@ pub const entries = [_]Entry{
     hookEntry("macroexpand-1"),
     hookEntry("macroexpand"),
     hookEntry("macroexpand-all"),
+    // (%install-debugger! f): f is called with an error that no handler handled, in its
+    // fiber, before the program reports it and exits (D-081).
+    .{ .name = "%install-debugger!", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            @import("cond.zig").installDebugger(a[0]);
+            return Value.nil;
+        }
+    }.f },
+    // [[name location]...]: the Skein functions on this fiber's stack, innermost first
+    // (compiled ones only in --eval builds).
+    .{ .name = "%backtrace", .min = 0, .max = 0, .impl = struct {
+        fn f(_: Args) Value {
+            return @import("cond.zig").backtrace();
+        }
+    }.f },
     .{ .name = "%install-evaluator!", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return install(a[0]);

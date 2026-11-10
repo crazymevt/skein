@@ -1,0 +1,8 @@
+["inner" "middle" "outer"]
+["inner" "middle" "outer"]
+["inner"]
+["inner" "middle" "evaluated"]
+"host/tests/fixtures/dev/backtrace.skn:23:1"
+debugger: from thrower [thrower]
+:skipped
+["inner" "middle" "outer"]

@@ -557,7 +557,7 @@ and the targets a loop's recur rebinds."
   (let [c (make-context (make-fn-context) (captures node))
         _ (infer-locals! c node)
         body (lower node c)]
-    {:name "toplevel" :loc (loc-string node) :captures []
+    {:name "toplevel" :toplevel true :loc (loc-string node) :captures []
      :arities [{:params 0 :rest false :slots @(:slots c) :boxes [] :unbox [] :loc ""
                 :body body}]}))
 
