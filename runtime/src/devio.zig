@@ -43,6 +43,26 @@ fn fileMtime(path: Value) Value {
     return Value.fromFixnum(@intCast(t));
 }
 
+const RealCall = struct { path: []const u8, out: ?[:0]u8 = null };
+
+fn realPathBlocking(arg: ?*anyopaque) void {
+    const c: *RealCall = @ptrCast(@alignCast(arg));
+    c.out = std.Io.Dir.cwd().realPathFileAlloc(io.stdIo(), c.path, alloc) catch null;
+}
+
+/// The absolute path of an existing file (relative paths are from the current directory),
+/// or nil: Swank sends Emacs absolute paths (M2.7, D-086).
+fn absolutePath(path: Value) Value {
+    if (!string.isString(path)) rt.raise(.type_error, "%absolute-path needs a path", .{});
+    const p = alloc.dupe(u8, string.bytes(path)) catch rt.fatal("out of memory", .{});
+    defer alloc.free(p);
+    var call: RealCall = .{ .path = p };
+    io.pathBlocking(realPathBlocking, &call);
+    const out = call.out orelse return Value.nil;
+    defer alloc.free(out);
+    return string.make(out);
+}
+
 // ---------------------------------------------------------------------------------------
 // Streams: the terminal and TCP connections
 
@@ -379,6 +399,11 @@ pub const entries = [_]CoreEntry{
     .{ .name = "%tcp-close", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return close(a[0]);
+        }
+    }.f },
+    .{ .name = "%absolute-path", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return absolutePath(a[0]);
         }
     }.f },
     // (%utf8-length s): the number of bytes of the string in UTF-8.

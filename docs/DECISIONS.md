@@ -1158,3 +1158,16 @@ Date: 2026-11-10 · Status: Accepted
 - **Alternatives:** next, after the Swank server; at the end of Phase 2; or in Phase 3, beside the package registry.
 - **Consequences:** Phase 2 has twelve milestones. Libraries such as the SDL3 bindings can later move to repositories of their own.
 
+## D-086: Completion, argument lists, documentation and the inspector for SLIME
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.7 step 3 (D-082). SLIME asks for completions, the argument list of the call at the cursor (autodoc), documentation, definitions (`M-.`) and the inspector. `skein.compiler.env`'s model of a program kept each var's flags and, for evaluated code, its docstring, but no argument lists or locations, and compiled code's vars came from the start-up registry with flags only.
+- **Decision:**
+  - **What a var records:** the expander's `def` records a var's argument lists, as text like `"([x] [x y])"` read from a `(fn ...)` init (without a macro's `&form` and `&env`), and the location of its definition (`%set-var-info!`, `%var-info`). An `--eval` build's registry carries each namespace's docstrings, argument lists and locations (a `:vars` entry in its namespace info), so compiled code has them too. A skein.core function written in Skein has them on its skein.core.native var; the runtime's own functions, written in Zig, have none.
+  - **Completion** offers the names a namespace sees (its own vars, referred ones, skein.core's), `alias/name` and `namespace/name`, and the names of aliases and namespaces, matching the prefix (`simple-completions`, `completions`; `fuzzy-completions` answers with the same prefix matches).
+  - **Autodoc** finds the innermost call around SLIME's cursor marker, resolves its operator in the buffer's namespace, picks the parameter vector that fits the argument count and marks the parameter at the cursor (`===> x <===`). Special forms and built-in macros have none.
+  - **Documentation** (`describe-symbol`, `describe-function`, `documentation-symbol`) shows the qualified name, argument lists, docstring and location; `apropos-list-for-emacs` searches the public vars; `find-definitions-for-emacs` gives a definition's location. Locations go to Emacs as absolute paths (`%absolute-path`), as do SLDB's frame locations.
+  - **The inspector** shows a value's class and then: a map's entries, a collection's items (the first 1,000; a lazy seq isn't counted), an atom's value, a condition's message and type, an object's slots, or the printed value. Each connection keeps a history that `inspector-pop` and `inspector-next` move through. Collections inside a view are described briefly (`#<vector of 120 items>`, `#<lazy seq>`) rather than printed.
+  - **Errors in a request itself** (`no part 9`, `no frame 3`) are `swank-error`s, which answer `(:abort message)` without opening SLDB, as read and compile errors do (D-084).
+- **Alternatives:** argument lists as metadata on the def's name (only `defn` and `defmacro` would give them); asking the runtime for function parameters (compiled functions don't keep names).
+- **Consequences:** the registry of an `--eval` build is larger by its docstrings. The inspector has no actions yet, and printing a small collection that holds an infinite lazy seq doesn't end.
+

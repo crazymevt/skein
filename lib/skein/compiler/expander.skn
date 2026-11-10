@@ -424,6 +424,31 @@ optimize declaration wraps the body in a :locally node."
   (fn [form env tail?]
     (analyze-seq (rest (items form)) env tail? (loc form))))
 
+(defn- fn-arglists
+  "If init is a (fn ...) form, its parameter vectors as text, like \"([x] [x y])\",
+without a macro's &form and &env; else nil."
+  [init]
+  (when (and init (list-form? init) (seq (items init))
+             (= "fn" (plain-name (first (items init)))))
+    (let [parts (rest (items init))
+          parts (if (and (seq parts) (sym-datum (first parts))) (rest parts) parts)
+          vectors (if (and (seq parts) (vector-form? (first parts)))
+                    [(first parts)]
+                    (keep (fn [clause]
+                            (when (and (list-form? clause) (seq (items clause))
+                                       (vector-form? (first (items clause))))
+                              (first (items clause))))
+                          parts))
+          shown (map (fn [v]
+                       (let [ps (items v)
+                             ps (if (and (>= (count ps) 2)
+                                         (= "&form" (plain-name (first ps))))
+                                  (drop 2 ps)
+                                  ps)]
+                         (str "[" (apply str (interpose " " (map show ps))) "]")))
+                     vectors)]
+      (when (seq shown) (str "(" (apply str (interpose " " shown)) ")")))))
+
 (defspecial "def"
   (fn [form env tail?]
     (check-arg-count form 1 3)
@@ -445,6 +470,8 @@ optimize declaration wraps the body in a :locally node."
             init (cond three? (nth args 2) init? doc :else nil)]
         (%set-var-flags! var (meta-flag? name-form "dynamic") (meta-flag? name-form "private")
                          (if three? (:datum doc) (meta-string name-form "doc")))
+        ;; For documentation and argument lists in the REPL and SLIME (D-086).
+        (%set-var-info! var (fn-arglists init) (reader/format-location (loc form)))
         (node :def (loc form) :var var :init (when init (analyze init env)))))))
 
 ;;; fn

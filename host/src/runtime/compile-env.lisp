@@ -32,6 +32,15 @@
           (m t)
           (t nil))))
 
+(defcore "%set-var-info!" (var arglists location)
+  ;; Natively the model keeps these for documentation (D-086); Phase 0's REPL has its own.
+  (declare (ignore arglists location))
+  var)
+
+(defcore "%var-info" (var)
+  (declare (ignore var))
+  nil)
+
 (defcore "%set-var-flags!" (var dynamic private doc)
   ;; What def does when it is expanded: the var is no longer a macro, and its dynamic and
   ;; private flags and docstring come from the def form.
@@ -151,7 +160,7 @@ received to that form's metadata (as data), for %syntax-meta.")
                                                      ,name))))))
   (native-only "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen"
                "%tcp-accept" "%tcp-port" "%tcp-close" "%exit" "%main-thread?"
-               "%run-attached" "%utf8-length" "%utf8-split"))
+               "%run-attached" "%utf8-length" "%utf8-split" "%absolute-path"))
 
 (defcore "%set-output-var!" (var)
   ;; Phase 0's REPL binds *standard-output* instead.

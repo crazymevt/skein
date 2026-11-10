@@ -212,7 +212,8 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
     (is (swank-has (swank-request s "(swank:backtrace 1 3)" "\"serve\"" "1" 2)
                    "(:return (:ok ((1 \"outer\") (2 \"safe\"))) 2)"))
     (is (swank-has (swank-request s "(swank:frame-source-location 0)" "\"serve\"" "1" 3)
-                   "(:return (:ok (:location (:file \"serve.skn\") (:line 3 1) nil)) 3)"))
+                   ;; An absolute path, which Emacs needs.
+                   "(:return (:ok (:location (:file \"" "serve.skn\") (:line 3 1) nil)) 3)"))
     ;; Evaluating in the debugger's thread; a compile error is only an answer; a runtime
     ;; error opens level 2, whose abort returns to level 1.
     (is (swank-has (swank-request s "(swank:eval-string-in-frame \"(greet 3)\" 0 \"serve\")"
@@ -272,3 +273,81 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
           do (sleep 0.05))
     (is (swank-has (swank-request s "(swank:interactive-eval \"@go?\")" "\"serve\"" "t" 4)
                    "(:return (:ok \"=> :done\") 4)"))))
+
+;;; Completion, argument lists, documentation and the inspector (M2.7 step 3)
+
+(test swank-names
+  (with-swank-program (s dir (("serve.skn" "(ns serve (:require [skein.io :as io]))
+(defn greet
+  \"Say hi to n.\"
+  [n] (str \"hi \" n))
+(defn sum ([a] a) ([a b & more] (apply + a b more)))
+(defmacro twice [x] `(do ~x ~x))
+(defn -main [& args] (sleep 60))
+")))
+    (flet ((ask (form id)
+             (swank-request s form "\"serve\"" "t" id)))
+      ;; Completion: the namespace's own names, skein.core's, and alias/name.
+      (is (swank-has (ask "(swank:simple-completions \"gre\" \"serve\")" 1)
+                     "(:return (:ok ((\"greet\") \"greet\")) 1)"))
+      (is (swank-has (ask "(swank:completions \"io/read-f\" \"serve\")" 2)
+                     "(:return (:ok ((\"io/read-file\") \"io/read-file\")) 2)"))
+      (is (swank-has (ask "(swank:simple-completions \"mapc\" \"serve\")" 3)
+                     "(:return (:ok ((\"mapcat\") \"mapcat\")) 3)"))
+      ;; Argument lists, with the argument at the cursor marked, from compiled code: a
+      ;; function, a rest parameter, a macro (without &form and &env) and skein.core.
+      (is (swank-has (ask (concatenate 'string "(swank:autodoc '(\"greet\" swank::%cursor-marker%)"
+                                       " :print-right-margin 80)")
+                          4)
+                     "(:return (:ok (\"(greet ===> n <===)\" t)) 4)"))
+      (is (swank-has (ask "(swank:autodoc '(\"sum\" \"1\" \"2\" \"3\" swank::%cursor-marker%))" 5)
+                     "(:return (:ok (\"(sum a b & ===> more <===)\" t)) 5)"))
+      (is (swank-has (ask "(swank:autodoc '(\"twice\" swank::%cursor-marker%))" 6)
+                     "(:return (:ok (\"(twice ===> x <===)\" t)) 6)"))
+      (is (swank-has (ask "(swank:autodoc '(\"map\" \"inc\" swank::%cursor-marker%))" 7)
+                     "(:return (:ok (\"(map f & ===> colls <===)\" t)) 7)"))
+      (is (swank-has (ask "(swank:autodoc '(\"no-such\" swank::%cursor-marker%))" 8)
+                     "(:return (:ok (:not-available t)) 8)"))
+      ;; Documentation, apropos and M-. (an absolute path, which Emacs needs).
+      (is (swank-has (ask "(swank:describe-symbol \"greet\")" 9)
+                     "serve/greet\\n([n])\\n\\nSay hi to n.\\n\\nDefined at "))
+      (is (swank-has (ask "(swank:describe-symbol \"io/read-file\")" 10)
+                     "skein.io/read-file\\n([path])\\n"))
+      (is (swank-has (ask "(swank:apropos-list-for-emacs \"gree\" t nil nil)" 11)
+                     "((:designator \"serve/greet\" :function \"Say hi to n.\"))"))
+      (let* ((m (ask "(swank:find-definitions-for-emacs \"greet\")" 12))
+             (reply (ignore-errors (read-from-string (car (last m)))))
+             (location (second (first (second (second reply))))))
+        (is (swank-has m "((\"(def serve/greet)\" (:location (:file \"" "(:line 2 1) nil)))")
+            "~S" m)
+        ;; The file's absolute path, which Emacs needs.
+        (is (equal (truename (merge-pathnames "serve.skn" dir))
+                   (ignore-errors (truename (second (second location)))))
+            "~S" location)))))
+
+(test swank-inspector
+  (with-swank-program (s dir (("serve.skn" "(ns serve)
+(defclass point [] (x :init 1) (y :init 2))
+(defn -main [& args] (sleep 60))
+")))
+    (flet ((ask (form id)
+             (swank-request s form "\"serve\"" "t" id)))
+      (is (swank-has (ask "(swank:init-inspector \"{:a [1 2]}\")" 1)
+                     (concatenate 'string "(:return (:ok (:title \"{:a [1 2]}\" :id 0 :content "
+                                  "((\"Class: \" (:value \"#<class hash-map>\" 0) \"\\n\" "
+                                  "\"Count: 1\\n\\n\" (:value \":a\" 1) \" = \" "
+                                  "(:value \"[1 2]\" 2) \"\\n\") 8 0 8))) 1)")))
+      ;; Into a part, back and forward again.
+      (is (swank-has (ask "(swank:inspect-nth-part 2)" 2)
+                     ":title \"[1 2]\" :id 1" "\"0: \" (:value \"1\" 1)"))
+      (is (swank-has (ask "(swank:inspector-pop)" 3) ":title \"{:a [1 2]}\" :id 0"))
+      (is (swank-has (ask "(swank:inspector-next)" 4) ":title \"[1 2]\" :id 1"))
+      (is (swank-has (ask "(swank:inspect-nth-part 9)" 5) "(:return (:abort \"no part 9\") 5)"))
+      (is (swank-has (ask "(swank:inspector-range 0 2)" 6)
+                     "(:return (:ok ((\"Class: \" (:value \"#<class vector>\" 0)) 10 0 2)) 6)"))
+      ;; An object's slots; a lazy seq shows its first items.
+      (is (swank-has (ask "(swank:init-inspector \"(make point)\")" 7)
+                     "\"x: \" (:value \"1\" 1)" "\"y: \" (:value \"2\" 2)"))
+      (is (swank-has (ask "(swank:init-inspector \"(range)\")" 8)
+                     ":title \"#<lazy seq>\"" "(only the first 1000 are shown)"))
+      (is (swank-has (ask "(swank:quit-inspector)" 9) "(:return (:ok nil) 9)")))))

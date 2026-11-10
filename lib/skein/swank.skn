@@ -13,7 +13,8 @@ per connection (the listener, thread 1); the others each in a fiber of their own
 Swank's :spawn style runs them, and requests for a thread in the debugger in its fiber.
 An error opens SLDB in the fiber where it happened, with Skein's restarts and the shadow
 stack's backtrace; so does an error in the program that no handler handles, in the newest
-connection (D-084). Code runs in the namespace the request's package
+connection (D-084). Completion, argument lists, documentation and the inspector read
+skein.compiler.env's model of the program (D-086). Code runs in the namespace the request's package
 names, or the listener's if there is none of that name; what it prints goes to Emacs as
 (:write-string text).
 
@@ -68,6 +69,11 @@ skein dev starts the server: this namespace gives it start-server when it's load
   (:report (fn [c] (str "Swank: " (swank-error-message c)))))
 
 (defn- fail [& parts] (error swank-error :message (apply str parts)))
+
+(defn- message-of
+  "The message of an error: a swank-error's without the \"Swank: \" its report adds."
+  [e]
+  (if (= (condition-type e) swank-error) (swank-error-message e) (condition-message e)))
 
 (defn- peek-at [st]
   (let [p @(:pos st)] (when (< p (:n st)) (nth (:text st) p))))
@@ -416,8 +422,9 @@ Returns nil if there's none, or when it disconnects first."
     (binding [*thread* nil *sldb* nil *pending* []]
       (debug-in-emacs c e frames (fn [] nil)))))
 
-(defn- frame-location
-  "The source location of a frame, from its \"file:line:column\"."
+(defn- source-location
+  "A source location for Emacs, from \"file:line:column\" (a frame's or a definition's):
+the file's absolute path, which Emacs needs, or an error if there's no such file."
   [loc]
   (let [colon-before (fn [end] (loop [i (dec end)]
                                  (cond (< i 0) nil
@@ -428,8 +435,217 @@ Returns nil if there's none, or when it disconnects first."
         line (when a (parse-long (subs loc (inc a) b)))
         column (when b (parse-long (subs loc (inc b))))]
     (if (and line column)
-      (list :location (list :file (subs loc 0 a)) (list :line line column) nil)
-      (list :error "no source location for this frame"))))
+      (if-let [path (%absolute-path (subs loc 0 a))]
+        (list :location (list :file path) (list :line line column) nil)
+        (list :error (str "defined at " loc ", which isn't a file")))
+      (list :error "no source location"))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Names: completion, argument lists, documentation and definitions (D-086). They're
+;;; looked up in skein.compiler.env's model of the program's namespaces.
+
+(defn- index-of
+  "The index of the first occurrence of the string part in s, or nil."
+  [s part]
+  (let [n (count part)]
+    (loop [i 0]
+      (cond (> (+ i n) (count s)) nil
+            (= part (subs s i (+ i n))) i
+            :else (recur (inc i))))))
+
+(defn- starts-with? [s prefix]
+  (and (<= (count prefix) (count s)) (= prefix (subs s 0 (count prefix)))))
+
+(defn- model-ns
+  "The model of the namespace a request's package names."
+  [c pkg]
+  (%find-namespace (namespace-for c pkg)))
+
+(defn- var-names
+  "The names of ns's vars: its public ones, or all if own? is true."
+  [ns own?]
+  (keep (fn [[nm var]] (when (or own? (not (%var-private? var))) nm)) (:mappings @ns)))
+
+(defn- target-namespace
+  "The namespace that an alias or a namespace name means in ns, or nil."
+  [ns qualifier]
+  (or (%find-alias ns qualifier) (%find-namespace qualifier)))
+
+(defn- completions-for
+  "The names that complete prefix in ns, sorted: the vars it sees, alias/name and
+namespace/name, and the names of aliases and namespaces."
+  [ns prefix]
+  (let [slash (index-of prefix "/")
+        candidates
+        (if (and slash (pos? slash))
+          (let [q (subs prefix 0 slash)]
+            (when-let [target (target-namespace ns q)]
+              (map (fn [nm] (str q "/" nm)) (var-names target (identical? target ns)))))
+          (concat (var-names ns true) (keys (:refers @ns))
+                  (var-names (%find-namespace "skein.core") false)
+                  (keys (:aliases @ns)) (map (fn [n] (:name @n)) (%all-namespaces))))]
+    (sort (distinct (filter (fn [s] (starts-with? s prefix)) candidates)))))
+
+(defn- common-prefix
+  "The longest prefix of all the strings (prefix if there are none)."
+  [strings prefix]
+  (if (empty? strings)
+    prefix
+    (let [a (first strings)]
+      (loop [n (count a)]
+        (if (every? (fn [s] (starts-with? s (subs a 0 n))) strings)
+          (subs a 0 n)
+          (recur (dec n)))))))
+
+(defn- find-var-named
+  "The var that text (name, alias/name or namespace/name) means in ns, or nil."
+  [ns text]
+  (when (and ns (string? text) (seq text))
+    (let [slash (index-of text "/")]
+      (if (and slash (pos? slash) (< slash (dec (count text))))
+        (when-let [target (target-namespace ns (subs text 0 slash))]
+          (%find-own-var target (subs text (inc slash))))
+        (%resolve-var ns text)))))
+
+(defn- var-info
+  "{:doc :arglists :loc} of a var. A skein.core function written in Skein has them on its
+skein.core.native var."
+  [var]
+  (let [info (%var-info var)]
+    (if (and (nil? (:doc info)) (nil? (:arglists info))
+             (= "skein.core" (%namespace-name (%var-namespace var))))
+      (if-let [lib (some-> (%find-namespace "skein.core.native") (%find-own-var (%var-name var)))]
+        (%var-info lib)
+        info)
+      info)))
+
+(defn- arglists-of
+  "A var's parameter vectors, each a vector of strings, or nil."
+  [var]
+  (when-let [text (:arglists (var-info var))]
+    (mapv (fn [v] (mapv reader/syntax-to-string (:datum v)))
+          (:datum (reader/read-form (reader/make-reader text))))))
+
+(defn- marker? [x] (and (symbol? x) (= "%cursor-marker%" (name x))))
+
+(defn- cursor-form
+  "The innermost list of SLIME's raw form that holds the cursor marker, or nil."
+  [form]
+  (when (seq? form)
+    (or (some cursor-form (filter seq? form))
+        (when (some marker? form) form))))
+
+(defn- arglist-text
+  "(op params...), with the parameter that argument i (from 0) goes to between ===> and
+<===, unless i is nil."
+  [op params i]
+  (let [amp (first (keep (fn [[k p]] (when (= p "&") k)) (map-indexed vector params)))
+        target (cond (nil? i) nil
+                     (and amp (>= i amp)) (inc amp)
+                     :else i)
+        shown (map-indexed (fn [k p] (if (= k target) (str "===> " p " <===") p)) params)]
+    (str "(" (apply str (interpose " " (cons op shown))) ")")))
+
+(defn- choose-arglist
+  "The parameter vector that a call with an argument at index i fits, or the last."
+  [lists i]
+  (or (first (filter (fn [ps] (or (some #{"&"} ps) (> (count ps) i))) lists))
+      (last lists)))
+
+(defn- describe-text
+  "What describe and documentation requests show of a var."
+  [var]
+  (let [{:keys [doc arglists loc]} (var-info var)
+        macro (%var-macro var)]
+    (str (%var-qualified-name var) "\n"
+         (cond (= macro :syntax) "Built-in macro\n" macro "Macro\n" :else "")
+         (when arglists (str arglists "\n"))
+         (when doc (str "\n" doc "\n"))
+         (when loc (str "\nDefined at " loc "\n")))))
+
+(defn- describe-name
+  "describe-text for the var text names in the request's namespace."
+  [c pkg text]
+  (if-let [var (find-var-named (model-ns c pkg) text)]
+    (describe-text var)
+    (str "No var named " text " in " (namespace-for c pkg) ".")))
+
+;;; ------------------------------------------------------------------------------------
+;;; The inspector: a view of a value is text and parts, other values Emacs can inspect in
+;;; turn. Each connection keeps a history of what it inspected.
+
+(def ^:private content-limit
+  "How many items of a collection a view shows."
+  1000)
+
+(defn- brief
+  "A short printed form of x: a big or lazy collection only says what it is."
+  [x]
+  (let [text (cond (and (coll? x) (not (counted? x))) "#<lazy seq>"
+                   (and (coll? x) (> (count x) 50))
+                   (str "#<" (name (class-name (class-of x))) " of " (count x) " items>")
+                   :else (dev/show x))]
+    (if (> (count text) 200) (str (subs text 0 197) "...") text)))
+
+(defn- view
+  "{:title :content :parts} of x: content holds strings and (:value text n), where n
+indexes parts."
+  [x]
+  (let [content (atom [])
+        parts (atom [])
+        text! (fn [& s] (swap! content conj (apply str s)))
+        value! (fn [v]
+                 (swap! content conj (list :value (brief v) (count @parts)))
+                 (swap! parts conj v))
+        field! (fn [label v] (text! label ": ") (value! v) (text! "\n"))
+        items! (fn [xs]
+                 (doseq [[i v] (map-indexed vector (take content-limit xs))]
+                   (text! i ": ") (value! v) (text! "\n"))
+                 (when (seq (drop content-limit xs))
+                   (text! "(only the first " content-limit " are shown)\n")))]
+    (field! "Class" (class-of x))
+    (cond (map? x)
+          (do (text! "Count: " (count x) "\n\n")
+              (doseq [[k v] (take content-limit x)]
+                (value! k) (text! " = ") (value! v) (text! "\n")))
+          (and (coll? x) (counted? x))
+          (do (text! "Count: " (count x) "\n\n") (items! x))
+          (coll? x) (do (text! "A lazy seq\n\n") (items! x))
+          (atom? x) (field! "Value" @x)
+          (condition? x)
+          (do (text! "Message: " (condition-message x) "\n")
+              (field! "Type" (condition-type x)))
+          (string? x) (text! "Count: " (count x) "\n\n" x "\n")
+          :else
+          (let [slots (try (mapv (fn [s] [s (slot x s)]) (class-slots (class-of x)))
+                           (catch error e nil))]
+            (if (seq slots)
+              (doseq [[s v] slots] (field! (if (keyword? s) (name s) (str s)) v))
+              (text! "Value: " (dev/show x) "\n"))))
+    {:title (brief x) :content @content :parts @parts}))
+
+(defn- inspector-reply
+  "What Emacs shows of the value at the inspector's current place."
+  [c]
+  (let [{:keys [history place]} @(:inspector c)
+        v (view (nth history place))]
+    (swap! (:inspector c) assoc :parts (:parts v) :content (:content v))
+    (list :title (:title v) :id place
+          :content (list (:content v) (count (:content v)) 0 (count (:content v))))))
+
+(defn- inspect!
+  "Inspect x after what's inspected now (dropping the history after it)."
+  [c x]
+  (swap! (:inspector c)
+         (fn [s] (let [kept (if (:history s) (vec (take (inc (:place s)) (:history s))) [])]
+                   (assoc s :history (conj kept x) :place (count kept)))))
+  (inspector-reply c))
+
+(defn- inspect-fresh!
+  "Start the inspector over, on x."
+  [c x]
+  (reset! (:inspector c) {})
+  (inspect! c x))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Requests: each is a function of the connection, the request's package and its
@@ -496,7 +712,7 @@ Returns nil if there's none, or when it disconnects first."
 (defn- set-package [c pkg [nm]]
   (let [found (cond (%find-namespace nm) nm
                     (%find-namespace (lower nm)) (lower nm)
-                    :else (error (str "no namespace named " nm)))]
+                    :else (fail "no namespace named " nm))]
     (reset! (:ns c) found)
     (list found found)))
 
@@ -510,14 +726,14 @@ Returns nil if there's none, or when it disconnects first."
   (let [frames (:frames *sldb*)]
     (if (and (integer? index) (< -1 index (count frames)))
       (nth frames index)
-      (error (str "no frame " index)))))
+      (fail "no frame " index))))
 
 (defn- invoke-nth-restart [c pkg [level n]]
   (when (and *sldb* (= level (:level *sldb*)))
     (let [restarts (:restarts *sldb*)]
       (if (and (integer? n) (< -1 n (count restarts)))
         (invoke-restart (nth restarts n))
-        (error (str "no restart " n))))))
+        (fail "no restart " n)))))
 
 (defn- sldb-abort [c pkg args]
   (when-let [r (restart-named (:restarts *sldb*) "abort")] (invoke-restart r)))
@@ -537,7 +753,7 @@ Returns nil if there's none, or when it disconnects first."
           (apply list *pending*))))
 
 (defn- frame-source-location [c pkg [index]]
-  (frame-location (second (sldb-frame index))))
+  (source-location (second (sldb-frame index))))
 
 (defn- eval-string-in-frame [c pkg [text index frame-pkg]]
   (sldb-frame index)
@@ -547,6 +763,94 @@ Returns nil if there's none, or when it disconnects first."
   (sldb-frame index)
   (let [value (eval-text (console-for c (namespace-for c (or frame-pkg pkg))) text "slime" 1 1)]
     (if (= value ::none) "; No value" (dev/show value))))
+
+;;; Names
+
+(defn- completions [c pkg [prefix completion-pkg]]
+  (let [found (completions-for (model-ns c (or completion-pkg pkg)) prefix)]
+    (list found (common-prefix found prefix))))
+
+(defn- fuzzy-completions [c pkg [prefix completion-pkg]]
+  ;; SLIME's fuzzy completion, answered with prefix matches.
+  (list (map (fn [m] (list m 50.0 (list (list 0 prefix)) ""))
+             (completions-for (model-ns c (or completion-pkg pkg)) prefix))
+        nil))
+
+(defn- autodoc [c pkg [raw]]
+  (let [form (cursor-form raw)
+        op (when form (first form))
+        i (when form (dec (count (take-while (complement marker?) form))))
+        var (when (string? op) (find-var-named (model-ns c pkg) op))
+        lists (when var (arglists-of var))]
+    (if (seq lists)
+      (list (arglist-text op (choose-arglist lists i) i) true)
+      (list :not-available true))))
+
+(defn- operator-arglist [c pkg [nm arglist-pkg]]
+  (when-let [var (find-var-named (model-ns c (or arglist-pkg pkg)) nm)]
+    (when-let [lists (seq (arglists-of var))]
+      (apply str (interpose "\n" (map (fn [ps] (arglist-text nm ps nil)) lists))))))
+
+(defn- describe-request [c pkg [nm]]
+  (describe-name c pkg nm))
+
+(defn- apropos-list [c pkg [text external-only case-sensitive apropos-pkg]]
+  (let [nss (if (string? apropos-pkg)
+              (keep %find-namespace [(namespace-for c apropos-pkg)])
+              (%all-namespaces))
+        fold (if case-sensitive identity lower)
+        want (fold text)]
+    (->> (for [ns nss
+               [nm var] (:mappings @ns)
+               :when (and (not (%var-private? var)) (index-of (fold nm) want))]
+           (let [doc (:doc (var-info var))
+                 summary (if doc
+                           (subs doc 0 (or (index-of doc "\n") (count doc)))
+                           :not-documented)
+                 value (%var-value var)
+                 kind (cond (%var-macro var) :macro (fn? value) :function :else :variable)]
+             (list :designator (%var-qualified-name var) kind summary)))
+         (sort-by second))))
+
+(defn- find-definitions [c pkg [nm]]
+  (when-let [var (find-var-named (model-ns c pkg) nm)]
+    (when-let [loc (:loc (var-info var))]
+      (list (list (str "(def " (%var-qualified-name var) ")") (source-location loc))))))
+
+;;; The inspector
+
+(defn- init-inspector [c pkg [text]]
+  (let [value (eval-text (console-for c (namespace-for c pkg)) text "slime" 1 1)]
+    (inspect-fresh! c (if (= value ::none) nil value))))
+
+(defn- inspect-nth-part [c pkg [n]]
+  (let [parts (:parts @(:inspector c))]
+    (if (and (integer? n) (< -1 n (count parts)))
+      (inspect! c (nth parts n))
+      (fail "no part " n))))
+
+(defn- inspector-move [step]
+  (fn [c pkg args]
+    (let [{:keys [history place]} @(:inspector c)
+          to (when place (+ place step))]
+      (when (and to (< -1 to (count history)))
+        (swap! (:inspector c) assoc :place to)
+        (inspector-reply c)))))
+
+(defn- inspector-range [c pkg [from to]]
+  (let [content (:content @(:inspector c))
+        n (count content)
+        from (min (or from 0) n)
+        to (max from (min (or to n) n))]
+    (list (take (- to from) (drop from content)) n from to)))
+
+(defn- current-inspectee [c]
+  (let [{:keys [history place]} @(:inspector c)]
+    (when place (nth history place))))
+
+(defn- inspect-in-frame [c pkg [text index]]
+  (sldb-frame index)
+  (init-inspector c pkg [text]))
 
 (def ^:private requests
   "The requests the server answers, by name (without their package, swank: or
@@ -577,7 +881,32 @@ swank-repl:)."
    "frame-source-location" frame-source-location
    "eval-string-in-frame" eval-string-in-frame
    "pprint-eval-string-in-frame" pprint-eval-string-in-frame
-   "sldb-print-condition" (fn [c pkg args] (condition-message (:condition *sldb*)))})
+   "sldb-print-condition" (fn [c pkg args] (condition-message (:condition *sldb*)))
+   ;; Names
+   "simple-completions" completions
+   "completions" completions
+   "fuzzy-completions" fuzzy-completions
+   "autodoc" autodoc
+   "operator-arglist" operator-arglist
+   "describe-symbol" describe-request
+   "describe-function" describe-request
+   "describe-definition-for-emacs" describe-request
+   "documentation-symbol" describe-request
+   "apropos-list-for-emacs" apropos-list
+   "find-definitions-for-emacs" find-definitions
+   ;; The inspector
+   "init-inspector" init-inspector
+   "inspect-nth-part" inspect-nth-part
+   "inspector-pop" (inspector-move -1)
+   "inspector-next" (inspector-move 1)
+   "inspector-reinspect" (fn [c pkg args] (when (current-inspectee c) (inspector-reply c)))
+   "inspector-toggle-verbose" (fn [c pkg args] (when (current-inspectee c) (inspector-reply c)))
+   "inspector-range" inspector-range
+   "quit-inspector" (fn [c pkg args] (reset! (:inspector c) {}) nil)
+   "describe-inspectee" (fn [c pkg args] (dev/show (current-inspectee c)))
+   "pprint-inspector-part" (fn [c pkg [n]] (dev/show (nth (:parts @(:inspector c)) n)))
+   "inspect-current-condition" (fn [c pkg args] (inspect-fresh! c (:condition *sldb*)))
+   "inspect-in-frame" inspect-in-frame})
 
 (defn- argument
   "The value of an argument of a request: Emacs quotes lists and symbols."
@@ -585,9 +914,10 @@ swank-repl:)."
   (if (and (seq? x) (symbol? (first x)) (= "quote" (name (first x)))) (second x) x))
 
 (defn- source-error?
-  "True for an error reading or compiling code."
+  "True for an error reading or compiling code, or in a request itself (a swank-error):
+no code of the program ran."
   [e]
-  (contains? #{reader/read-error expander/compile-error} (condition-type e)))
+  (contains? #{reader/read-error expander/compile-error swank-error} (condition-type e)))
 
 (defn- answer*
   "Handle the request form and send its answer. An error in it opens SLDB, in this fiber;
@@ -613,8 +943,7 @@ its abort restart answers (:abort message)."
                                      ;; Code that can't be read or compiled isn't run: its
                                      ;; error is the answer, without the compiler's frames.
                                      (when (source-error? e)
-                                       (return-from* request
-                                         (list :abort (condition-message e))))
+                                       (return-from* request (list :abort (message-of e))))
                                      ;; If Emacs disconnects, this request ends.
                                      (debug-in-emacs c e (rest (%backtrace))
                                                      (fn [] (return-from* request
@@ -652,7 +981,9 @@ its abort restart answers (:abort message)."
            :threads (atom {1 listener})
            :next-thread (atom 1)
            :pending (atom {:chunks [] :bytes 0})
-           :ns (atom (dev/starting-namespace))}]
+           :ns (atom (dev/starting-namespace))
+           ;; {:history [values] :place i :parts [...] :content [...]}
+           :inspector (atom {})}]
     (swap! connections conj c)
     (future (writer c))
     (future (binding [*thread* {:id 1 :inbox listener}]

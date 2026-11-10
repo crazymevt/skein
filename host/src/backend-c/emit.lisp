@@ -369,7 +369,7 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen" "%tcp-accept" "%tcp-port"
     "%tcp-close" "%set-output-var!" "%exit" "%main-thread?" "%run-attached"
     ;; Swank (M2.7, D-082)
-    "%utf8-length" "%utf8-split"
+    "%utf8-length" "%utf8-split" "%absolute-path"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

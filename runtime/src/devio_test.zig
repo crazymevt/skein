@@ -63,3 +63,13 @@ test "Swank's framing counts and splits UTF-8 bytes" {
     try testing.expectEqualStrings("!", string.bytes(coll.vectorNth(parts, 1).?));
     try testing.expectEqual(Value.nil, call("%utf8-split", &.{ s, Value.fromFixnum(7) }));
 }
+
+test "an existing file's absolute path, and nil for none" {
+    coll.ensureConstants();
+    _ = call("%write-file", &.{ string.make(".skein-devio-abs"), string.make("x") });
+    defer std.Io.Dir.cwd().deleteFile(io.stdIo(), ".skein-devio-abs") catch {};
+    const p = string.bytes(call("%absolute-path", &.{string.make(".skein-devio-abs")}));
+    try testing.expect(std.fs.path.isAbsolute(p));
+    try testing.expect(std.mem.endsWith(u8, p, ".skein-devio-abs"));
+    try testing.expectEqual(Value.nil, call("%absolute-path", &.{string.make(".no-such-file-here")}));
+}
