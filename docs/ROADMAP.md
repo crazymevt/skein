@@ -342,6 +342,11 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M2.7 Swank server
 - A Swank-compatible server in the native runtime (D-018): evaluation, loading files, completion, argument lists, the debugger (SLDB) with Skein's restarts and backtrace, and the inspector. SLIME is the reference client.
+- Steps, in order (D-082):
+  1. The protocol (`skein.swank`): framing, reading and printing the Common Lisp data SLIME sends, `connection-info`, the listener (`create-repl`, `listener-eval`), evaluating and compiling forms and regions, loading files, namespaces for SLIME's packages; `skein dev` serves it on `localhost:4005` (`--swank-port`, `--no-swank`); host tests that speak the protocol.
+  2. The debugger: SLDB for errors in the listener and in the program (Skein's restarts, the shadow stack's backtrace, evaluating in a frame's fiber, abort and continue).
+  3. Completion, argument lists (autodoc), documentation and the inspector.
+  4. `editors/skein-slime.el`, `docs/EDITORS.md`, and the scripted SLIME session in the Linux CI job.
 
 **Exit:** a scripted SLIME session against native `skein dev` passes in CI.
 
