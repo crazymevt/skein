@@ -413,11 +413,30 @@ fn finishTask(t: Value, state: State, v: Value) void {
     if (first_failure) cancelNursery(n);
 }
 
-/// The body of every task: a cancellation point, then the task's function.
+/// [the task runner]: nil, or a function that every task's function is called through,
+/// (runner f), in the task's fiber: skein.dev's, which gives an error that no handler in
+/// the task handles to the debugger before the task fails (M2.8, D-088).
+var task_runner: [1]Value = .{Value.nil};
+var task_runner_ready = false;
+
+fn installTaskRunner(f: Value) void {
+    lock();
+    defer unlock();
+    if (!task_runner_ready) {
+        gc.addRoots(&task_runner);
+        task_runner_ready = true;
+    }
+    @atomicStore(Value, &task_runner[0], f, .release);
+}
+
+/// The body of every task: a cancellation point, then the task's function (through the
+/// task runner, if one is installed).
 fn taskBody(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
     _ = self;
     _ = argc;
     checkCancelled();
+    const runner = @atomicLoad(Value, &task_runner[0], .acquire);
+    if (runner != Value.nil) return func.call(runner, 1, argv);
     return func.call(argv[0], 0, argv);
 }
 
@@ -975,6 +994,13 @@ fn e(name: []const u8, min: u32, max: ?u32, impl: *const fn (Args) Value) Entry 
 }
 
 pub const entries = [_]Entry{
+    // (%install-task-runner! f): call every task's function as (f task-fn) (D-088).
+    e("%install-task-runner!", 1, 1, struct {
+        fn f(a: Args) Value {
+            installTaskRunner(a[0]);
+            return Value.nil;
+        }
+    }.f),
     e("%with-nursery", 1, 1, struct {
         fn f(a: Args) Value {
             return withNursery(a[0]);

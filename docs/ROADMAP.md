@@ -37,7 +37,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.5 Evaluating code in native programs | ✅ |
 | M2.6 Native REPL and `skein dev` | ✅ |
 | M2.7 Swank server | 🟨 |
-| M2.8 Supervisors | ⬜ |
+| M2.8 Supervisors | 🟨 |
 | M2.9 Hot reload of compiled code | ⬜ |
 | M2.10 STM | ⬜ |
 | M2.11 Standard library | ⬜ |
@@ -355,7 +355,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ### M2.8 Supervisors
 - Unhandled errors go to the fiber's supervisor: in development the root supervisor opens the debugger; in release builds the policies `:cancel-siblings`, `:restart-fiber`, `:ignore` and `:crash` apply (DESIGN §10).
 - Steps, in order (D-088):
-  1. The debugger for tasks: in `skein dev`, an error that no handler in a task (spawned or `future`) handles opens the debugger in the task's fiber before the task fails, in the text REPL or SLDB as the main fiber's errors do, with an `abort` restart that fails the task. Fixing the code and choosing another restart resumes the task. Native dev fixtures and a Swank host test.
+  1. ✅ The debugger for tasks: in `skein dev`, an error that no handler in a task (spawned or `future`) handles opens the debugger in the task's fiber before the task fails, in the text REPL or SLDB as the main fiber's errors do, with an `abort` restart that fails the task. Fixing the code and choosing another restart resumes the task. Native dev fixtures and a Swank host test.
   2. Policies: `(with-nursery [n {:on-error p}] ...)`, where `p` is `:cancel-siblings` (the default, as today), `:ignore` (the task fails alone, with one line on stderr), `:crash` (report the error as an unhandled one and exit with status 1) or `:restart-fiber` (run the task's function again in a new fiber, at most `:max-restarts` 3 times within `:within` 5 seconds, then fail as `:cancel-siblings`). In `skein dev` a policy applies once the debugger's `abort` fails the task. Native fixtures for each policy, on all three platforms.
   3. DESIGN §10 and §13 brought up to date with what was built; `skein.jobs` and `skein.game` checked against the policies.
 

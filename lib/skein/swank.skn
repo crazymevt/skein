@@ -981,7 +981,7 @@ its abort restart answers (:abort message)."
       (cond (= thread :repl-thread) (>! (:listener c) [form pkg id])
             ;; A thread in the debugger, which is waiting for its requests.
             (get @(:threads c) thread) (>! (get @(:threads c) thread) [form pkg id])
-            :else (future (answer c form pkg id))))))
+            :else (dev/service (answer c form pkg id))))))
 
 (defn- serve
   "Talk to the Emacs connected on socket until it disconnects."
@@ -999,8 +999,8 @@ its abort restart answers (:abort message)."
            ;; {:history [values] :place i :parts [...] :content [...]}
            :inspector (atom {})}]
     (swap! connections conj c)
-    (future (writer c))
-    (future (binding [*thread* {:id 1 :inbox listener}]
+    (dev/service (writer c))
+    (dev/service (binding [*thread* {:id 1 :inbox listener}]
               (loop []
                 (when-let [[form pkg id] (<! listener)]
                   (answer c form pkg id)
@@ -1023,10 +1023,10 @@ its abort restart answers (:abort message)."
 listen there."
   [port]
   (when-let [server (%tcp-listen port)]
-    (future (loop []
-              (when-let [socket (%tcp-accept server)]
-                (future (serve socket))
-                (recur))))
+    (dev/service (loop []
+                   (when-let [socket (%tcp-accept server)]
+                     (dev/service (serve socket))
+                     (recur))))
     server))
 
 (dev/install-swank! start-server debug-program)

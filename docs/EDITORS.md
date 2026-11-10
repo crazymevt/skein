@@ -57,7 +57,9 @@ The argument list of the call around the cursor shows in the echo area as you ty
 
 **Debugger.** An error in code you evaluate opens SLDB with the error, Skein's restarts
 and the Skein functions on the stack. So does an error in the running program that nothing
-handles: the program's thread waits in SLDB, as it would at the terminal. In SLDB, a number
+handles, in its main thread or in a task: that thread waits in SLDB, as it would at the
+terminal. A task's SLDB has an `abort` restart, "Fail the task", after which its nursery
+handles the failure. In SLDB, a number
 or `RET` on a restart invokes it, `a` aborts, `q` returns to the top level, `v` on a frame
 shows its function's definition, `e` evaluates a form in the failing thread and `C`
 inspects the condition. If Emacs isn't connected, or disconnects first, the program's error

@@ -30,6 +30,19 @@ that code spawns."
 
 (%set-output-var! (%runtime-var (%find-own-var (%find-namespace "skein.dev") "*out*")))
 
+(def ^:dynamic *debug-tasks*
+  "Whether the tasks started here give their unhandled errors to the debugger (D-088):
+true for the program's, false for the REPL's and Swank's own (service)."
+  true)
+
+(defmacro service
+  "Like future, for a task of the REPL's or Swank's own: its errors don't go to the
+debugger, and it has no \"Fail the task\" restart, nor have the tasks it starts. Code it
+evaluates for a console binds *debug-tasks* again (call-in)."
+  [& body]
+  `(binding [*debug-tasks* false]
+     (future ~@body)))
+
 (def ^:dynamic *namespace-cell*
   "nil, or an atom holding the current namespace of the code a console is evaluating, and
 of the tasks it starts, so that consoles evaluating at the same time don't change each
@@ -75,6 +88,8 @@ text). output is the function code evaluated from it prints with, or nil."
    :deferred (atom [])
    :ns (atom @initial-namespace)
    :quit (atom false)
+   ;; Whether the console waits at its top-level prompt, where it takes debug sessions.
+   :idle (atom false)
    ;; Whether what the console last wrote ended a line.
    :fresh (atom true)})
 
@@ -216,7 +231,9 @@ evaluates, and what f prints goes to :output."
   [console f]
   ;; With a current namespace of its own: consoles evaluate at the same time (D-083).
   (binding [*namespace-cell* (atom (%current-namespace))
-            *out* (:output console)]
+            *out* (:output console)
+            ;; The code's tasks are the program's (D-088).
+            *debug-tasks* true]
     (%in-ns (symbol @(:ns console)))
     (try (f)
          (finally
@@ -255,7 +272,7 @@ for an error no handler in it handles."
   "The frames of a backtrace ([name location] each, innermost first) between the error and
 the REPL's evaluator or the program's start."
   [frames]
-  (let [ends #{"evaluate-syntax" "run-main" "run-dev"}]
+  (let [ends #{"evaluate-syntax" "run-main" "run-dev" "run-task"}]
     (take-while (fn [[nm]] (not (contains? ends nm))) frames)))
 
 (defn- backtrace-text
@@ -316,8 +333,8 @@ from where it was signaled."
   [session]
   (let [cs @consoles]
     (if (seq cs)
-      (doseq [c cs] (future (>! (:inbox c) [:session session])))
-      (future (>! (:inbox session) [:no-console])))))
+      (doseq [c cs] (service (>! (:inbox c) [:session session])))
+      (service (>! (:inbox session) [:no-console])))))
 
 (defn- remote-debug*
   "Debug the session from console: send it the forms typed here until it resumes."
@@ -331,7 +348,7 @@ from where it was signaled."
         (case kind
           :eof (do (swap! (:deferred console) (fn [d] (into [[:eof]] d)))
                    (reset! (:console session) nil)
-                   (future (>! (:inbox session) [:detach])))
+                   (service (>! (:inbox session) [:detach])))
           :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
           :session (do (defer! console [kind x]) (recur))
           (let [reply (chan)]
@@ -368,12 +385,12 @@ from where it was signaled."
       ;; The form invoked a restart (or otherwise left): this fiber resumes.
       (finally (when-not @replied (>! reply [:resumed]))))))
 
-(defn- program-debug
-  "The debugger for an error that no handler handles outside a console: wait for a
-console to attach, and evaluate what it sends in this fiber, where the restarts are."
-  [c]
-  (let [frames (rest (%backtrace))
-        restarts (vec (compute-restarts c))
+(defn- debug-program-error
+  "The debugger for an error c that no handler handles outside a console, with frames the
+backtrace from where it was signaled: SLDB in a connected Emacs, else wait for a console to
+attach and evaluate what it sends in this fiber, where the restarts are."
+  [c frames]
+  (let [restarts (vec (compute-restarts c))
         thread (if (%main-thread?) "main thread" "task")
         session {:condition c :restarts restarts :frames frames :thread thread
                  :inbox (chan) :console (atom nil) :finished (atom false)}
@@ -385,6 +402,10 @@ console to attach, and evaluate what it sends in this fiber, where the restarts 
     ;; disconnects before a restart is chosen.
     (when-let [swank @swank-debugger] (swank c frames))
     (when (empty? @consoles) (give-up))
+    ;; A console that is busy may be waiting for this very task (a deref at the REPL),
+    ;; so a task's error waits only for an idle one (D-088).
+    (when (and (not (%main-thread?)) (not-any? (fn [con] @(:idle con)) @consoles))
+      (give-up))
     (offer-session! session)
     (try
       (loop []
@@ -402,15 +423,37 @@ console to attach, and evaluate what it sends in this fiber, where the restarts 
 ;;; ------------------------------------------------------------------------------------
 ;;; The console loop and skein repl
 
+(defn- program-debug
+  "The installed debugger: debug-program-error for the error c, in the failing fiber."
+  [c]
+  (debug-program-error c (rest (%backtrace))))
+
+(defn- run-task
+  "How every task's function f runs in a program with the debugger (D-088): an error that
+no handler in the task handles goes to the debugger in the task's fiber, before the task
+fails; its abort restart fails the task, as the error would have without the debugger."
+  [f]
+  (if-not *debug-tasks*
+    (f)
+    (let [failure (atom nil)]
+      (restart-case
+       (handler-bind [error (fn task-debugger [c]
+                              (reset! failure c)
+                              (debug-program-error c (rest (%backtrace))))]
+         (f))
+       (abort [] :report "Fail the task" (error @failure))))))
+
 (defn console-loop
   "Run the console's read-eval-print loop in this fiber until its input ends or :quit."
   [console]
   (swap! consoles conj console)
-  (future (read-forms console))
+  (service (read-forms console))
   (try
     (loop []
       (prompt console "")
-      (let [[kind x] (next-message console)]
+      (let [[kind x] (do (reset! (:idle console) true)
+                         (try (next-message console)
+                              (finally (reset! (:idle console) false))))]
         (case kind
           :eof nil
           :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
@@ -431,7 +474,8 @@ console to attach, and evaluate what it sends in this fiber, where the restarts 
     (make-console "terminal" (fn [] (%read-text in)) (fn [text] (print text)) nil)))
 
 (defn- install-debugger! []
-  (%install-debugger! program-debug))
+  (%install-debugger! program-debug)
+  (%install-task-runner! run-task))
 
 (defn run-repl
   "skein repl: a REPL on the terminal, in user, until the input ends or :quit."
@@ -457,10 +501,10 @@ console to attach, and evaluate what it sends in this fiber, where the restarts 
   "Serve the REPL on localhost:port; the server, or nil if it can't listen there."
   [port]
   (when-let [server (%tcp-listen port)]
-    (future (loop [n 1]
-              (when-let [conn (%tcp-accept server)]
-                (future (serve-client conn n))
-                (recur (inc n)))))
+    (service (loop [n 1]
+               (when-let [conn (%tcp-accept server)]
+                 (service (serve-client conn n))
+                 (recur (inc n)))))
     server))
 
 (defn- file-name [path]
@@ -488,7 +532,7 @@ function that stops it."
   []
   (let [dates (atom (into {} (map (fn [f] [f (%file-mtime f)]) (watched-files))))
         stop (atom false)]
-    (future
+    (service
       (loop []
         (when-not @stop
           ;; An error here is reported, and the watcher goes on.
@@ -541,10 +585,10 @@ Returns 0, or 1 if an error stopped the program."
                   (if server (str "; REPL on localhost:" (%tcp-port server)) "")
                   (if swank (str "; Swank on localhost:" (%tcp-port swank)) "")))
     (let [stop-watcher (start-watcher)]
-      (future (console-loop terminal)
-              (reset! terminal-done true)
-              ;; :quit stops a program that is still running.
-              (when (and @(:quit terminal) @program-running) (%exit 0)))
+      (service (console-loop terminal)
+               (reset! terminal-done true)
+               ;; :quit stops a program that is still running.
+               (when (and @(:quit terminal) @program-running) (%exit 0)))
       (restart-case (when main-fn (apply main-fn args))
         (abort [] :report "Stop the program"
           (when-not @(:quit terminal) (reset! status 1))))

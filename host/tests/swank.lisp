@@ -351,3 +351,48 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
       (is (swank-has (ask "(swank:init-inspector \"(range)\")" 8)
                      ":title \"#<lazy seq>\"" "(only the first 1000 are shown)"))
       (is (swank-has (ask "(swank:quit-inspector)" 9) "(:return (:ok nil) 9)")))))
+
+;;; Supervisors (M2.8 step 1, D-088): a task's unhandled error opens SLDB in its fiber.
+
+(test swank-debugger-for-tasks
+  (with-swank-program (s dir (("serve.skn" "(ns serve)
+(defonce go? (atom false))
+(defonce result (atom nil))
+(defn inner [x] (/ x 0))
+(defn -main [& args]
+  (loop [] (when-not @go? (sleep 0.02) (recur)))
+  (with-nursery [n]
+    (reset! result @(spawn n (restart-case (inner 1) (use-ten [] :report \"Use ten\" 10)))))
+  (sleep 60))
+")))
+    ;; A task of the program: SLDB in its thread, with its restarts and "Fail the task".
+    (is (swank-has (swank-request s "(swank:interactive-eval \"(reset! go? true)\")" "\"serve\""
+                                  "t" 1)
+                   "(:return (:ok \"=> true\") 1)"))
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (swank-has m "(:debug 2 1 (\"division by zero\""
+                     "((\"use-ten\" \"Use ten\") (\"abort\" \"Fail the task\"))"
+                     "((0 \"inner\") (1 \"fn\"))")
+          "~S" m))
+    (swank-send s "(:emacs-rex (swank:invoke-nth-restart-for-emacs 1 0) \"serve\" 2 2)")
+    (is (swank-has (swank-until s "(:debug-return") "(:debug-return 2 1 nil)"))
+    (loop repeat 100
+          until (search "10" (car (last (swank-request s "(swank:interactive-eval \"@result\")"
+                                                       "\"serve\"" "t" 3))))
+          do (sleep 0.05))
+    (is (swank-has (swank-request s "(swank:interactive-eval \"@result\")" "\"serve\"" "t" 4)
+                   "(:return (:ok \"=> 10\") 4)"))
+    ;; A future that a request waits for: failing it re-signals in the request, whose own
+    ;; SLDB has no "Fail the task" (Swank's fibers aren't the program's tasks).
+    (swank-send s "(:emacs-rex (swank:interactive-eval \"@(future (inner 2))\") \"serve\" t 5)")
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (swank-has m "(:debug 3 1 (\"division by zero\"" "((\"abort\" \"Fail the task\"))")
+          "~S" m))
+    (swank-send s "(:emacs-rex (swank:invoke-nth-restart-for-emacs 1 0) \"serve\" 3 6)")
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (swank-has m "(:debug-return 3 1 nil)" "(:debug 4 1 (\"division by zero\""
+                     "((\"abort\" \"Return to SLIME's top level.\")) ")
+          "~S" m))
+    (swank-send s "(:emacs-rex (swank:sldb-abort) \"serve\" 4 7)")
+    (is (swank-has (swank-until s "(:return (:abort \"division by zero\") 5)")
+                   "(:debug-return 4 1 nil)"))))

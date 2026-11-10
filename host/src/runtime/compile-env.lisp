@@ -162,6 +162,11 @@ received to that form's metadata (as data), for %syntax-meta.")
                "%tcp-accept" "%tcp-port" "%tcp-close" "%exit" "%main-thread?"
                "%run-attached" "%utf8-length" "%utf8-split" "%absolute-path"))
 
+(defcore "%install-task-runner!" (f)
+  ;; Phase 0's REPL doesn't debug tasks (D-088).
+  (declare (ignore f))
+  nil)
+
 (defcore "%set-output-var!" (var)
   ;; Phase 0's REPL binds *standard-output* instead.
   (declare (ignore var))

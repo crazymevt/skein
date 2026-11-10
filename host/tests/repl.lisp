@@ -476,3 +476,77 @@ executable's native path."
               (sb-ext:process-kill process 9))
             ;; Windows keeps the executable locked until the process has gone.
             (sb-ext:process-wait process))))))
+
+;;; M2.8 step 1 (D-088): in skein dev, an error that no handler in a task handles opens
+;;; the debugger in the task's fiber, with an abort restart that fails the task.
+
+(test dev-task-errors-natively
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("tasks.skn" "(ns tasks)
+(defn inner [x] (/ x 0))
+(defonce go? (atom false))
+(defn -main [& args]
+  (loop [] (when-not @go? (sleep 0.02) (recur)))
+  (with-nursery [n]
+    (let [t (spawn n (restart-case (inner 1) (use-ten [] :report \"Use ten\" 10)))]
+      (println \"task gave\" @t)))
+  (with-nursery [n]
+    (spawn n (inner 2)))
+  (println \"not reached\"))
+"))
+        (let* ((exe (native-dev-build dir "tasks.skn"))
+               (process (sb-ext:run-program exe '() :wait nil :input :stream
+                                                    :output :stream :error :output
+                                                    :directory (uiop:native-namestring dir)
+                                                    :environment
+                                                    (cons "SKEIN_DEV=none"
+                                                          (sb-ext:posix-environ))))
+               (buffer (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+               (lock (sb-thread:make-mutex))
+               (input (sb-ext:process-input process)))
+          (collect-output (sb-ext:process-output process) buffer lock)
+          (unwind-protect
+               (block scenario
+                 (flet ((wait (text &optional (start 0))
+                          (or (wait-for-output buffer lock text :start start)
+                              (progn (fail "timed out waiting for ~S in:~%~A" text buffer)
+                                     (return-from scenario))))
+                        (say (line)
+                          (format input "~A~%" line)
+                          (finish-output input)))
+                   (let ((pos (wait "; skein dev")))
+                     (say "(reset! go? true)")
+                     ;; The task's error, with its own restart and the one that fails it.
+                     (setf pos (wait "error in thread task: division by zero" pos))
+                     (wait "0: use-ten  Use ten" pos)
+                     (setf pos (wait "1: abort  Fail the task" pos))
+                     ;; Forms run in the task's fiber; a restart resumes it.
+                     (say "(+ 1 2)")
+                     (setf pos (wait "3" pos))
+                     (say "0")
+                     (setf pos (wait "task gave 10" pos))
+                     ;; Failing the next task: its nursery re-signals in the main thread.
+                     (setf pos (wait "0: abort  Fail the task" pos))
+                     (say ":quit")
+                     (setf pos (wait "error in thread main thread: division by zero" pos))
+                     (setf pos (wait "0: abort  Stop the program" pos))
+                     (say "0")
+                     (setf pos (wait "the REPL is still running" pos))
+                     ;; A task the REPL itself waits for: no console is free to debug it,
+                     ;; so it fails, and the REPL's debugger shows the error.
+                     (say "@(future (/ 5 0))")
+                     (setf pos (wait "error in thread task: division by zero" pos))
+                     (setf pos (wait "0: abort  Return to the REPL" pos))
+                     (is (not (search "Fail the task" buffer :start2 pos))
+                         "the REPL's own fiber has no Fail the task restart:~%~A" buffer)
+                     (say "0")
+                     (wait "; aborted" pos)
+                     (say ":quit")
+                     (loop repeat 600 while (sb-ext:process-alive-p process) do (sleep 0.05))
+                     (is (not (sb-ext:process-alive-p process))
+                         "skein dev did not exit after :quit")
+                     (is (not (search "not reached" buffer))))))
+            (when (sb-ext:process-alive-p process)
+              (sb-ext:process-kill process 9))
+            (sb-ext:process-wait process))))))
