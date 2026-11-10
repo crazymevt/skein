@@ -211,7 +211,21 @@ pub fn librarySymbol(handle: *anyopaque, name: [:0]const u8) ?*anyopaque {
     return dlsym(handle, name.ptr);
 }
 
-/// The address of `name` in any library the process has loaded, or null.
+/// libm's handle once opened (Linux only), or 0.
+var libm_handle: std.atomic.Value(usize) = .init(0);
+
+/// The address of `name` in any library the process has loaded, or null. On Linux that
+/// includes libm (D-067).
 pub fn processSymbol(name: [:0]const u8) ?*anyopaque {
-    return dlsym(RTLD_DEFAULT, name.ptr);
+    if (dlsym(RTLD_DEFAULT, name.ptr)) |p| return p;
+    if (builtin.os.tag != .linux) return null;
+    // On Linux the math functions are in libm, which a native program doesn't load: the
+    // runtime's own math comes from Zig's compiler_rt. SBCL's process has libm, so open
+    // it the first time a symbol isn't found elsewhere. (Opening it twice is harmless.)
+    var h = libm_handle.load(.acquire);
+    if (h == 0) {
+        h = @intFromPtr(dlopen("libm.so.6", RTLD_NOW) orelse return null);
+        libm_handle.store(h, .release);
+    }
+    return dlsym(@ptrFromInt(h), name.ptr);
 }

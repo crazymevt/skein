@@ -899,3 +899,12 @@ Date: 2026-11-10 · Status: Accepted
   - `examples/sdl/window.skn`, built by `skeinc`, runs on macOS with the dummy video driver.
   - Building it found a GC bug in step 1's code: a C type's young parts were stored into a permanent object without the write barrier, so a collection left stale pointers. A runtime test now reproduces it.
 
+
+## D-067: libm in native programs on Linux
+Date: 2026-11-10 · Status: Accepted
+- **Context:** Step 2's CI failed on Linux: the native FFI fixture's `exp` wasn't found. On Linux the math functions are in libm, not libc. SBCL's process has libm, but a native program doesn't load it: the runtime's own math comes from Zig's compiler_rt, so the linker drops `-lm`, even with `--no-as-needed`, and referencing a libm function only finds compiler_rt's private copy.
+- **Decision:** On Linux, when a symbol isn't found anywhere in the process, the runtime opens `libm.so.6` once and looks there. The lookup order of D-065 is otherwise unchanged.
+- **Alternatives:**
+  - Making the fixture load libm with `deflibrary`. Programs would then find math functions under `skein run` but not natively.
+  - Keeping libm linked by naming a function only libm has. That depends on what compiler_rt provides.
+- **Consequences:** C math functions are found natively on every platform, as in Phase 0. A runtime test checks `strlen`, `exp` and `cbrt`.

@@ -879,3 +879,11 @@ test "struct layouts follow C, and survive collections" {
     try testing.expectEqual(@as(usize, 16), findField(mixed, names.keyword(null, "c")).offset);
     try testing.expectEqualStrings("t/point", ctypeName(point));
 }
+
+test "C functions are found in the C and math libraries" {
+    // Regression (M1.10): on Linux, libm's functions weren't found natively (D-067).
+    try testing.expect(symbol("strlen") != 0);
+    try testing.expect(symbol("exp") != 0);
+    try testing.expect(symbol("cbrt") != 0);
+    try testing.expectEqual(@as(usize, 0), symbol("skein_no_such_function_42"));
+}
