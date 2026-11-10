@@ -151,7 +151,7 @@ built by skeinc only, D-064)."
 (test c-backend-in-skein-matches-on-every-file
   ;; Files that can't be built natively yet must fail with the same message and location.
   ;; The C backend tests (backend-c.lisp) also compare every program they build.
-  (dolist (path (repository-skn-files))
+  (dolist (path (repository-program-files))
     (backends-match-p path)))
 
 (test c-backend-in-skein-has-the-same-tables

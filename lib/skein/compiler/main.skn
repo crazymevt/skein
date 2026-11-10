@@ -268,16 +268,21 @@ everything else becomes C. After an ns form, the namespaces it requires are tran
 (defn translate-file
   "The C program for the Skein program at path, with the namespaces it requires and
 skein.core's library in Skein; source-paths are the directories searched for namespaces.
-Its -main, if any, is called with the command-line arguments."
-  [path source-paths]
-  (let [build (make-build source-paths)
-        library (or (find-namespace-file build "skein.core.native")
-                    (fail "cannot find skein.core.native"))]
-    (reset! env/namespace-loader (fn [nm] (load-for-syntax build nm)))
-    (translate-source build library)
-    (let [ns (translate-source build path)
-          main (%find-own-var ns "-main")]
-      (c/program-text (:unit build) (file-name path) main))))
+Its -main, if any, is called with the command-line arguments. Given main-name (a
+project's :main), that function of the program's namespace must exist, and is called
+instead."
+  ([path source-paths] (translate-file path source-paths nil))
+  ([path source-paths main-name]
+   (let [build (make-build source-paths)
+         library (or (find-namespace-file build "skein.core.native")
+                     (fail "cannot find skein.core.native"))]
+     (reset! env/namespace-loader (fn [nm] (load-for-syntax build nm)))
+     (translate-source build library)
+     (let [ns (translate-source build path)
+           main (%find-own-var ns (or main-name "-main"))]
+       (when (and main-name (nil? main))
+         (fail path " doesn't define " main-name ", the project's :main"))
+       (c/program-text (:unit build) (file-name path) main)))))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Compiling with zig (build.lisp). The runtime and the C file are kept in the checkout's
@@ -342,11 +347,12 @@ install prefix, relative to the current directory."
       (fail "the runtime library is missing from " prefix "lib/")))
 
 (defn build-program
-  "Compile the Skein program at path to an executable at output (default: the file's
-name, in the current directory). Options: :output; :target, a triple of `targets` (nil:
-this machine); :profile, \"dev\" (the default) or \"release\"; and :keep-c (leave the C
-file next to the executable). Returns the executable's path."
-  [path {:keys [output target profile keep-c]}]
+  "Compile the Skein program at path to an executable at output (default: :name, else the
+file's name, in the current directory). Options: :output; :target, a triple of `targets`
+(nil: this machine); :profile, \"dev\" (the default) or \"release\"; :keep-c (leave the
+C file next to the executable); and for a project, :name, :source-paths (where its
+namespaces are) and :main-name (the function to call). Returns the executable's path."
+  [path {:keys [output target profile keep-c source-paths main-name] :as opts}]
   (let [home (find-home)
         profile (or profile "dev")
         _ (when-not (contains? profiles profile)
@@ -354,9 +360,10 @@ file next to the executable). Returns the executable's path."
         _ (when (and target (not (some #{target} targets)))
             (fail "unknown target " target "; use one of " (apply str (interpose ", " targets))))
         windows (if target (= (target-os target) :windows) (windows?))
-        output (or output (str (stem path) (if windows ".exe" "")))
-        source-paths (vec (distinct [(directory-of path) "" (str home "lib/")]))
-        c-source (translate-file path source-paths)
+        output (or output (str (or (:name opts) (stem path)) (if windows ".exe" "")))
+        source-paths (vec (distinct (concat (or source-paths [(directory-of path) ""])
+                                            [(str home "lib/")])))
+        c-source (translate-file path source-paths main-name)
         prefix (build-runtime home target profile)
         c-file (if keep-c
                  (str (directory-of output) (stem output) ".c")
@@ -373,11 +380,63 @@ file next to the executable). Returns the executable's path."
     output))
 
 ;;; ------------------------------------------------------------------------------------
+;;; Projects: project.skn (DESIGN §20.2, M1.11, D-069)
+
+(defn- directory-path
+  "dir as a directory of the project in project-dir: ending with /."
+  [project-dir dir]
+  (let [dir (apply str (map (fn [c] (if (= c \\) \/ c)) dir))]
+    (str project-dir dir (if (or (empty? dir) (= (last dir) \/)) "" "/"))))
+
+(defn read-project
+  "The project that the project.skn file at path describes, read as data (nothing in it
+runs). Returns its map, with :paths (default [\"src\"]) and :assets as directories of the
+project ending with /. The keys builds use are checked: :name, :main (a qualified symbol,
+like game.main/-main), :paths and :assets."
+  [path]
+  (let [bad (fn [& parts] (fail path ": " (apply str parts)))
+        r (reader/make-reader (io/read-file path) {:file path :namespace "user"
+                                                   :resolve-alias (fn [_] nil)})
+        form (reader/read-form r false ::eof)
+        project (when-not (= form ::eof) (expander/syntax-value form))
+        dirs (fn [k default]
+               (let [v (get project k default)]
+                 (when-not (and (vector? v) (every? string? v))
+                   (bad k " must be a vector of directories, like [\"src\"]"))
+                 (mapv (fn [d] (directory-path (directory-of path) d)) v)))]
+    (when-not (map? project)
+      (bad "expected a map, like {:name \"game\" :main game.main/-main}"))
+    (when-not (= ::eof (reader/read-form r false ::eof))
+      (bad "expected one map, with nothing after it"))
+    (when-not (and (string? (:name project)) (seq (:name project)))
+      (bad ":name must be a string, like \"game\""))
+    (when-not (and (symbol? (:main project)) (namespace (:main project)))
+      (bad ":main must be a qualified symbol, like game.main/-main"))
+    (assoc project :paths (dirs :paths ["src"]) :assets (dirs :assets []))))
+
+(defn build-project
+  "Compile the project whose project.skn is at path: its :main namespace, found in its
+:paths, to an executable named after it. opts are build-program's; :output defaults to
+the project's :name, in the current directory."
+  [path opts]
+  (let [project (read-project path)
+        main (:main project)
+        file (or (some (fn [dir]
+                         (let [f (str dir (namespace-file-name (namespace main)))]
+                           (when (io/file-exists? f) f)))
+                       (:paths project))
+                 (fail path ": cannot find namespace " (namespace main) " in :paths "
+                       (pr-str (:paths project))))]
+    (build-program file (assoc opts :name (:name project) :source-paths (:paths project)
+                               :main-name (name main)))))
+
+;;; ------------------------------------------------------------------------------------
 ;;; The command line
 
 (def ^:private usage
-  (str "Usage: skeinc build file.skn [-o output] [--target T] [--profile dev|release]"
-       " [--release] [--keep-c]"))
+  (str "Usage: skeinc build [file.skn] [-o output] [--target T] [--profile dev|release]"
+       " [--release] [--keep-c]\n"
+       "With no file, it builds the project that ./project.skn describes."))
 
 (defn- parse-build-args [args]
   (loop [args (seq args) opts {}]
@@ -397,12 +456,18 @@ file next to the executable). Returns the executable's path."
       opts)))
 
 (defn -main
-  "skeinc build file.skn [-o output] [--target T] [--profile dev|release] [--keep-c]."
+  "skeinc build [file.skn] [-o output] [--target T] [--profile dev|release] [--keep-c]:
+with no file, the project in the current directory."
   [& args]
   (let [[command & more] args]
     (when-not (= command "build") (fail usage))
     (let [opts (parse-build-args more)
-          file (or (:file opts)
-                   (fail "skeinc build: expected a file, e.g. `skeinc build hello.skn`"))]
-      (when-not (io/file-exists? file) (fail "skeinc build: file not found: " file))
-      (println "built" (build-program file opts)))))
+          file (:file opts)]
+      (cond file
+            (do (when-not (io/file-exists? file) (fail "skeinc build: file not found: " file))
+                (println "built" (build-program file opts)))
+            (io/file-exists? "project.skn")
+            (println "built" (build-project "project.skn" opts))
+            :else
+            (fail "skeinc build: expected a file, e.g. `skeinc build hello.skn`, or a "
+                  "project.skn in the current directory")))))

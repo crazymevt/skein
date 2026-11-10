@@ -235,7 +235,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Both commands are `skeinc`'s; `./skein` hands them to it (D-069).
 - Steps, in order:
   1. ✅ `--target` and `--profile` in `skeinc build`: the runtime and the program cross-compiled for each §19.1 target, Linux against glibc 2.28; `dev` and `release` profiles.
-  2. `project.skn`: `skeinc build` with no file builds the project's `:main`, finding namespaces in `:paths`.
+  2. ✅ `project.skn`: `skeinc build` with no file builds the project's `:main`, finding namespaces in `:paths`.
   3. `./skein build` and `./skein package` run `skeinc`, bootstrapping it if needed; the Lisp backend moves behind an internal command.
   4. `skein package`: a folder with the executable, its `:native` libraries and its `:assets`, or a `.app` for macOS; the runtime finds libraries next to the executable first.
   5. CI packages `hello` for all three targets on Linux and runs each package on its platform.
@@ -281,7 +281,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Generic function arity errors come from CLOS without a Skein location.
 - Arity errors name where the function was defined, not the call site; consider reporting the call site too.
 - Errors raised inside CL primitives (e.g. `(+ 1 "a")`) have no Skein source location yet; map them to the calling form, e.g. by recording the current form in the debugger hook.
-- `skein run` looks for required namespaces next to the main file and in the current directory; use `project.skn` `:paths` once it exists.
+- `skein run` looks for required namespaces next to the main file and in the current directory; use `project.skn` `:paths`, as `skeinc build` does (M1.11).
 - Consider `#!` shebang lines so `.skn` files can be executable scripts.
 - Phase 0 retrospective follow-ups (`docs/PHASE0-RETRO.md`): inline keyword access to value-struct fields when the type is known; Skein wording for host condition messages; optionally a saved SBCL core with `skein.core` and big bindings precompiled (startup is 0.74 s, plus 0.8 s for `sdl3.raw`). (DESIGN §22 questions 11–14 were decided in D-041.)
 - `skein.game`: input mapping (DESIGN §21). Driftrock reads SDL's keyboard state directly.

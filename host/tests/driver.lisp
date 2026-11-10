@@ -74,3 +74,65 @@ error message."
     (is (search "unknown profile fast; use dev or release"
                 (out "(prn (try (m/build-program \"x.skn\" {:profile \"fast\"})
                              (catch error e (condition-message e))))")))))
+
+(defun replace-all (text old new)
+  (with-output-to-string (s)
+    (loop with start = 0
+          for p = (search old text :start2 start)
+          do (write-string text s :start start :end (or p (length text)))
+             (if p (progn (write-string new s) (setf start (+ p (length old)))) (return)))))
+
+(defun project-outcome (files expr)
+  "Write FILES ((relative-path text) ...) into a fresh directory, evaluate the Skein EXPR
+there (DIR stands for the directory, with / separators), and return what it printed, or
+the error message."
+  (let ((dir (uiop:ensure-directory-pathname
+              (merge-pathnames (format nil "skein-project-~D-~D/" (get-universal-time)
+                                       (random 1000000))
+                               (uiop:temporary-directory)))))
+    (unwind-protect
+         (progn
+           (loop for (name text) in files
+                 do (let ((p (merge-pathnames name dir)))
+                      (ensure-directories-exist p)
+                      (with-open-file (s p :direction :output :if-exists :supersede)
+                        (write-string text s))))
+           (driver-function "read-project")
+           ;; Translating a program on the host needs skein.core.native's vars, which
+           ;; translating with the Lisp backend makes (as in the test above).
+           (lisp-outcome (first (native-programs)))
+           (ev-output
+            (format nil "(ns driver-projects (:require [skein.compiler.main :as m]))
+                         (prn (try ~A (catch error e (condition-message e))))"
+                    (replace-all expr "DIR" (directory-string dir)))))
+      (uiop:delete-directory-tree dir :validate t :if-does-not-exist :ignore))))
+
+(test driver-projects
+  ;; project.skn (M1.11, D-069): read as data and checked; :paths default to ["src"].
+  (let ((out (project-outcome
+              '(("project.skn" "{:name \"app\" :main app.main/-main :version \"1.0\"}"))
+              "(let [p (m/read-project \"DIRproject.skn\")]
+                 [(:name p) (:main p) (:paths p) (:assets p) (:version p)])")))
+    (is (search "[\"app\" app.main/-main [\"" out) "~A" out)
+    (is (search "/src/\"] [] \"1.0\"]" out) "~A" out))
+  (flet ((fails-with (text message)
+           (let ((out (project-outcome `(("project.skn" ,text))
+                                       "(m/read-project \"DIRproject.skn\")")))
+             (is (search message out) "~S: ~A" text out))))
+    (fails-with "[:name \"app\"]" "expected a map, like {:name")
+    (fails-with "" "expected a map")
+    (fails-with "{:name \"a\" :main a.main/-main} {}" "expected one map, with nothing after it")
+    (fails-with "{:main a.main/-main}" ":name must be a string")
+    (fails-with "{:name \"a\" :main -main}" ":main must be a qualified symbol")
+    (fails-with "{:name \"a\" :main a.main/-main :paths \"src\"}"
+                ":paths must be a vector of directories")
+    (fails-with "{:name \"a\" :main a.main/-main :assets [:x]}"
+                ":assets must be a vector of directories"))
+  ;; The :main namespace must be on the :paths, and define the :main function.
+  (let ((out (project-outcome '(("project.skn" "{:name \"a\" :main nope.main/-main}"))
+                              "(m/build-project \"DIRproject.skn\" {})")))
+    (is (search "cannot find namespace nope.main in :paths" out) "~A" out))
+  (let ((out (project-outcome '(("project.skn" "{:name \"a\" :main a.main/start}")
+                                ("src/a/main.skn" "(ns a.main) (defn -main [] nil)"))
+                              "(m/build-project \"DIRproject.skn\" {})")))
+    (is (search "doesn't define start, the project's :main" out) "~A" out)))

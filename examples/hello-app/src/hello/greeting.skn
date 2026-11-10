@@ -1,0 +1,4 @@
+(ns hello.greeting
+  "The greeting, in a namespace of its own, so the project's :paths are searched.")
+
+(defn greeting [who] (str "hello, " who))

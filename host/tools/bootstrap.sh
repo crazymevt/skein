@@ -68,6 +68,15 @@ test_compiler() {
     fi
     echo "skeinc: hello for $target ok"
   done
+  # A project (M1.11): with no file, skeinc builds the project.skn in the current directory.
+  (cd examples/hello-app && "$OLDPWD/$skeinc" build -o "$OLDPWD/build/examples/hello-app$exe" \
+     > /dev/null)
+  greeted=$(build/examples/hello-app$exe Ada Grace | tr -d '\r')
+  if [ "$greeted" != $'hello, Ada\nhello, Grace' ]; then
+    echo "skeinc: the hello-app project doesn't greet its arguments"
+    exit 1
+  fi
+  echo "skeinc: hello-app ok"
   # Programs that only skeinc compiles (the FFI, D-064), built by skeinc, print what
   # `skein run` prints, and every line a ";; stderr: " comment gives on standard error.
   for program in host/tests/fixtures/native-ffi*.skn; do

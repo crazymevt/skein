@@ -1,0 +1,5 @@
+;; A small project (M1.11): `skein build` here builds it, and `skein package` packages it.
+{:name "hello"
+ :version "0.1.0"
+ :main hello.main/-main
+ :paths ["src"]}

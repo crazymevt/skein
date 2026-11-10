@@ -1,0 +1,7 @@
+(ns hello.main
+  "A packaged hello: greets the world, or each name it's given."
+  (:require [hello.greeting :as g]))
+
+(defn -main [& names]
+  (doseq [who (or (seq names) ["world"])]
+    (println (g/greeting who))))

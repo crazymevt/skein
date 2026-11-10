@@ -691,6 +691,11 @@ the same locations."
              (every #'same-locations-p (skein.syntax:syntax-items a)
                     (skein.syntax:syntax-items b))))))
 
+(defun repository-program-files ()
+  "The repository's .skn files that hold code: all but project files (project.skn, M1.11),
+which are data."
+  (remove "project" (repository-skn-files) :key #'pathname-name :test #'string=))
+
 (defun repository-skn-files ()
   (let ((root (truename (asdf:system-relative-pathname "skein" "../"))))
     (sort (remove-if (lambda (p)

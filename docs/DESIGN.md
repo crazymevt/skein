@@ -908,7 +908,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
  :targets [:aarch64-macos :x86_64-windows-gnu :x86_64-linux-gnu]}
 ```
 
-`:paths` lists where namespaces are found; `:assets` lists directories copied into a package as they are (D-069). Dependencies are git-based at first. A package registry is deferred.
+`:paths` lists where namespaces are found (default `["src"]`); `:assets` lists directories copied into a package as they are; `:main` is the function called with the command-line arguments. The file is read as data, and `skein build` with no file builds the project in the current directory (D-069). Dependencies are git-based at first. A package registry is deferred.
 
 ### 20.3 Testing
 `skein.test` follows the style of `clojure.test`: `deftest`, `is`, `testing`, fixtures. There is also property-based testing with `skein.test.check` (Deferred).
