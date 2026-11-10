@@ -201,6 +201,26 @@ jobs:
             "build/window$exe"
           fi
 
+      # M1.11: from this one machine, package hello for all three P0 targets. The packages
+      # job runs each on its platform.
+      - name: Package hello for every target
+        if: runner.os == 'Linux'
+        run: |
+          cd examples/hello-app
+          for target in aarch64-macos x86_64-windows-gnu x86_64-linux-gnu; do
+            ../../skein package --target "$target"
+          done
+          # Artifacts don't keep file permissions; a tar archive does.
+          tar czf "$RUNNER_TEMP/hello-packages.tar.gz" dist
+
+      - name: Upload the hello packages
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: hello-packages
+          path: ${{ runner.temp }}/hello-packages.tar.gz
+          retention-days: 7
+
       # M0.12: the demo game plays itself for 600 frames and must keep its 99th-percentile
       # frame within the 60 fps budget.
       - name: Driftrock at 60 fps
@@ -210,3 +230,33 @@ jobs:
       - name: Driftrock at 60 fps (Linux, under Xvfb)
         if: runner.os == 'Linux'
         run: xvfb-run -a ./skein run examples/driftrock/main.skn --frames 600 --autopilot --check-60fps
+
+  # M1.11: each package that the Linux job made runs on its platform, which has no SBCL,
+  # Zig or Skein checkout installed.
+  packages:
+    name: packaged hello (${{ matrix.os }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: hello-packages
+
+      - name: Run the package for this platform
+        run: |
+          tar xzf hello-packages.tar.gz
+          case "$RUNNER_OS" in
+            macOS) exe=dist/aarch64-macos/hello.app/Contents/MacOS/hello ;;
+            Windows) exe=dist/x86_64-windows-gnu/hello/hello.exe ;;
+            *) exe=dist/x86_64-linux-gnu/hello/hello ;;
+          esac
+          out=$("$exe" CI | tr -d '\r')
+          echo "$out"
+          test "$out" = "hello, CI"
