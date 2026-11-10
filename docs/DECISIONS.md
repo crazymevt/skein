@@ -925,3 +925,21 @@ Date: 2026-11-10 · Status: Accepted
 - **Consequences:**
   - The native FFI fixture sorts with `qsort` (directly and as a blocking call) and searches with `bsearch` using Skein comparators, one of them allocating enough to collect while C's frames are on the stack, and one that errors. A restart invoked from a callback and a handler outside catching a callback's warning are stopped at the boundary. Callbacks of the other types are compiled; the C library can't call them. `host/tools/bootstrap.sh` checks the warnings a fixture's `;; stderr:` comments give.
   - A runtime test enters callbacks from a blocking call and from threads the runtime doesn't know, collecting meanwhile.
+
+## D-069: `skein build` and `skein package` in skeinc
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M1.11 adds cross-compiling, profiles, `project.skn` and packaging. Two compilers exist: the frozen Lisp C backend behind `./skein build`, which has no FFI (D-064), and `skeinc`. A package must hold its C libraries and assets and run where it's unpacked, and macOS apps ship as `.app` bundles (DESIGN §19.3). DESIGN §20.2's `:paths` mixes sources and assets.
+- **Decision** (Jessie chose the first three):
+  - **skeinc owns both commands.** `./skein build` and `./skein package` (and `skein.cmd`) run `build/skeinc`, bootstrapping it first if it's missing or older than its sources. The Lisp backend stays only to build the first compiler, behind an internal command.
+  - **Packages:** `skein package` makes `dist/<target>/<name>/`, with the executable, the target's `:native` libraries next to it, and the `:assets` directories. For a macOS target it makes `dist/<target>/<Name>.app` instead: the executable in `Contents/MacOS`, the libraries in `Contents/Frameworks`, the assets in `Contents/Resources`, and an `Info.plist`. The runtime looks for C libraries in the executable's directory first (and in `../Frameworks` on macOS), then as D-065 says.
+  - **`:assets`:** a new `project.skn` key lists the directories copied into a package as they are. `:paths` is only where namespaces are found.
+  - **Targets and profiles:** `--target` takes the zig triples of DESIGN §19.1; the default is the machine's own. Linux targets link against glibc 2.28, for older distributions. `--profile` is `dev` (the default for `build`: safety checks, ReleaseSafe runtime) or `release` (the default for `package`: ReleaseFast, `-O2`); `--release` stays as short for `--profile release`. Each target and profile gets its own runtime build in the cache.
+  - **`project.skn`** supplies `:name`, `:version`, `:main` (the `-main` to call, as `ns/-main`), `:paths`, `:native` and `:assets`. `skein build` with no file builds the project in the current directory. `:deps`, `:profiles` and `:targets` aren't read yet.
+  - **M1.11 has five steps** (ROADMAP): targets and profiles; `project.skn`; `./skein` handing off to skeinc; `skein package`; and CI that packages `hello` for all three targets on Linux and runs each on its platform.
+- **Alternatives:**
+  - Keeping `./skein build` on the Lisp backend, with the new features only in `skeinc`. Two build commands that differ would stay around.
+  - A plain folder on macOS too, with the `.app` later.
+  - Copying every file in `:paths` that isn't Skein source. Stray files in source directories would ship.
+- **Consequences:**
+  - Building needs `build/skeinc`; the first `./skein build` bootstraps it, which takes a minute or two.
+  - Code signing, notarization, archives and finding assets at run time (a packaged program's working directory isn't its folder, and a `.app`'s assets are in `Contents/Resources`) come later.

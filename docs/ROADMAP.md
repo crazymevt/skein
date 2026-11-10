@@ -28,7 +28,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.8 Native `skein.core` | ✅ |
 | M1.9 Self-hosting | ✅ |
 | M1.10 Native FFI | ✅ |
-| M1.11 `skein build` and `skein package` | ⬜ |
+| M1.11 `skein build` and `skein package` | 🟨 |
 | M1.12 Driftrock native | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
@@ -232,6 +232,13 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M1.11 `skein build` and `skein package`
 - `skein build --target T --profile P` cross-compiles for the three P0 targets (§19.1); `skein package` makes a folder with the executable, bundled libraries and assets (§19.4). `project.skn` (§20.2) supplies `:main`, `:paths` and `:native`.
+- Both commands are `skeinc`'s; `./skein` hands them to it (D-069).
+- Steps, in order:
+  1. `--target` and `--profile` in `skeinc build`: the runtime and the program cross-compiled for each §19.1 target, Linux against glibc 2.28; `dev` and `release` profiles.
+  2. `project.skn`: `skeinc build` with no file builds the project's `:main`, finding namespaces in `:paths`.
+  3. `./skein build` and `./skein package` run `skeinc`, bootstrapping it if needed; the Lisp backend moves behind an internal command.
+  4. `skein package`: a folder with the executable, its `:native` libraries and its `:assets`, or a `.app` for macOS; the runtime finds libraries next to the executable first.
+  5. CI packages `hello` for all three targets on Linux and runs each package on its platform.
 
 **Exit:** from one machine, packaged `hello` builds for all three targets run on their platforms in CI.
 

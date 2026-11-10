@@ -873,6 +873,8 @@ skein build --target x86_64-windows-gnu --profile release
 ### 19.4 Packaging
 `skein package --target ...` produces a distributable folder or archive: the executable, bundled dynamic libraries (with rpath/install names fixed), and assets. It should be Steam-depot friendly.
 
+Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:native` libraries next to it and the `:assets` directories; a macOS target gets `dist/<target>/<Name>.app` (`Contents/MacOS`, `Contents/Frameworks`, `Contents/Resources`, `Info.plist`). Native programs look for C libraries in their own directory first, and in `../Frameworks` on macOS. Signing, notarization and archives come later.
+
 ## 20. Tooling
 
 ### 20.1 `skein` command-line tool
@@ -895,7 +897,8 @@ skein build --target x86_64-windows-gnu --profile release
 {:name    "asteroids"
  :version "0.1.0"
  :main    asteroids.main/-main
- :paths   ["src" "assets"]
+ :paths   ["src"]
+ :assets  ["assets"]
  :deps    {skein/sdl3 {:git "https://github.com/skein-lang/sdl3" :tag "v0.1.0"}}
  :native  {:libs {:macos ["vendor/macos/libSDL3.dylib"]
                   :windows ["vendor/windows/SDL3.dll"]
@@ -905,7 +908,7 @@ skein build --target x86_64-windows-gnu --profile release
  :targets [:aarch64-macos :x86_64-windows-gnu :x86_64-linux-gnu]}
 ```
 
-Dependencies are git-based at first. A package registry is deferred.
+`:paths` lists where namespaces are found; `:assets` lists directories copied into a package as they are (D-069). Dependencies are git-based at first. A package registry is deferred.
 
 ### 20.3 Testing
 `skein.test` follows the style of `clojure.test`: `deftest`, `is`, `testing`, fixtures. There is also property-based testing with `skein.test.check` (Deferred).
