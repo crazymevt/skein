@@ -47,11 +47,12 @@ error message."
   (dolist (path (native-programs))
     (let ((lisp (lisp-outcome path))
           (skein (driver-outcome path)))
-      (is (equal lisp skein) "~A: the driver differs~%~A" (file-namestring path)
+      (unless (and (consp lisp) (search "build FFI programs with skeinc" (second lisp)))
+       (is (equal lisp skein) "~A: the driver differs~%~A" (file-namestring path)
           (if (and (stringp lisp) (stringp skein))
               (first-difference lisp skein)
               (format nil "Lisp: ~S~%Skein: ~S" (if (stringp lisp) "C text" lisp)
-                      (if (stringp skein) "C text" skein)))))))
+                      (if (stringp skein) "C text" skein))))))))
 
 (test driver-paths
   (flet ((call (name &rest args) (apply (driver-function name) args)))

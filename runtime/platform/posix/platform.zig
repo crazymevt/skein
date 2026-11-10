@@ -168,3 +168,50 @@ pub fn processEnviron() std.process.Environ {
     const env: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
     return .{ .block = .{ .slice = std.mem.span(env) } };
 }
+
+// ---------------------------------------------------------------------------------------
+// C libraries (the FFI, M1.10)
+
+/// "macos" or "linux": which entry of a deflibrary spec applies.
+pub const os_name = if (builtin.os.tag == .macos) "macos" else "linux";
+
+/// The separator of SKEIN_LIBRARY_PATH's directories.
+pub const path_list_separator = ':';
+
+/// Directories searched for C libraries before the system's places (as Phase 0's
+/// skein.platform:library-directories).
+pub const library_directories: []const []const u8 = if (builtin.os.tag == .macos)
+    &.{ "/opt/homebrew/lib/", "/usr/local/lib/" }
+else
+    &.{"/usr/local/lib/"};
+
+extern "c" fn dlopen(path: ?[*:0]const u8, mode: c_int) ?*anyopaque;
+extern "c" fn dlsym(handle: ?*anyopaque, symbol: [*:0]const u8) ?*anyopaque;
+extern "c" fn dlerror() ?[*:0]const u8;
+
+const RTLD_NOW: c_int = 2;
+const RTLD_GLOBAL: c_int = if (builtin.os.tag == .macos) 8 else 0x100;
+const RTLD_DEFAULT: ?*anyopaque = if (builtin.os.tag == .macos) @ptrFromInt(@as(usize, @bitCast(@as(isize, -2)))) else null;
+
+/// Load the C library at `path` (a file name the system searches for, or a path); null if
+/// it can't be loaded, with the reason in `why` when there is room.
+pub fn loadLibrary(path: [:0]const u8, why: []u8) ?*anyopaque {
+    if (dlopen(path.ptr, RTLD_NOW | RTLD_GLOBAL)) |h| return h;
+    if (dlerror()) |e| {
+        const msg = std.mem.span(e);
+        const n = @min(msg.len, why.len);
+        @memcpy(why[0..n], msg[0..n]);
+        if (n < why.len) why[n] = 0;
+    }
+    return null;
+}
+
+/// The address of `name` in the library `handle`, or null.
+pub fn librarySymbol(handle: *anyopaque, name: [:0]const u8) ?*anyopaque {
+    return dlsym(handle, name.ptr);
+}
+
+/// The address of `name` in any library the process has loaded, or null.
+pub fn processSymbol(name: [:0]const u8) ?*anyopaque {
+    return dlsym(RTLD_DEFAULT, name.ptr);
+}

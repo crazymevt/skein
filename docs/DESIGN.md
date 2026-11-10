@@ -635,6 +635,8 @@ Phase 0 details (D-038):
 - C code runs with float traps masked. A callback that signals an error warns and returns zero, since errors cannot unwind through C.
 - Libraries are searched in `SKEIN_LIBRARY_PATH` (`:`-separated, `;` on Windows), then `/opt/homebrew/lib` and `/usr/local/lib` on macOS, `/usr/local/lib` on Linux, then the OS search path.
 
+Native details (Phase 1, D-064, D-065): the same API and rules. `deflibrary` loads the library when the program runs, a C function is looked up when first called (in the loaded libraries, then the whole process), and the C backend compiles each call to a typed C call. Struct and union layouts follow C's alignment rules. Native FFI programs are built by `skeinc`; `./skein build` doesn't compile them.
+
 ### 14.2 Ownership and memory
 Return-value annotations:
 - `^:owned (ptr T)` means the caller must free it. Skein attaches a finalizer, and `with-foreign` releases it deterministically.

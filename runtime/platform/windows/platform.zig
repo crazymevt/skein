@@ -185,3 +185,50 @@ fn writeAll(handle: ?*anyopaque, bytes: []const u8) void {
 pub fn processEnviron() std.process.Environ {
     return .{ .block = .global };
 }
+
+// ---------------------------------------------------------------------------------------
+// C libraries (the FFI, M1.10)
+
+/// "windows": which entry of a deflibrary spec applies.
+pub const os_name = "windows";
+
+/// The separator of SKEIN_LIBRARY_PATH's directories.
+pub const path_list_separator = ';';
+
+/// Directories searched for C libraries before the system's places: none on Windows.
+pub const library_directories: []const []const u8 = &.{};
+
+extern "kernel32" fn LoadLibraryW(name: [*:0]const u16) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn GetProcAddress(module: *anyopaque, name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn GetLastError() callconv(.winapi) u32;
+extern "kernel32" fn GetCurrentProcess() callconv(.winapi) *anyopaque;
+extern "kernel32" fn K32EnumProcessModules(process: *anyopaque, modules: [*]?*anyopaque, size: u32, needed: *u32) callconv(.winapi) i32;
+
+/// Load the C library at `path` (UTF-8); null if it can't be loaded, with the reason in
+/// `why` when there is room.
+pub fn loadLibrary(path: [:0]const u8, why: []u8) ?*anyopaque {
+    var wide: [1024]u16 = undefined;
+    const n = std.unicode.utf8ToUtf16Le(wide[0 .. wide.len - 1], path) catch return null;
+    wide[n] = 0;
+    if (LoadLibraryW(@ptrCast(&wide))) |h| return h;
+    const msg = std.fmt.bufPrint(why[0 .. why.len - 1], "error {d}", .{GetLastError()}) catch "";
+    why[msg.len] = 0;
+    return null;
+}
+
+/// The address of `name` in the library `handle`, or null.
+pub fn librarySymbol(handle: *anyopaque, name: [:0]const u8) ?*anyopaque {
+    return GetProcAddress(handle, name.ptr);
+}
+
+/// The address of `name` in any module the process has loaded, or null.
+pub fn processSymbol(name: [:0]const u8) ?*anyopaque {
+    var modules: [512]?*anyopaque = undefined;
+    var needed: u32 = 0;
+    if (K32EnumProcessModules(GetCurrentProcess(), &modules, @sizeOf(@TypeOf(modules)), &needed) == 0) return null;
+    const count = @min(needed / @sizeOf(?*anyopaque), modules.len);
+    for (modules[0..count]) |m| {
+        if (m) |module| if (GetProcAddress(module, name.ptr)) |p| return p;
+    }
+    return null;
+}

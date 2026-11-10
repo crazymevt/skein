@@ -223,7 +223,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Libraries are loaded when the program runs and each C function is looked up on its first call, as in Phase 0; the calls themselves are typed C calls (D-064).
 - Native FFI is added to the C backend written in Skein only. The Lisp C backend is frozen as the bootstrap compiler: `./skein build` reports FFI programs as unsupported and points to `skeinc` (D-064).
 - Steps, in order:
-  1. The runtime's FFI: foreign pointers, loading libraries and finding symbols, structs, unions and enums with C layouts, memory access, handles, and owned pointers freed by the GC. skein.ffi's functions natively.
+  1. ✅ The runtime's FFI: foreign pointers, loading libraries and finding symbols, structs, unions and enums with C layouts, memory access, handles, and owned pointers freed by the GC. skein.ffi's functions natively.
   2. `defcfun` in `skeinc`: typed C calls with Phase 0's conversions (C strings, enums, `nil` as NULL), arrays pinned for the call, `^:owned` results, `^:blocking` calls that let the GC run, and the slow-call warning.
   3. `defcallback`: C functions that call Skein; an error warns and returns zero, as in Phase 0.
   4. `examples/sdl/window.skn`, built by `skeinc`, runs natively on all three platforms in CI.
@@ -292,6 +292,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - `declaim` and `defonce` don't compile natively yet (`%declaim`, `%var-bound?`).
   - A program that includes `skein.compiler.env` registers every public var of skein.core.native at startup, and the model copies them into its skein.core.
 - The native compiler's driver (D-062): `skeinc` finds the Skein checkout from `SKEIN_HOME` or by looking in the current directory and its parents, and keeps the runtime and the C file in the checkout's `.skein-cache/`. M1.11 should give it an install layout. It doesn't support `--target` yet.
+- Native FFI (D-065): pointers print as `#<ptr 0x...>` (Phase 0 prints SBCL's form), and owned and borrowed pointers are both of class `any`. The GC frees an owned pointer some time after it becomes unreachable, as Phase 0's finalizers do.
 - The interpreter (D-061): declared types aren't checked in phase-1 code, and a handler or restart cluster holds at most 64 entries. Its speed hasn't been measured; macros are usually small.
 - Native concurrency (D-057):
   - Tasks, nurseries and channels share one lock, and waiters poll every 20 ms; fine for Phase 1's thread pool, replaced by the fiber scheduler in Phase 2.

@@ -305,3 +305,43 @@ test "threads allocate and collect concurrently" {
     for (&threads) |*t| gc.blocking(Worker.join, t);
     for (&ok) |*o| try testing.expect(o.load(.acquire));
 }
+
+test "finalizers run for objects that die, minor and major" {
+    const Counter = struct {
+        var dead: usize = 0;
+        fn f(_: *Header) void {
+            dead += 1;
+        }
+    };
+    Counter.dead = 0;
+    var roots: [2]Value = .{ Value.nil, Value.nil };
+    gc.addRoots(&roots);
+    defer gc.removeRoots(&roots);
+    // Many die young; one survives a minor collection (moving) and dies in a major one;
+    // one lives on. A stale stack word may keep a dead object alive (the stack is scanned
+    // conservatively), so the young ones are counted with some slack.
+    const Make = struct {
+        noinline fn make(r: []Value) void {
+            for (0..100) |_| gc.addFinalizer(tuple(2).toObject(), Counter.f);
+            r[0] = tuple(2);
+            gc.addFinalizer(r[0].toObject(), Counter.f);
+            r[1] = tuple(2);
+            gc.addFinalizer(r[1].toObject(), Counter.f);
+        }
+    };
+    Make.make(&roots);
+    scrubStack();
+    gc.collect(.minor);
+    const young = Counter.dead;
+    try testing.expect(young >= 95 and young <= 100);
+    roots[0] = Value.nil;
+    scrubStack();
+    gc.collect(.major);
+    try testing.expect(Counter.dead >= young + 1);
+    const after = Counter.dead;
+    gc.collect(.major);
+    try testing.expectEqual(after, Counter.dead);
+    // The live one is still finalizable, and not finalized.
+    try testing.expect(roots[1].isObject());
+}
+

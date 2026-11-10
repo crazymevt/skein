@@ -712,18 +712,40 @@ constant), the library's var, or a compile error."
           (library-var nm) (emit-global-ref st node (library-var nm))
           :else (unsupported node "the native backend can't use skein.core/" nm " yet"))))
 
+(def ^:private ffi-builtins
+  "The functions of skein.ffi that the runtime has (runtime/src/ffi.zig, M1.10, D-065),
+as skein.core functions named skein.ffi/<name>. Phase 0 defines them in CL."
+  #{"%load-library" "load-library" "%define-struct" "%define-enum" "%type" "%alloc" "free"
+    "own" "null" "null?" "ptr?" "address" "ptr+" "%sizeof" "%get" "%put!" "%field"
+    "%put-field!" "c-string" "enum-value" "handle" "handle-value" "free-handle"
+    "%call-pinned"})
+
+(defn- ffi-var? [var] (= (var-ns-name var) "skein.ffi"))
+
+(def ^:private emit-var-ref*)
+
 (defn- emit-var-ref [st node]
   (let [var (:var node)]
-    (if (core-var? var)
-      (if (contains? builtin-condition-types (%var-name var))
-        (startup-constant st [:condition-type (%var-name var)]
-                          (str "sk_builtin_condition_type(" (c-string-literal (%var-name var))
-                               ")"))
-        (if (contains? (:core-defined @(:unit st)) (%var-name var))
-          ;; Defined by lib/skein/core.skn, compiled into this program.
-          (emit-global-ref st node var)
-          (native-core-function st node var)))
-      (emit-global-ref st node var))))
+    (cond
+      (and (ffi-var? var) (contains? ffi-builtins (%var-name var)))
+      (let [nm (str "skein.ffi/" (%var-name var))]
+        (startup-constant st [:core nm] (str "sk_core(" (c-string-literal nm) ")")))
+      (and (ffi-var? var) (contains? #{"%define-function" "%define-callback"} (%var-name var)))
+      (unsupported node (if (= (%var-name var) "%define-function") "defcfun" "defcallback")
+                   " isn't supported natively yet (M1.10)")
+      :else (emit-var-ref* st node var))))
+
+(defn- emit-var-ref* [st node var]
+  (if (core-var? var)
+    (if (contains? builtin-condition-types (%var-name var))
+      (startup-constant st [:condition-type (%var-name var)]
+                        (str "sk_builtin_condition_type(" (c-string-literal (%var-name var))
+                             ")"))
+      (if (contains? (:core-defined @(:unit st)) (%var-name var))
+        ;; Defined by lib/skein/core.skn, compiled into this program.
+        (emit-global-ref st node var)
+        (native-core-function st node var)))
+    (emit-global-ref st node var)))
 
 (defn- emit-if
   "if; with type, its value is computed as that static type."
@@ -1253,10 +1275,59 @@ through their function objects)."
             "pr" (print-call true false)
             (unsupported node "the native backend can't call skein.core/" nm " yet")))))
 
+(def ^:private ffi-primitive-types
+  '#{i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void c-string ptr})
+
+(defn- qualify-ffi-type
+  "A foreign type (as data) with the struct, union and enum names in it qualified by the
+namespace their var is in, as the runtime registers them (D-065). (ptr T) and (fn ...)
+stay as they are: the runtime doesn't look into them."
+  [st t]
+  (cond (symbol? t)
+        (cond (contains? ffi-primitive-types t) t
+              (namespace t) (if-let [target (%find-alias (:ns st) (namespace t))]
+                              (symbol (%namespace-name target) (name t))
+                              t)
+              :else (if-let [var (%resolve-var (:ns st) (name t))]
+                      (symbol (var-ns-name var) (name t))
+                      t))
+        (and (list? t) (symbol? (first t)) (= (name (first t)) "array"))
+        (apply list (first t) (qualify-ffi-type st (second t)) (drop 2 t))
+        :else t))
+
+(defn- ffi-call?
+  "True if f is skein.ffi/nm called with n arguments, the first a quoted symbol."
+  [f nm args n]
+  (and (= :var-ref (:op f)) (ffi-var? (:var f)) (= (%var-name (:var f)) nm)
+       (= (count args) n) (= :const (:op (first args))) (symbol? (:value (first args)))))
+
+(defn- emit-ffi-definition
+  "(skein.ffi/%define-struct 'name kind 'fields) or (skein.ffi/%define-enum 'name 'base
+values): define the type at run time, with the foreign types in fields qualified, and set
+the var named name in this namespace to it, as Phase 0 does."
+  [st node f args]
+  (let [args (if (= "%define-struct" (%var-name (:var f)))
+               (let [[nm kind fields] args]
+                 [nm kind (const-node (:loc fields)
+                                      (mapv (fn [[fname ftype]]
+                                              [fname (qualify-ffi-type st ftype)])
+                                            (:value fields)))])
+               args)
+        fv (emit st f)
+        values (emit-args st args)
+        array (fresh st "args")]
+    (stmt st "const sk_value " array "[] = {" (join ", " values) "};")
+    (let [t (temp st (str "sk_call(" fv ", " (count values) ", " array ")"))
+          var (%intern-var (:ns st) (name (:value (first args))))]
+      (stmt st "sk_var_set(" (var-c-name st var) ", " t ");")
+      (single-value st "SK_NIL"))))
+
 (defn- emit-call [st node]
   (let [f (:fn node)
         args (qualify-condition-type-call f (:args node))]
-    (cond (core-call? f "%define-struct" args 3) (emit-define-struct st node args)
+    (cond (or (ffi-call? f "%define-struct" args 3) (ffi-call? f "%define-enum" args 3))
+          (emit-ffi-definition st node f args)
+          (core-call? f "%define-struct" args 3) (emit-define-struct st node args)
           (core-call? f "%define-soa" args 2) (emit-define-soa st node args)
           :else
           (let [args (if (core-call? f "%make-array" args 2)

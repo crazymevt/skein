@@ -1,0 +1,100 @@
+(ns native-ffi
+  (:require [skein.ffi :as ffi]))
+
+;; The FFI natively (M1.10): built by skeinc, it must print what `skein run` prints
+;; (host/tools/bootstrap.sh checks). Phase 0's FFI tests (host/tests/ffi.lisp) are the
+;; model. Addresses aren't printed: they differ between runs.
+
+(defn message [thunk] (try (thunk) (catch error e (condition-message e))))
+
+;; Structs and unions: sizes and layouts follow C's rules
+(ffi/defcstruct point (x i32) (y i32))
+(ffi/defcstruct rect (origin point) (size (array f32 2)) (tag u8))
+(ffi/defcunion number (i i64) (f f32) (bytes (array u8 3)))
+(ffi/defcstruct mixed (a u8) (b f64) (c u16) (d ptr) (e bool))
+(prn [(ffi/sizeof point) (ffi/sizeof rect) (ffi/sizeof number) (ffi/sizeof f64)
+      (ffi/sizeof ptr) (ffi/sizeof mixed)])
+
+(prn (ffi/with-foreign [p (ffi/alloc point)]
+       (ffi/put-field! p point :x 3)
+       (ffi/put-field! p point :y -4)
+       [(ffi/field p point :x) (ffi/field p point :y) (ffi/get p i32 1)]))
+
+(ffi/defcunion num2 (i i32) (f f32))
+(prn (ffi/with-foreign [p (ffi/alloc num2)]
+       (ffi/put-field! p num2 :f 1.0f)
+       (ffi/field p num2 :i)))
+
+(ffi/defcstruct flag (on bool) (n u8))
+(prn (ffi/with-foreign [p (ffi/alloc flag)]
+       (ffi/put-field! p flag :on true)
+       [(ffi/sizeof flag) (ffi/field p flag :on) (ffi/get p u8 0)]))
+
+;; A nested struct or array field gives its address
+(ffi/defcstruct line (from point) (to point) (tags (array u8 2)))
+(prn (ffi/with-foreign [p (ffi/alloc line)]
+       (let [to (ffi/field p line :to)
+             tags (ffi/field p line :tags)]
+         (ffi/put-field! to point :y 7)
+         (ffi/put! tags u8 3 1)
+         [(ffi/get p i32 3) (ffi/get p u8 17) (- (ffi/address to) (ffi/address p))])))
+
+(prn (ffi/with-foreign [p (ffi/alloc mixed)]
+       (ffi/put-field! p mixed :a 255)
+       (ffi/put-field! p mixed :b 2.5)
+       (ffi/put-field! p mixed :c 65535)
+       (ffi/put-field! p mixed :d nil)
+       (ffi/put-field! p mixed :e false)
+       [(ffi/field p mixed :a) (ffi/field p mixed :b) (ffi/field p mixed :c)
+        (ffi/field p mixed :d) (ffi/field p mixed :e) (ffi/get p u8 8)]))
+
+;; Memory and pointers
+(prn (ffi/with-foreign [p (ffi/alloc f32 4)]
+       (ffi/put! p f32 2.5 1)
+       (ffi/put! p f32 -1 3)
+       [(ffi/get p f32 0) (ffi/get p f32 1) (ffi/get p f32 3) (ffi/null? p) (ffi/ptr? p)]))
+(prn (ffi/with-foreign [p (ffi/alloc u8 8)]
+       (let [q (ffi/ptr+ p 3)]
+         (ffi/put! q u8 9)
+         [(- (ffi/address q) (ffi/address p)) (ffi/get p u8 3)])))
+(prn [(ffi/null? (ffi/null)) (ffi/null? nil) (ffi/ptr? 5) (ffi/ptr? nil)])
+(prn (ffi/with-foreign [p (ffi/alloc i64 2)]
+       (ffi/put! p i64 -2 0)
+       (ffi/put! p u64 18446744073709551615 1)
+       [(ffi/get p i64 0) (ffi/get p u64 0) (ffi/get p i64 1) (ffi/get p u64 1)
+        (ffi/get p i8 0) (ffi/get p u16 0)]))
+(prn (ffi/with-foreign [p (ffi/alloc ptr 2)]
+       (ffi/put! p c-string "héllo ☃")
+       (ffi/put! p ptr nil 1)
+       [(ffi/get p c-string) (ffi/c-string (ffi/get p ptr)) (ffi/get p ptr 1)
+        (ffi/c-string nil)]))
+
+;; Owned pointers: freed by ffi/free, or by the GC when unreachable
+(let [p (ffi/own (ffi/alloc u8 4))]
+  (ffi/put! p u8 7 0)
+  (prn [(ffi/get p u8 0) (ffi/ptr? p) (ffi/null? p)])
+  (ffi/free p)
+  (prn (message (fn [] (ffi/get p u8 0)))))
+(dotimes [i 20000] (ffi/put! (ffi/own (ffi/alloc u8 256)) u8 1 0))
+(prn :owned-churn-done)
+
+;; Enums
+(ffi/defcenum flags u32 (:a 1) (:b 2) (:c 4))
+(prn [(ffi/enum-value flags :b) (ffi/enum-value flags [:a :c]) (ffi/enum-value flags 9)
+      (ffi/enum-value flags nil)])
+(ffi/defcstruct tagged (kind flags) (n i32))
+(prn (ffi/with-foreign [p (ffi/alloc tagged)]
+       (ffi/put-field! p tagged :kind [:b :c])
+       [(ffi/field p tagged :kind) (ffi/sizeof tagged)]))
+
+;; Handles
+(prn (let [v [1 2]
+           h (ffi/handle v)]
+       [(integer? h) (identical? v (ffi/handle-value h)) (ffi/free-handle h)]))
+(prn (not= (ffi/handle :a) (ffi/handle :a)))
+
+;; Errors
+(prn (message (fn [] (ffi/with-foreign [p (ffi/alloc line)] (ffi/put-field! p line :to 0))))
+     (message (fn [] (ffi/enum-value flags :zzz)))
+     (message (fn [] (ffi/with-foreign [p (ffi/alloc point)] (ffi/field p point :z))))
+     (message (fn [] (ffi/get 5 u8 0))))

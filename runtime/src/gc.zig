@@ -140,10 +140,16 @@ const State = struct {
     remembered: std.ArrayList(*Header) = .empty,
 
     mutators: ?*Mutator = null,
+    /// Objects with a finalizer, which runs when a collection finds the object dead.
+    finalizable: std.ArrayList(Finalizable) = .empty,
     // Collection work lists.
     worklist: std.ArrayList(*Header) = .empty,
     pinned: std.ArrayList(*Header) = .empty,
 };
+
+/// An object and the function to run when it dies (with the world stopped: it must not
+/// touch the heap; it may read the dead object's payload).
+pub const Finalizable = struct { h: *Header, f: *const fn (*Header) void };
 
 var state: State = .{};
 /// Guards the mutator list, segment allocation and stopping the world. Held for the
@@ -461,6 +467,55 @@ pub fn addRoots(slots: []Value) void {
     listAppend([]Value, &state.roots, slots);
 }
 
+/// Run `f` on `h` when a collection finds `h` dead (owned C pointers, M1.10, D-065). `f`
+/// runs with the world stopped and must not touch the heap.
+pub fn addFinalizer(h: *Header, f: *const fn (*Header) void) void {
+    world.lock();
+    defer world.unlock();
+    listAppend(Finalizable, &state.finalizable, .{ .h = h, .f = f });
+}
+
+/// After a minor collection's tracing: follow young finalizable objects that moved, and
+/// finalize those that died. Old ones survive a minor collection.
+fn finalizeMinor() void {
+    var i: usize = 0;
+    while (i < state.finalizable.items.len) {
+        const e = &state.finalizable.items[i];
+        const h = e.h;
+        if (!isYoung(h)) {
+            i += 1;
+            continue;
+        }
+        const seg = segmentOf(h);
+        const alive = switch (seg.kind) {
+            .nursery => h.gc.forwarded or h.gc.pinned,
+            .large_head => seg.reached,
+            else => true,
+        };
+        if (!alive) {
+            e.f(h);
+            _ = state.finalizable.swapRemove(i);
+            continue;
+        }
+        if (h.gc.forwarded) e.h = @ptrFromInt(h.payload()[0]);
+        i += 1;
+    }
+}
+
+/// After a major collection's marking: finalize the objects left unmarked.
+fn finalizeMajor() void {
+    var i: usize = 0;
+    while (i < state.finalizable.items.len) {
+        const e = state.finalizable.items[i];
+        if (e.h.gc.marked) {
+            i += 1;
+        } else {
+            e.f(e.h);
+            _ = state.finalizable.swapRemove(i);
+        }
+    }
+}
+
 /// Remove roots added with `addRoots`.
 pub fn removeRoots(slots: []Value) void {
     world.lock();
@@ -682,6 +737,7 @@ fn minor() void {
     for (state.remembered.items) |h| scanChildrenMinor(h);
     for (state.pinned.items) |h| scanChildrenMinor(h);
     while (state.worklist.pop()) |h| scanChildrenMinor(h);
+    finalizeMinor();
 
     // Promote segments with pinned objects, keeping only those objects; free the rest.
     for (state.nursery.items) |i| {
@@ -744,6 +800,7 @@ fn major() void {
     while (state.worklist.pop()) |h| {
         for (h.valueSlots()) |v| if (v.isObject()) mark(v.toObject());
     }
+    finalizeMajor();
     sweep();
 }
 

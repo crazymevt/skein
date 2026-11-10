@@ -74,11 +74,15 @@ means it does not."
 ;;; Memory access. These take a type as written, like (alloc f32 1024): primitive types
 ;;; and (ptr ...) forms are quoted; struct, union and enum names are evaluated.
 
-(def ^:private primitive-types
-  '#{i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void c-string ptr})
+(defn- primitive-type?
+  "True if type is a primitive foreign type. (A function rather than a def of the set:
+the macros below call it at compile time, when the native compiler runs only function
+definitions, D-058.)"
+  [type]
+  (contains? '#{i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool void c-string ptr} type))
 
 (defn- type-form [type]
-  (if (or (seq? type) (and (symbol? type) (contains? primitive-types type)))
+  (if (or (seq? type) (and (symbol? type) (primitive-type? type)))
     `'~type
     type))
 

@@ -139,6 +139,16 @@ pub const TypeId = enum(u16) {
     /// A map keyed by identity: [keys (tuple), values (tuple), count, GC epoch of the
     /// index, index (tuple of positions, keyed by address)].
     identity_table = 49,
+    // M1.10's FFI (D-065; ffi.zig).
+    /// A C pointer: raw [address].
+    foreign_ptr = 50,
+    /// A C pointer that Skein owns and frees (ffi/own, ^:owned): raw [address, or 0 once
+    /// freed]. The GC frees it when the object dies.
+    owned_ptr = 51,
+    /// A C struct, union or enum: [name (qualified string), kind (0 struct, 1 union, 2
+    /// enum), size, alignment, fields (vector of [name type offset]) or, for an enum, its
+    /// values (map of keyword to integer), base type]; permanent.
+    ctype = 52,
     _,
 };
 
@@ -180,7 +190,7 @@ pub const Header = packed struct(u64) {
         const values: [*]Value = @ptrCast(p.ptr);
         return switch (h.type_id) {
             // Raw data only.
-            .f64, .string, .bignum, .invalid, .prim_array => values[0..0],
+            .f64, .string, .bignum, .invalid, .prim_array, .foreign_ptr, .owned_ptr => values[0..0],
             // Code pointer and name, then captured values.
             .function => values[@min(2, p.len)..p.len],
             else => values[0..p.len],

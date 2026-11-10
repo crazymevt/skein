@@ -390,8 +390,16 @@ constant), the library's var, or a compile error."
     "cancelled" "timeout" "task-cancelled-error")
   "The skein.core vars that hold built-in condition types.")
 
+(defparameter *ffi-unsupported-message*
+  "./skein build doesn't compile the FFI; build FFI programs with skeinc (make compiler, ~
+then build/skeinc build <file>), D-064"
+  "The error for a program that uses skein.ffi: native FFI is in the C backend written in
+Skein only (D-064).")
+
 (defun emit-var-ref (node)
   (let ((var (var-ref-node-var node)))
+    (when (string= (namespace-name (var-namespace var)) "skein.ffi")
+      (unsupported node *ffi-unsupported-message*))
     (if (core-var-p var)
         (if (member (var-name var) *builtin-condition-types* :test #'string=)
             (startup-constant (list :condition-type (var-name var))

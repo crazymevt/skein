@@ -862,3 +862,17 @@ export fn sk_integer_overflow() noreturn {
 export fn sk_division_by_zero() noreturn {
     rt.raise(.arithmetic_error, "division by zero", .{});
 }
+
+/// The address of the first element of a primitive array, a view of one or a byte view,
+/// for passing it to C (M1.10); null for anything else. The caller keeps the array
+/// referenced from its stack, which pins it.
+pub fn arrayAddress(a: Value) ?usize {
+    if (!a.isObject()) return null;
+    return switch (a.toObject().type_id) {
+        .prim_array => @intFromPtr(primData(a)),
+        .array_view => @intFromPtr(primData(slot(a, 0))) +
+            @as(usize, @intCast(slot(a, 1).toFixnum())) * primKind(slot(a, 0)).size(),
+        .byte_view => @intFromPtr(primData(slot(a, 0))),
+        else => null,
+    };
+}

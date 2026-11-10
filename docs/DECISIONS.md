@@ -858,3 +858,22 @@ Date: 2026-11-10 · Status: Accepted
 - **Consequences:**
   - Native features after M1.9 are written once. The Lisp backend still builds the first compiler, and its comparison tests keep checking everything up to M1.9.
 
+## D-065: The native FFI's runtime
+Date: 2026-11-10 · Status: Accepted
+- **Context:** Step 1 of M1.10. skein.ffi's functions (`alloc`, `get`, `field`, `sizeof`, `own`, `handle`, ...) and its type definitions must work natively, with Phase 0's behavior and messages (D-038). Phase 0 builds them on CFFI and SBCL finalizers.
+- **Decision:**
+  - **`runtime/src/ffi.zig`** implements skein.ffi's functions. They are in the core table as `skein.ffi/<name>`, and `skeinc` sends calls of skein.ffi's vars there.
+  - **Pointers:** a C pointer is a `foreign_ptr` object holding the address, and NULL is `nil`. `ffi/own` makes an `owned_ptr`. The GC now runs finalizers: a minor collection checks young objects after tracing, and a major one checks the mark bits before sweeping. An owned pointer's finalizer frees its memory.
+  - **Types:**
+    - A struct, union or enum is a permanent `ctype`, registered by qualified name. Layouts follow C's rules: each field at a multiple of its alignment, and the size rounded up to the largest alignment.
+    - `skeinc` qualifies the type names in field types when it compiles, so the runtime finds them, and sets the var that `defcstruct`, `defcunion` or `defcenum` defines. `defcfun` and `defcallback` come in steps 2 and 3.
+  - **Libraries:** the platform layers load them (dlopen; LoadLibraryW on Windows). The search order is `SKEIN_LIBRARY_PATH`, then the usual package-manager directories, then the system's. A symbol is looked up in the loaded libraries in load order, then in the whole process (`RTLD_DEFAULT`; every module on Windows).
+  - **Phase 1:** the native compiler runs skein.ffi's `%define-` forms at phase 1, like skein.core's (D-058). skein.compiler.env makes real C types for them, so macros can use them; C functions and callbacks get placeholder functions that say they can't run while compiling, and libraries aren't loaded.
+  - **`lib/skein/ffi.skn`:** its macros read a set of primitive types, which was a `def` of data. It is now a function, because natively phase 1 runs only function definitions (the consequence D-058 named).
+- **Alternatives:**
+  - Computing layouts in the C backend and emitting them as constants. Faster, but the runtime needs the layouts anyway for `field` and `sizeof` on types passed as values.
+  - Owned pointers without finalization, freed only explicitly. That would differ from DESIGN §14.2 and Phase 0.
+- **Consequences:**
+  - A fixture of struct and union layouts, nested fields, memory, pointer arithmetic, 64-bit integers, C strings, owned pointers (20,000 left to the GC), enums, handles and errors prints the same built by `skeinc` as under `skein run`. `make test-compiler` checks it.
+  - Phase 0 doesn't support `(sizeof (array T n))`; neither does the native runtime's test.
+

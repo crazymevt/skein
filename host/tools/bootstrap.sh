@@ -44,6 +44,22 @@ test_compiler() {
     fi
     echo "skeinc: $name ok"
   done
+  # Programs that only skeinc compiles (the FFI, D-064), built by skeinc, print what
+  # `skein run` prints.
+  for program in host/tests/fixtures/native-ffi*.skn; do
+    name=$(basename "$program" .skn)
+    ./skein run "$program" > "build/examples/$name.expected"
+    "$skeinc" build "$program" -o "build/examples/$name$exe" > /dev/null
+    "build/examples/$name$exe" > "build/examples/$name.out"
+    if ! diff --strip-trailing-cr "build/examples/$name.expected" "build/examples/$name.out" \
+         > /dev/null; then
+      echo "skeinc: $name differs from skein run"
+      diff --strip-trailing-cr "build/examples/$name.expected" "build/examples/$name.out" \
+        | head -20
+      exit 1
+    fi
+    echo "skeinc: $name ok"
+  done
 }
 
 case "${1:-}" in

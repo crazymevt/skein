@@ -102,10 +102,12 @@ paths, and whether lib/skein/core.skn is being translated with its macros (D-060
       (when (and (symbol? h) (nil? (namespace h))) (name h)))))
 
 (defn- defining-call?
-  "True if ir calls one of skein.core's %define- functions (defstruct, defclass, ...)."
+  "True if ir calls one of the %define- functions of skein.core (defstruct, defclass, ...)
+or skein.ffi (defcstruct, defcenum, defcfun, ...)."
   [ir]
   (and (= :call (:op ir)) (= :var-ref (:op (:fn ir)))
-       (= "skein.core" (%namespace-name (%var-namespace (:var (:fn ir)))))
+       (contains? #{"skein.core" "skein.ffi"}
+                  (%namespace-name (%var-namespace (:var (:fn ir)))))
        (let [nm (%var-name (:var (:fn ir)))]
          (and (> (count nm) 8) (= "%define-" (subs nm 0 8))))))
 

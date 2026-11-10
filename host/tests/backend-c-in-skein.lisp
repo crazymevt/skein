@@ -116,9 +116,17 @@ c-backend-error, or (:other text) for another failure of the Lisp side."
                  (error (e) (list :other (princ-to-string e))))))
     (values lisp skein)))
 
+(defun ffi-skipped-p (outcome)
+  "True if OUTCOME is the Lisp backend's refusal of a program that uses the FFI, which only
+the C backend written in Skein compiles (D-064)."
+  (and (consp outcome) (eq (first outcome) :error) (stringp (second outcome))
+       (search "build FFI programs with skeinc" (second outcome))))
+
 (defun backends-match-p (path)
-  "Check that both backends translate PATH the same way."
+  "Check that both backends translate PATH the same way (programs that use the FFI are
+built by skeinc only, D-064)."
   (multiple-value-bind (lisp skein) (compare-c-backends path)
+    (when (ffi-skipped-p lisp) (return-from backends-match-p t))
     (is (equal lisp skein) "~A: the backends differ~%~A" (file-namestring path)
         (if (and (stringp lisp) (stringp skein))
             (first-difference lisp skein)
