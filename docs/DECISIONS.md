@@ -1151,3 +1151,10 @@ Date: 2026-11-10 · Status: Accepted
 - **Alternatives:** sending program errors to the text REPL as well and letting the first console claim them; opening SLDB for read and compile errors, as SBCL's Swank does.
 - **Consequences:** a restart that takes arguments can't be chosen from SLDB (or from the text REPL's debugger): Skein restarts can't say how to ask for their arguments. Interrupting a running evaluation (`C-c C-c` in the REPL) needs a way to signal a running fiber, which the runtime doesn't have yet.
 
+## D-085: Package management before Driftrock is developed live
+Date: 2026-11-10 · Status: Accepted
+- **Context:** DESIGN §20.2 sketched `:deps` in `project.skn` ("git-based at first", a registry deferred), but no milestone built it. Jessie asked for package management: libraries downloaded from GitHub, or taken from local files and folders.
+- **Decision** (Jessie's): a new milestone, M2.11 Package management, goes before Driftrock developed live, which becomes M2.12, so Phase 2 still ends with Driftrock and its retrospective (this changes D-072's order). Its syntax, fetching, cache, lock file and transitive dependencies are settled when it's prepared.
+- **Alternatives:** next, after the Swank server; at the end of Phase 2; or in Phase 3, beside the package registry.
+- **Consequences:** Phase 2 has twelve milestones. Libraries such as the SDL3 bindings can later move to repositories of their own.
+

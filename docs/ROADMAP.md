@@ -36,11 +36,12 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.4 Dynamic vars natively | ✅ |
 | M2.5 Evaluating code in native programs | ✅ |
 | M2.6 Native REPL and `skein dev` | ✅ |
-| M2.7 Swank server | ⬜ |
+| M2.7 Swank server | 🟨 |
 | M2.8 Supervisors | ⬜ |
 | M2.9 Hot reload of compiled code | ⬜ |
 | M2.10 STM | ⬜ |
-| M2.11 Driftrock developed live, natively | ⬜ |
+| M2.11 Package management | ⬜ |
+| M2.12 Driftrock developed live, natively | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -268,7 +269,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Goal:** everything Phase 0 does for live development, natively: fibers on a work-stealing scheduler, a REPL and `skein dev` in the running native program, SLIME through a Swank server, supervisors, hot reload of compiled code and STM. At the end `./skein run`, `dev` and `repl` run on the native runtime, and SBCL only bootstraps the compiler (D-072).
 
-**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), and Driftrock developed live (M2.11).
+**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), package management (M2.11, D-085), and Driftrock developed live (M2.12).
 
 **Rules for Phase 2**
 - Phase 1's rules still apply (Zig 0.17.1, C11 with `zig cc`, platform code only in `runtime/platform/<os>/`, the Core IR as the contract).
@@ -343,8 +344,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ### M2.7 Swank server
 - A Swank-compatible server in the native runtime (D-018): evaluation, loading files, completion, argument lists, the debugger (SLDB) with Skein's restarts and backtrace, and the inspector. SLIME is the reference client.
 - Steps, in order (D-082):
-  1. The protocol (`skein.swank`): framing, reading and printing the Common Lisp data SLIME sends, `connection-info`, the listener (`create-repl`, `listener-eval`), evaluating and compiling forms and regions, loading files, namespaces for SLIME's packages; `skein dev` serves it on `localhost:4005` (`--swank-port`, `--no-swank`); host tests that speak the protocol.
-  2. The debugger: SLDB for errors in the listener and in the program (Skein's restarts, the shadow stack's backtrace, evaluating in a frame's fiber, abort and continue).
+  1. ✅ The protocol (`skein.swank`): framing, reading and printing the Common Lisp data SLIME sends, `connection-info`, the listener (`create-repl`, `listener-eval`), evaluating and compiling forms and regions, loading files, namespaces for SLIME's packages; `skein dev` serves it on `localhost:4005` (`--swank-port`, `--no-swank`); host tests that speak the protocol.
+  2. ✅ The debugger: SLDB for errors in the listener and in the program (Skein's restarts, the shadow stack's backtrace, evaluating in a frame's fiber, abort and continue).
   3. Completion, argument lists (autodoc), documentation and the inspector.
   4. `editors/skein-slime.el`, `docs/EDITORS.md`, and the scripted SLIME session in the Linux CI job.
 
@@ -365,7 +366,19 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Exit:** randomized tests against a model, and a concurrent transfer test that keeps its total, pass natively.
 
-### M2.11 Driftrock developed live, natively
+### M2.11 Package management
+- `project.skn`'s `:deps` (DESIGN §20.2, D-085): a project uses libraries from git repositories, GitHub's included, pinned to a tag or a commit, and from local files and folders. `skein build`, `run`, `dev` and `package` find their namespaces; a library's `:native` libraries and `:assets` go into packages.
+- To settle when preparing it, in DESIGN and DECISIONS:
+  - the `:deps` syntax for git and local dependencies, and whether a local one is a folder with its own `project.skn`, a source folder, or a single `.skn` file;
+  - how sources are fetched: the `git` command, or GitHub's HTTPS archives, which need an HTTP client and archive extraction natively;
+  - where fetched sources are cached, and a lock file that pins the commits a build used;
+  - transitive dependencies and conflicting versions of one library;
+  - building offline from the cache, and a command to fetch or update dependencies.
+- Steps are planned when the milestone starts.
+
+**Exit:** a project that depends on a library in a git repository (a local repository in the tests, and one on GitHub in CI) and on a local folder builds, runs with `skein run` and `skein dev`, and packages with its dependencies' native libraries and assets, on all three platforms.
+
+### M2.12 Driftrock developed live, natively
 - Develop and debug Driftrock with native `skein dev` and SLIME: fix a crash in the debugger and resume, edit while playing, reload compiled code.
 
 **Exit:** Driftrock is developed live on the native runtime on all three platforms. Write `docs/PHASE2-RETRO.md` and update DESIGN.md.
