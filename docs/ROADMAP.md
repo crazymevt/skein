@@ -29,7 +29,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M1.9 Self-hosting | ✅ |
 | M1.10 Native FFI | ✅ |
 | M1.11 `skein build` and `skein package` | ✅ |
-| M1.12 Driftrock native | 🟨 |
+| M1.12 Driftrock native | ✅ |
 | M2.1 Phase 1 follow-ups | ⬜ |
 | M2.2 Fibers | ⬜ |
 | M2.3 Work-stealing scheduler | ⬜ |
@@ -257,10 +257,10 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Build and package Driftrock natively.
 - Steps, in order:
   1. ✅ `skein.time` and `skein.math`'s host functions natively, with Phase 0's results (the system's libm, as SBCL uses).
-  2. Driftrock builds and runs natively; CI runs it with `--check-60fps` on all three platforms.
-  3. Start-up under 0.1 s: Driftrock measures the time from the program's start until `-main` runs (D-071), and CI checks it.
-  4. Driftrock packaged with its SDL3 on each platform in CI, and the package runs.
-  5. `docs/PHASE1-RETRO.md` (its proposals wait for Jessie's decision), and DESIGN.md brought up to date.
+  2. ✅ Driftrock builds and runs natively; CI runs it with `--check-60fps` on all three platforms.
+  3. ✅ Start-up under 0.1 s: Driftrock measures the time from the program's start until `-main` runs (D-071), and CI checks it.
+  4. ✅ Driftrock packaged with its SDL3 on each platform in CI, and the package runs.
+  5. ✅ `docs/PHASE1-RETRO.md` (its proposals wait for Jessie's decision), and DESIGN.md brought up to date.
 
 **Exit:** native Driftrock plays at 60 fps on macOS, Windows and Linux and starts in under 0.1 s (until `-main` runs, D-071). Write `docs/PHASE1-RETRO.md` and update DESIGN.md.
 

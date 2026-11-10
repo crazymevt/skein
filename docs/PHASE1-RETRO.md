@@ -81,6 +81,9 @@ Measured on an M-series MacBook (macOS) unless noted.
 | `skeinc` building itself | 17 s | 25–35 s for the whole bootstrap |
 | Executable size | 1.6 MB (`hello`), 2.2 MB (Driftrock) | — |
 
+In CI, packaged Driftrock in a real window (Xvfb on Linux) reached `-main` after 13 ms
+on macOS, 20 ms on Windows and 9 ms on Linux, with p99 frame work of 4.6, 4.4 and 2.0 ms.
+
 Takeaways:
 - Start-up was Phase 0's worst number and is now negligible; on a real window SDL and
   the OS take about 120 ms before the first frame, which Skein can't shorten (D-071).
