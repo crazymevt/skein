@@ -1092,3 +1092,15 @@ Date: 2026-11-10 · Status: Accepted
   - Declared types aren't checked or used by evaluated code until step 5.
   - Compiled closures are never freed; evaluating is for development.
   - Evaluated code that names a compiled struct type in `make-array` or a struct field uses the name as written: the model only knows the struct types that evaluated code defined.
+
+## D-080: Class redefinition natively
+Date: 2026-11-10 · Status: Accepted
+- **Context:** DESIGN §8.4 says redefining a class updates existing instances. Natively (D-054) a redefinition affected only new instances: an instance kept its slot values inline, after the layout it was made with, so it couldn't grow. M2.5 step 4 needs Phase 0's behavior, since a reloaded namespace redefines its classes.
+- **Decision:**
+  - An instance holds its class, the layout it was made with, its layout version and a tuple of its values (one more indirection on a slot access). A class's version changes only when a redefinition changes its slots' names, order or cell kinds, as Phase 0 (CLOS) only updates instances then.
+  - An instance whose version is out of date is brought up to date the next time it's used (a slot read or write, `with`, `keys`, printing), as CLOS does: added slots get their `:init`, discarded ones are dropped, a slot that changed between immutable and `:atom` is wrapped or unwrapped, and then `update-instance-for-redefined-class` gets the instance, the added and discarded slots' keywords and a map of the discarded values.
+  - Redefining a class recomputes its subclasses' precedence lists and slots, and clears every generic function's dispatch cache.
+- **Alternatives:** updating every instance at redefinition (the runtime doesn't track instances); keeping the values inline and moving an instance that grows (identity would break).
+- **Consequences:**
+  - When one redefinition changes both a superclass's slots and a cell kind, Phase 0 updates a subclass's instances twice and wraps the cell twice (SBCL makes them obsolete twice); natively they're updated once. Tests make the two changes in separate redefinitions.
+  - Two fibers that touch the same out-of-date instance at once may both update it.

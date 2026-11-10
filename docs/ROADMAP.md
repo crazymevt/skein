@@ -324,7 +324,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   1. ✅ Phase 0: `eval`, `load-file` and `reload` in skein.core; host tests.
   2. ✅ The program's namespaces: `skeinc build --eval` (dev profile) includes the reader, the expander and skein.core's macros, compiles the program's own macros in, and registers the program's namespaces and vars, from which `skein.compiler.env` builds its model; `macroexpand` and its relatives natively; without `--eval`, `eval` and its relatives are errors.
   3. ✅ The closure compiler (`runtime/src/eval/`, D-079): every Core IR node (functions and closures, loops, `letfn`, `def`, `set!`, blocks, `unwind-protect`, handlers and restarts, multiple values, dynamic vars, the FFI's type definitions; a re-evaluated `defcfun` keeps its compiled function); `eval`, `load-file`, `reload` and `require` from source natively; a fixture that evaluates code prints what `skein run` prints.
-  4. Redefinition (DESIGN §15): `defclass` updates existing instances natively, `defmethod` clears dispatch caches, `defonce` keeps state; a native program reloads a changed namespace and runs the new code.
+  4. ✅ Redefinition (DESIGN §15, D-080): `defclass` updates existing instances natively, subclasses included, `defmethod` clears dispatch caches, `defonce` keeps state; a native program reloads a changed namespace and runs the new code.
   5. Typed closures: unboxed `f64` and integer paths for declared types; `make bench` compares n-body interpreted and compiled in the same dev build.
 
 **Exit:** a native program reloads a changed namespace from source and runs the new code; interpreted code runs within 10× of compiled code on the n-body benchmark (both in a dev build).
@@ -422,7 +422,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
   - n-body is 1.35× of C. The rest is mostly aliasing: C knows its global arrays are distinct.
 - Native structs and arrays (D-055): struct values are boxed natively; DESIGN §9.1's inline storage holds in arrays (one column per field), not yet in locals or other structs. Phase 0's char arrays are CL strings, so they print and behave as strings; natively they are arrays. An out-of-bounds index on a primitive array is an `index-error` natively, CL's own error in Phase 0.
 - Native object system (D-054):
-  - Redefining a class affects new instances only; existing ones keep their layout, and `update-instance-for-redefined-class` isn't called.
+  - When one redefinition changes both a superclass's slots and a cell kind, Phase 0 (SBCL's CLOS) updates a subclass's instances twice and wraps the cell twice; natively they're updated once (D-080).
   - Slot `:type`s aren't checked natively yet.
   - Every generic function call allocates its cache key. An inline cache per call site would avoid that if dispatch shows up in profiles.
   - Built-in classes print with Skein's names (`integer`, `string`), not Phase 0's CL ones (`fixnum`, `simple-character-string`).

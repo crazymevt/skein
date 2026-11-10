@@ -58,6 +58,9 @@ const c_slots = 3;
 const c_cpl = 4;
 const c_kind = 5;
 const c_type = 6;
+/// Changes when a redefinition changes the slot layout (names, order or cell kinds):
+/// instances made with an older one are brought up to date when next used (DESIGN §8.4).
+const c_version = 7;
 
 const kind_defclass = 0;
 const kind_builtin = 1;
@@ -92,7 +95,7 @@ fn register(table: *std.StringHashMapUnmanaged(Value), key: []const u8, v: Value
 fn newClass(name: []const u8, kind: i64) Value {
     const name_string = string.make(name);
     const empty = coll.vectorOf(&.{});
-    const h = gc.allocPermanent(.class, 7);
+    const h = gc.allocPermanent(.class, 8);
     const c = Value.fromObject(h);
     setSlot(c, c_name, name_string);
     setSlot(c, c_supers, empty);
@@ -101,6 +104,7 @@ fn newClass(name: []const u8, kind: i64) Value {
     setSlot(c, c_cpl, empty);
     setSlot(c, c_kind, Value.fromFixnum(kind));
     setSlot(c, c_type, Value.nil);
+    setSlot(c, c_version, Value.fromFixnum(0));
     return c;
 }
 
@@ -380,16 +384,72 @@ pub fn defineClass(name: Value, supers_in: Value, direct: Value) Value {
     }
     for (0..coll.vectorCount(direct)) |i| _ = cellKind(coll.vectorNth(coll.vectorNth(direct, i).?, 1).?);
     const supers = if (coll.vectorCount(supers_in) == 0) coll.vectorOf(&.{builtin(.object)}) else supers_in;
-    const c = lookup(&classes, qualified) orelse blk: {
+    const existing = lookup(&classes, qualified);
+    const c = existing orelse blk: {
         const fresh = newClass(qualified, kind_defclass);
         register(&classes, qualified, fresh);
         break :blk fresh;
     };
     setSlot(c, c_supers, supers);
     setSlot(c, c_direct, direct);
-    setSlot(c, c_cpl, c3(c, supers));
-    setSlot(c, c_slots, effectiveSlots(c));
+    recompute(c);
+    if (existing != null) {
+        // Its subclasses inherit the change (DESIGN §8.4), and dispatch caches may hold
+        // effective methods computed from the old precedence lists.
+        var all = allClasses();
+        defer all.deinit(std.heap.c_allocator);
+        for (all.items) |k| {
+            if (k != c and inPrecedenceList(k, c)) recompute(k);
+        }
+        clearDispatchCaches();
+    }
     return c;
+}
+
+/// Compute class `c`'s precedence list and slots from its supers and direct slots; a
+/// changed layout gets a new version.
+fn recompute(c: Value) void {
+    setSlot(c, c_cpl, c3(c, slot(c, c_supers)));
+    const old = slot(c, c_slots);
+    const new = effectiveSlots(c);
+    setSlot(c, c_slots, new);
+    if (!sameLayout(old, new)) setSlot(c, c_version, Value.fromFixnum(slot(c, c_version).toFixnum() + 1));
+}
+
+/// Whether two slot lists have the same names, in the same order, with the same cells.
+fn sameLayout(a: Value, b: Value) bool {
+    if (coll.vectorCount(a) != coll.vectorCount(b)) return false;
+    for (0..coll.vectorCount(a)) |i| {
+        const x = coll.vectorNth(a, i).?;
+        const y = coll.vectorNth(b, i).?;
+        if (coll.vectorNth(x, 0).? != coll.vectorNth(y, 0).?) return false;
+        if (coll.vectorNth(x, 1).? != coll.vectorNth(y, 1).?) return false;
+    }
+    return true;
+}
+
+fn inPrecedenceList(k: Value, c: Value) bool {
+    if (slot(k, c_kind).toFixnum() != kind_defclass) return false;
+    const cpl = slot(k, c_cpl);
+    for (0..coll.vectorCount(cpl)) |i| if (coll.vectorNth(cpl, i).? == c) return true;
+    return false;
+}
+
+/// Every class by name (permanent objects), each after its superclasses: a class's
+/// precedence list is longer than any of its superclasses', and recompute reads the
+/// superclasses' precedence lists.
+fn allClasses() std.ArrayList(Value) {
+    lock.lock();
+    defer lock.unlock();
+    var out: std.ArrayList(Value) = .empty;
+    var it = classes.valueIterator();
+    while (it.next()) |v| out.append(std.heap.c_allocator, v.*) catch @panic("out of memory");
+    std.mem.sort(Value, out.items, {}, struct {
+        fn less(_: void, a: Value, b: Value) bool {
+            return coll.vectorCount(slot(a, c_cpl)) < coll.vectorCount(slot(b, c_cpl));
+        }
+    }.less);
+    return out;
 }
 
 /// The slots of a class, in Phase 0's order: walking the precedence list from its most
@@ -436,13 +496,16 @@ fn slotIndex(slots: Value, name: []const u8) ?usize {
 }
 
 // ---------------------------------------------------------------------------------------
-// Instances: [class, slots, owner, hash, values...]
+// Instances: [class, slots, owner, hash, version, values]. The slots and their values
+// (a tuple) are those of the class's layout `version`; after a redefinition that changed
+// it, `upToDate` brings the instance up to date before it's used (DESIGN §8.4).
 
 const i_class = 0;
 const i_slots = 1;
 const i_owner = 2;
 const i_hash = 3;
-const i_values = 4;
+const i_version = 4;
+const i_values = 5;
 
 var instance_counter = std.atomic.Value(u32).init(0);
 
@@ -455,15 +518,72 @@ fn slotCell(slots: Value, i: usize) Value {
 }
 
 fn allocInstance(c: Value, slots: Value) Value {
-    const n = coll.vectorCount(slots);
-    const h = rt.alloc(.instance, i_values + n);
+    const values = coll.tupleN(coll.vectorCount(slots), Value.nil);
+    const h = rt.alloc(.instance, i_values + 1);
     const s = h.valueSlots();
     s[i_class] = c;
     s[i_slots] = slots;
     s[i_owner] = Value.fromFixnum(@intCast(@import("fiber.zig").ownerId()));
     s[i_hash] = Value.fromFixnum(hash.mix32(instance_counter.fetchAdd(1, .monotonic) +% 1));
-    for (0..n) |i| s[i_values + i] = Value.nil;
+    s[i_version] = slot(c, c_version);
+    s[i_values] = values;
     return Value.fromObject(h);
+}
+
+/// Slot value `i` of an up-to-date instance.
+fn value(obj: Value, i: usize) Value {
+    return coll.get(slot(obj, i_values), i);
+}
+
+fn setValue(obj: Value, i: usize, v: Value) void {
+    coll.set(slot(obj, i_values), i, v);
+}
+
+/// `obj`, brought up to its class's current layout if a redefinition changed it, as
+/// Phase 0 (CLOS) does: added slots get their :init, discarded ones are dropped, a slot
+/// that changed between immutable and :atom is wrapped or unwrapped, then the generic
+/// function update-instance-for-redefined-class gets the instance, the added and
+/// discarded slots' keywords, and a map of the discarded slots' values.
+fn upToDate(obj: Value) Value {
+    const c = slot(obj, i_class);
+    if (slot(obj, i_version) == slot(c, c_version)) return obj;
+    const old_slots = slot(obj, i_slots);
+    const old_values = slot(obj, i_values);
+    const new_slots = slot(c, c_slots);
+    const n = coll.vectorCount(new_slots);
+    const values = coll.tupleN(n, Value.nil);
+    var added = coll.vectorOf(&.{});
+    for (0..n) |i| {
+        const spec = coll.vectorNth(new_slots, i).?;
+        const key = coll.vectorNth(spec, 0).?;
+        const cell = coll.vectorNth(spec, 1).?;
+        if (slotIndex(old_slots, names.nameOf(key))) |j| {
+            const v = coll.get(old_values, j);
+            const was_atom = isKw(slotCell(old_slots, j), "atom");
+            const is_atom = isKw(cell, "atom");
+            coll.set(values, i, if (is_atom and !was_atom) coll.makeAtom(v) else if (was_atom and !is_atom) coll.atomGet(v) else v);
+        } else {
+            const init = coll.vectorNth(spec, 2).?;
+            coll.set(values, i, stored(cell, if (init == Value.nil) Value.nil else func.call(init, 0, &.{})));
+            added = coll.vectorConj(added, key);
+        }
+    }
+    var discarded = coll.vectorOf(&.{});
+    var discarded_values = coll.mapOf(&.{});
+    for (0..coll.vectorCount(old_slots)) |j| {
+        const key = coll.vectorNth(coll.vectorNth(old_slots, j).?, 0).?;
+        if (slotIndex(new_slots, names.nameOf(key)) == null) {
+            discarded = coll.vectorConj(discarded, key);
+            discarded_values = coll.mapAssoc(discarded_values, key, coll.get(old_values, j));
+        }
+    }
+    // Up to date before the generic function sees it.
+    setSlot(obj, i_slots, new_slots);
+    setSlot(obj, i_values, values);
+    setSlot(obj, i_version, slot(c, c_version));
+    const args = [_]Value{ obj, added, discarded, discarded_values };
+    _ = func.call(core_generics[@intFromEnum(CoreGeneric.@"update-instance-for-redefined-class")], 4, &args);
+    return obj;
 }
 
 fn stored(cell: Value, v: Value) Value {
@@ -505,7 +625,7 @@ pub fn make(designator: Value, kvs: []const Value) Value {
             const init = coll.vectorNth(spec, 2).?;
             break :blk if (init == Value.nil) Value.nil else func.call(init, 0, &.{});
         };
-        setSlot(obj, i_values + i, stored(coll.vectorNth(spec, 1).?, v));
+        setValue(obj, i, stored(coll.vectorNth(spec, 1).?, v));
     }
     const args = [_]Value{obj};
     _ = func.call(core_generics[@intFromEnum(CoreGeneric.initialize)], 1, &args);
@@ -533,6 +653,7 @@ pub fn with(obj: Value, kvs_in: []const Value) Value {
     }
     if (kvs_in.len % 2 != 0) rt.raise(.@"error", "make and with need keys and values in pairs", .{});
     const kvs = buf[0..n];
+    _ = upToDate(obj);
     const c = slot(obj, i_class);
     const slots = slot(obj, i_slots);
     checkInitargs(c, slots, kvs);
@@ -540,14 +661,14 @@ pub fn with(obj: Value, kvs_in: []const Value) Value {
     for (0..coll.vectorCount(slots)) |k| {
         const spec = coll.vectorNth(slots, k).?;
         const cell = coll.vectorNth(spec, 1).?;
-        const old = slot(obj, i_values + k);
+        const old = value(obj, k);
         const v = if (given(kvs, names.nameOf(coll.vectorNth(spec, 0).?))) |g|
             stored(cell, g)
         else if (fresh and isKw(cell, "atom"))
             coll.makeAtom(coll.atomGet(old))
         else
             old;
-        setSlot(copy, i_values + k, v);
+        setValue(copy, k, v);
     }
     return copy;
 }
@@ -555,14 +676,14 @@ pub fn with(obj: Value, kvs_in: []const Value) Value {
 /// A slot's value by keyword, or null: an :atom cell gives its current value (D-041).
 pub fn get(obj: Value, key: Value) ?Value {
     if (!names.isKeyword(key)) return null;
-    const slots = slot(obj, i_slots);
+    const slots = slot(upToDate(obj), i_slots);
     const i = slotIndex(slots, names.nameOf(key)) orelse return null;
-    const v = slot(obj, i_values + i);
+    const v = value(obj, i);
     return if (isKw(slotCell(slots, i), "atom")) coll.atomGet(v) else v;
 }
 
 pub fn keys(obj: Value) Value {
-    const slots = slot(obj, i_slots);
+    const slots = slot(upToDate(obj), i_slots);
     var buf: [128]Value = undefined;
     const n = @min(coll.vectorCount(slots), buf.len);
     for (0..n) |i| buf[i] = coll.vectorNth(coll.vectorNth(slots, i).?, 0).?;
@@ -572,7 +693,7 @@ pub fn keys(obj: Value) Value {
 fn instanceSlot(obj: Value, key: Value, comptime what: []const u8) usize {
     if (!isObjectInstance(obj)) rt.raise(.@"error", what ++ " needs an instance, not {s}", .{readable(obj)});
     if (names.isKeyword(key)) {
-        if (slotIndex(slot(obj, i_slots), names.nameOf(key))) |i| return i;
+        if (slotIndex(slot(upToDate(obj), i_slots), names.nameOf(key))) |i| return i;
     }
     slotNotFound(slot(obj, i_class), key);
 }
@@ -591,9 +712,9 @@ pub fn setSlotValue(obj: Value, key: Value, v: Value) Value {
     const i = instanceSlot(obj, key, "set-slot!");
     const cell = slotCell(slot(obj, i_slots), i);
     if (cell == Value.nil) immutable(obj, key);
-    if (isKw(cell, "atom")) return coll.atomReset(slot(obj, i_values + i), v);
+    if (isKw(cell, "atom")) return coll.atomReset(value(obj, i), v);
     checkOwner(obj, key);
-    setSlot(obj, i_values + i, v);
+    setValue(obj, i, v);
     return v;
 }
 
@@ -606,7 +727,7 @@ pub fn updateSlot(obj: Value, key: Value, f: Value, args: []const Value) Value {
     if (args.len + 1 > buf.len) rt.raise(.unsupported_operation_error, "update-slot! with that many arguments is not supported natively yet", .{});
     @memcpy(buf[1 .. 1 + args.len], args);
     if (isKw(cell, "atom")) {
-        const at = slot(obj, i_values + i);
+        const at = value(obj, i);
         while (true) {
             const old = coll.atomGet(at);
             buf[0] = old;
@@ -615,9 +736,9 @@ pub fn updateSlot(obj: Value, key: Value, f: Value, args: []const Value) Value {
         }
     }
     checkOwner(obj, key);
-    buf[0] = slot(obj, i_values + i);
+    buf[0] = value(obj, i);
     const new = func.call(f, @intCast(1 + args.len), &buf);
-    setSlot(obj, i_values + i, new);
+    setValue(obj, i, new);
     return new;
 }
 
@@ -629,7 +750,7 @@ pub fn cellOf(obj: Value, key: Value) Value {
         rt.raise(.@"error", "slot {s} of {s} has no cell; it is immutable", .{ readable(key), className(slot(obj, i_class)) });
     if (!isKw(cell, "atom"))
         rt.raise(.@"error", "slot {s} of {s} is :unsynchronized; it holds its value directly, with no cell object", .{ readable(key), className(slot(obj, i_class)) });
-    return slot(obj, i_values + i);
+    return value(obj, i);
 }
 
 /// set! on (:slot obj): an :unsynchronized or :atom cell slot.
@@ -648,7 +769,7 @@ pub fn writeInstance(obj: Value, out: *std.ArrayList(u8)) void {
     print.put(out, "#<");
     print.put(out, className(slot(obj, i_class)));
     print.put(out, " {");
-    const slots = slot(obj, i_slots);
+    const slots = slot(upToDate(obj), i_slots);
     for (0..coll.vectorCount(slots)) |i| {
         if (i > 0) print.put(out, ", ");
         print.write(coll.vectorNth(coll.vectorNth(slots, i).?, 0).?, out, true);
@@ -688,9 +809,22 @@ fn newGeneric(name: []const u8, required: usize, rest: bool) Value {
     setSlot(g, g_methods, coll.vectorOf(&.{}));
     setSlot(g, g_cache, Value.nil);
     setSlot(g, g_eql, Value.false);
+    lock.lock();
+    all_generics.append(table_alloc, g) catch @panic("out of memory");
+    lock.unlock();
     // Permanent: the generics table isn't scanned by the collector, so a young closure
     // there would be left stale by a collection.
     return func.permanentClosure(dispatchCode, "generic", &.{g});
+}
+
+/// Every generic function's state (permanent objects), whose caches a class
+/// redefinition clears.
+var all_generics: std.ArrayList(Value) = .empty;
+
+fn clearDispatchCaches() void {
+    lock.lock();
+    defer lock.unlock();
+    for (all_generics.items) |g| setSlot(g, g_cache, Value.nil);
 }
 
 /// The generic function named `name` with this many required parameters, made if

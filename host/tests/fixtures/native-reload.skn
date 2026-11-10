@@ -1,0 +1,54 @@
+(ns native-reload
+  (:require [native-reload.lib :as lib]
+            [skein.io :as io]))
+
+;; build: --eval
+;; Redefinition and reloading natively (M2.5 step 4, DESIGN §8.4, §15). The bootstrap
+;; check builds this with --eval and compares it with `skein run`.
+
+;; defclass updates existing instances: added slots get their :init, discarded ones go
+;; to update-instance-for-redefined-class, and cells are wrapped or unwrapped.
+(defclass point [] (x :init 1) (y :init 2))
+(defclass point3 [point] (z :init 3))
+(def p (make point :x 10))
+(def q (make point3))
+(defmethod update-instance-for-redefined-class [(obj point) added discarded values]
+  (prn :updating (class-name (class-of obj)) added discarded values))
+(prn p q)
+(defclass point [] (x :init 1) (w :init (* 6 7)))
+(prn p q)
+(defclass point [] (x :init 1 :cell :atom) (w :init (* 6 7)))
+(prn p q)
+(prn (:x p) (:w p) (set-slot! p :x 11) (:x p) (:x q))
+;; A redefinition that keeps the layout doesn't touch instances.
+(defclass point [] (x :init 100 :cell :atom) (w :init 0))
+(prn p (:w (make point)))
+
+;; defmethod replaces a method; the dispatch cache forgets the old one.
+(defgeneric area [shape])
+(defmethod area [(s point)] :point-area)
+(prn (area p) (area q))
+(defmethod area [(s point3)] :point3-area)
+(prn (area p) (area q))
+(eval '(defmethod area [(s point)] :redefined))
+(prn (area p) (area q))
+
+;; Reloading a changed namespace: compiled callers run the new code, and defonce keeps
+;; its state.
+(prn (lib/version) (lib/greet) @lib/state (:label (make lib/widget)))
+(def old-widget (make lib/widget))
+(def changed "build/native-reload-lib.skn")
+(io/write-file changed (str "(ns native-reload.lib)\n"
+                            "(defonce state (atom 0))\n(swap! state inc)\n"
+                            "(defn version [] 2)\n"
+                            "(defn greet [] (str \"version \" (version)))\n"
+                            "(defclass widget [] (label :init \"plain\") (color :init :red))\n"))
+(load-file changed)
+(prn (lib/version) (lib/greet) @lib/state old-widget)
+(io/write-file changed (str "(ns native-reload.lib)\n"
+                            "(defonce state (atom 0))\n(swap! state inc)\n"
+                            "(defn version [] 3)\n"
+                            "(defn greet [] (str \"now version \" (version)))\n"
+                            "(defclass widget [] (label :init \"plain\") (color :init :red))\n"))
+(prn (reload 'native-reload.lib))
+(prn (lib/version) (lib/greet) @lib/state)
