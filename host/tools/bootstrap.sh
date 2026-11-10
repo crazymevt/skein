@@ -12,18 +12,11 @@ if [ "${OS:-}" = "Windows_NT" ]; then exe=".exe"; fi
 skeinc="build/skeinc$exe"
 
 build_compiler() {
-  mkdir -p build
-  # Rebuild when skeinc is missing or any library or runtime source is newer.
-  if [ -f "$skeinc" ] && [ -z "$(find lib runtime/src runtime/include -newer "$skeinc" \
-                                    \( -name '*.skn' -o -name '*.zig' -o -name '*.c' \
-                                       -o -name '*.h' \) -print -quit)" ]; then
-    return
-  fi
-  # Phase 0 builds a first compiler, which builds skeinc. The first compiler's output
-  # differs from skeinc's only in the numbers of gensyms baked into skein.core's macros
-  # (D-062), so it isn't compared.
-  ./skein build lib/skein/compiler/main.skn -o "build/skeinc-stage1$exe"
-  "build/skeinc-stage1$exe" build lib/skein/compiler/main.skn -o "$skeinc"
+  # ./skein bootstrap rebuilds skeinc when it's missing or any library or runtime source
+  # is newer: Phase 0 builds a first compiler, which builds skeinc. The first compiler's
+  # output differs from skeinc's only in the numbers of gensyms baked into skein.core's
+  # macros (D-062), so it isn't compared.
+  ./skein bootstrap
 }
 
 test_compiler() {

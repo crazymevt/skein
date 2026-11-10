@@ -236,7 +236,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order:
   1. ✅ `--target` and `--profile` in `skeinc build`: the runtime and the program cross-compiled for each §19.1 target, Linux against glibc 2.28; `dev` and `release` profiles.
   2. ✅ `project.skn`: `skeinc build` with no file builds the project's `:main`, finding namespaces in `:paths`.
-  3. `./skein build` and `./skein package` run `skeinc`, bootstrapping it if needed; the Lisp backend moves behind an internal command.
+  3. ✅ `./skein build` and `./skein package` run `skeinc`, bootstrapping it if needed; the Lisp backend moves behind an internal command.
   4. `skein package`: a folder with the executable, its `:native` libraries and its `:assets`, or a `.app` for macOS; the runtime finds libraries next to the executable first.
   5. CI packages `hello` for all three targets on Linux and runs each package on its platform.
 

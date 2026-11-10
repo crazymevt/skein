@@ -572,26 +572,43 @@ referred in place of skein.core's."
                "can't set! the ^:mutable local x")
   (build-fails "(ns u6) (println (inc 1 2))" "wrong number of arguments (2) passed to skein.core/inc"))
 
-;;; The command
+;;; The command: `skein build` hands the build to skeinc (M1.11, D-069), bootstrapping it
+;;; first if it's out of date.
 
 (test build-command
-  (multiple-value-bind (code out err) (run-cli "build")
-    (declare (ignore out))
-    (is (= skein.cli:+exit-usage+ code))
-    (is (search "expected a file" err)))
-  (multiple-value-bind (code out err) (run-cli "build" "no/such.skn")
-    (declare (ignore out))
-    (is (= skein.cli:+exit-failure+ code))
-    (is (search "file not found" err)))
-  (with-program (file "(ns bc) (println (in-ns 'bc))")
-    ;; -o keeps the executable in the temporary directory if the build ever succeeds.
-    (multiple-value-bind (code out err)
-        (run-cli "build" (namestring file)
-                 "-o" (namestring (make-pathname :name "bc-native" :type nil :defaults file)))
-      (declare (ignore out))
-      (is (= skein.cli:+exit-failure+ code))
-      (is (search "error: " err))
-      (is (search "prog.skn:1:19" err)))))
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (progn
+        (multiple-value-bind (code out err) (run-cli "build")
+          (declare (ignore out))
+          (is (= skein.cli:+exit-failure+ code))
+          (is (search "expected a file" err) "~A" err))
+        (multiple-value-bind (code out err) (run-cli "build" "no/such.skn")
+          (declare (ignore out))
+          (is (= skein.cli:+exit-failure+ code))
+          (is (search "file not found" err) "~A" err))
+        (with-program (file "(ns bc) (println (in-ns 'bc))")
+          ;; -o keeps the executable in the temporary directory if the build ever succeeds.
+          (multiple-value-bind (code out err)
+              (run-cli "build" (namestring file)
+                       "-o" (namestring (make-pathname :name "bc-native" :type nil
+                                                       :defaults file)))
+            (declare (ignore out))
+            (is (= skein.cli:+exit-failure+ code))
+            (is (search "error: " err))
+            (is (search "prog.skn:1:19" err) "~A" err)))
+        (with-program (file "(ns hi) (defn -main [& args] (println \"hi\" (count args)))")
+          (let ((exe (make-pathname :name "hi-native"
+                                    :type (and (string= (skein.platform:os-name) "windows")
+                                               "exe")
+                                    :defaults file)))
+            (multiple-value-bind (code out err)
+                (run-cli "build" (namestring file) "-o" (uiop:native-namestring exe))
+              (is (= skein.cli:+exit-ok+ code) "~A" err)
+              (is (search "built " out) "~A" out))
+            (is (string= (format nil "hi 2~%")
+                         (uiop:run-program (list (uiop:native-namestring exe) "a" "b")
+                                           :output :string))))))))
 
 (test every-native-core-function-exists
   ;; Each name the emitter allows refers to a function the runtime has (sk_core stops the

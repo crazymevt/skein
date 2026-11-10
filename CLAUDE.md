@@ -74,8 +74,9 @@ These are defined in M0.1; update this section if they change.
 | `make repl` | SBCL with Skein loaded |
 | `./skein run <file.skn> [args]` | run a Skein program (calls its `-main` with the args) |
 | `./skein repl` | start a Skein REPL |
-| `./skein build <file.skn>` | compile a program natively with the C backend (Phase 1; needs Zig) |
-| `make compiler` | bootstrap the native compiler, `build/skeinc` (Phase 0 builds a first compiler, which builds it) |
+| `./skein build [file.skn] [--target T] [--profile P]` | compile a program natively: runs `build/skeinc build` (needs Zig), bootstrapping skeinc first if it's out of date |
+| `./skein package [--target T]` | package the project in the current directory into `dist/` (runs `build/skeinc package`) |
+| `make compiler` | bootstrap the native compiler, `build/skeinc` (`./skein bootstrap`: Phase 0's C backend builds a first compiler, which builds it) |
 | `build/skeinc build [file.skn] [-o out] [--target T] [--profile dev\|release]` | compile a program natively with the compiler written in Skein, for any §19.1 target; with no file, the `project.skn` in the current directory |
 | `./skein dev <file.skn> [args]` | run with file reloading and a REPL (terminal and localhost:5555) |
 | `make bench` | run the benchmarks in `bench/` |

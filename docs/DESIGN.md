@@ -731,7 +731,7 @@ Backend
   - The C backend is `skein.compiler.c` (`lib/skein/compiler/c.skn`, D-059). It turns those maps into the same C as the Lisp backend, keeping its state in a map passed down each call rather than in dynamic vars.
   - Natively, the compiler's namespaces and vars are a model in `skein.compiler.env` (`lib/skein/compiler/env.skn`, D-060), separate from the vars of the compiler itself, so compiling a program never changes the running compiler. Its skein.core holds the runtime's functions, the library's, and the macros of `core.skn`, which are compiled into any program that includes the model.
   - Phase-1 code, a program's own macros and the functions they call, runs in `skein.compiler.interp` (`lib/skein/compiler/interp.skn`, D-061), which evaluates the expander's Core IR maps. Interpreted functions are ordinary functions, so compiled code calls them directly.
-  - The driver is `skein.compiler.main` (`lib/skein/compiler/main.skn`, D-062); built natively it is `skeinc`. It translates a program as `skein build` does, loading required namespaces at phase 1 and running zig.
+  - The driver is `skein.compiler.main` (`lib/skein/compiler/main.skn`, D-062); built natively it is `skeinc`. It translates a program as the Lisp C backend does, loading required namespaces at phase 1 and running zig. Since M1.11, `skein build` and `skein package` are skeinc's (D-069).
 - **Compilation unit:** the namespace. Compiled output is cached per namespace, keyed by a source hash plus the hashes of its macro dependencies.
 
 ## 17. Runtime architecture (Phase 1+)
@@ -886,7 +886,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
 | `skein run <file-or-ns>` | run a program |
 | `skein dev` | run with file watching, hot reload and a REPL server (§15) |
 | `skein test` | run tests |
-| `skein build [--target T] [--profile P]` | compile a native executable (Phase 1 so far: `skein build [--release] [--target T] [-o FILE] file.skn`, one file, numbers, strings and functions; D-044) |
+| `skein build [--target T] [--profile P]` | compile a native executable (Phase 1: `skein build [file.skn] [-o FILE] [--target T] [--profile dev\|release]`, by skeinc; with no file, the project in the current directory; D-069) |
 | `skein package` | create distributables |
 | `skein bindgen` | generate FFI bindings from C headers |
 | `skein fmt` | format code (Deferred) |

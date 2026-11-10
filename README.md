@@ -113,7 +113,7 @@ The demo game, Driftrock, needs [SDL3](https://libsdl.org/) (on macOS: `brew ins
 ./skein dev examples/driftrock/main.skn   # the same, reloading code as you edit it
 ```
 
-`./skein build examples/fib.skn` compiles a program to a native executable with the Phase 1 C backend. `make compiler` bootstraps the native compiler, `build/skeinc`, which is written in Skein: `build/skeinc build examples/fib.skn` does the same without SBCL, and also builds FFI programs. `build/skeinc build examples/hello.skn --target x86_64-windows-gnu --profile release` cross-compiles for another platform (`aarch64-macos`, `x86_64-windows-gnu`, `x86_64-linux-gnu`, ...). In a directory with a `project.skn` (see `examples/hello-app`), `build/skeinc build` with no file builds the project.
+`./skein build examples/fib.skn` compiles a program to a native executable with `build/skeinc`, the native compiler, which is written in Skein. The first build bootstraps it (`make compiler` or `./skein bootstrap` does too): Phase 0's C backend builds a first compiler, which builds skeinc. `./skein build examples/hello.skn --target x86_64-windows-gnu --profile release` cross-compiles for another platform (`aarch64-macos`, `x86_64-windows-gnu`, `x86_64-linux-gnu`, ...). In a directory with a `project.skn` (see `examples/hello-app`), `./skein build` with no file builds the project.
 
 `skein dev` reloads source files when you save them and serves a REPL on the terminal and on `localhost:5555`. [`docs/EDITORS.md`](docs/EDITORS.md) shows how to connect Emacs or VS Code. `make repl` starts SBCL itself with Skein loaded, for working on the host.
 
