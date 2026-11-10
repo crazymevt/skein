@@ -17,7 +17,7 @@
    #:compile-error
    #:env #:make-env #:env-namespace
    #:analyze #:analyze-toplevel #:macroexpand-1 #:macroexpand #:toplevel-do-p
-   #:special-form-p)
+   #:special-form-p #:data-to-syntax)
   (:documentation "The Skein expander: resolves names, expands macros and builds Core IR.
 
 ANALYZE turns a syntax object into a Core IR node (docs/CORE-IR.md). Built-in macros

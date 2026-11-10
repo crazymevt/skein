@@ -133,6 +133,36 @@ repl.test.a/x
                "cannot reload")
         (fails "(reload \"x\")" "reload needs a namespace name")))))
 
+(test eval-function
+  ;; M2.5 (D-078): (eval form) evaluates data in the current namespace.
+  (is (eql 3 (ev "(eval '(+ 1 2))")))
+  (is (eql 5 (ev "(eval 5)")))
+  (is (string= "\"s\"" (pr (ev "(eval \"s\")"))))
+  (is (string= ":yes" (pr (ev "(eval '(when true :yes))"))))
+  (is (string= "[2 4 6]" (pr (ev "(mapv (eval '(fn [x] (* x 2))) [1 2 3])"))))
+  (is (string= "[10 11]" (pr (ev "(def base 10) [base (eval '(inc base))]"))))
+  ;; Definitions made by eval are vars of the current namespace.
+  (is (eql 7 (ev "(eval '(def from-eval 7)) from-eval")))
+  (is (string= "[2 4]" (pr (ev "(eval '(do (defn twice [x] (* 2 x)) nil)) [(twice 1) (twice 2)]"))))
+  (fails "(eval '(no-such-function 1))" "unable to resolve symbol `no-such-function`")
+  (fails "(eval '(error \"from eval\"))" "from eval"))
+
+(test load-file-function
+  (with-source-tree (dir ("forms.skn"
+                          "(def loaded-a 1) (def loaded-b (+ loaded-a 1)) [loaded-a loaded-b]")
+                         ("other.skn" "(ns load.file.other) (def x :other-x) x"))
+    (let ((forms (uiop:native-namestring (merge-pathnames "forms.skn" dir)))
+          (other (uiop:native-namestring (merge-pathnames "other.skn" dir))))
+      ;; Returns the last value; the forms run in the current namespace.
+      (is (string= "[[1 2] 2]"
+                   (pr (ev (format nil "(def r (load-file ~S)) [r loaded-b]" forms)))))
+      ;; An ns form in the file doesn't change the caller's namespace afterwards.
+      (is (string= "[:other-x \"user.after\" :other-x]"
+                   (pr (ev (format nil "(ns user.after) (def r [(load-file ~S) (%current-namespace-name)])
+                                        (conj r load.file.other/x)" other)))))
+      (fails "(load-file \"/no/such/file.skn\")" "cannot load-file /no/such/file.skn")
+      (fails "(load-file 5)" "load-file needs a path (a string), not 5"))))
+
 (test defonce-defines-once
   (is (string= "[1 true]"
                (pr (ev "(defonce a 1) (defonce a 2) [a (%var-bound? 'repl.defonce.test/a)]"

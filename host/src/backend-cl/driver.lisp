@@ -164,5 +164,19 @@ Returns the value of -main, or of the file's last form."
         (prog1 (if main (skein.runtime::skein-apply main args) value)
           (finish-output *standard-output*))))))
 
+;;; Evaluating code (M2.5, D-078). reload is in the REPL (repl.lisp).
+
+(skein.runtime:defcore "eval" (form)
+  ;; A form given as data, evaluated in the current namespace.
+  (eval-toplevel (skein.expander:data-to-syntax form nil)))
+
+(skein.runtime:defcore "load-file" (path)
+  (unless (stringp path)
+    (skein-error 'skein-error nil "load-file needs a path (a string), not ~A"
+                 (skein.runtime:readable-string path)))
+  (unless (probe-file path)
+    (skein-error 'skein-error nil "cannot load-file ~A: no such file" path))
+  (values (load-file path)))
+
 ;;; skein.core's macros are written in Skein, so load them whenever this system loads.
 (load-core-library)
