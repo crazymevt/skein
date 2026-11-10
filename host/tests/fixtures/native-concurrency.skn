@@ -41,8 +41,9 @@
     (catch error e nil))
   (prn (cancelled? @t)))
 
-;; Futures and deref with a timeout
-(let [f (future (sleep 0.05) :done)]
+;; Futures and deref with a timeout. (The future sleeps long enough that a 1 ms deref
+;; finishes first even on a slow CI runner: 0.05 s wasn't, under SBCL.)
+(let [f (future (sleep 0.5) :done)]
   (prn @(future (+ 1 2)) (deref f 0.001 :not-yet) @f (done? f) (task? f) (task? 1)))
 (prn (let [f (future (error "in future"))] (try @f (catch error e (condition-message e)))))
 (let [f (future (sleep 10))]
