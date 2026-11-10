@@ -1,0 +1,51 @@
+(ns policies)
+
+;; Built natively and compared with policies.expected (M2.8 step 2, D-088): a nursery's
+;; supervision policy, its option map's :on-error. Phase 0 has only :cancel-siblings, so
+;; this is native only. The ";; stderr:" lines must appear on standard error.
+
+(defn message-of [thunk] (try (thunk) (catch error e (condition-message e))))
+
+;; :cancel-siblings, the default, given explicitly: the first failure cancels the other
+;; task and is re-signaled where the nursery joins.
+(let [cancelled (atom false)]
+  (prn (message-of (fn []
+                     (with-nursery [n {:on-error :cancel-siblings}]
+                       (spawn n (try (sleep 5) (finally (reset! cancelled true))))
+                       (spawn n (error "first")))))
+       @cancelled))
+
+;; :ignore: the task fails alone, with a line on stderr; its deref still re-signals.
+;; stderr: error in task (ignored): ignored one
+(let [log (atom [])]
+  (prn (with-nursery [n {:on-error :ignore}]
+         (let [bad (spawn n (error "ignored one"))
+               good (spawn n (sleep 0.05) (swap! log conj :good) :good)]
+           [(message-of (fn [] @bad)) @good]))
+       @log))
+
+;; :restart-fiber: the task runs again from the start until it succeeds...
+;; stderr: error in task (restarting it): flaky
+(let [tries (atom 0)]
+  (prn (with-nursery [n {:on-error :restart-fiber}]
+         @(spawn n (when (< (swap! tries inc) 3) (error "flaky")) [:ok @tries]))))
+
+;; ...at most :max-restarts times, then the failure cancels the rest as the default does.
+(let [tries (atom 0)]
+  (prn (message-of (fn []
+                     (with-nursery [n {:on-error :restart-fiber :max-restarts 2}]
+                       (spawn n (swap! tries inc) (error "always")))))
+       @tries))
+
+;; Only restarts within :within seconds count: failures 0.1 s apart never reach the limit.
+(let [tries (atom 0)]
+  (prn (with-nursery [n {:on-error :restart-fiber :max-restarts 1 :within 0.05}]
+         @(spawn n (let [k (swap! tries inc)]
+                     (when (< k 4) (sleep 0.1) (error "slow failure"))
+                     k)))))
+
+;; Options that aren't a policy are errors.
+(prn (message-of (fn [] (with-nursery [n {:on-error :explode}] 1))))
+(prn (message-of (fn [] (with-nursery [n {:on-eror :ignore}] 1))))
+(prn (message-of (fn [] (with-nursery [n {:max-restarts -1}] 1))))
+(prn (message-of (fn [] (with-nursery [n [:ignore]] 1))))

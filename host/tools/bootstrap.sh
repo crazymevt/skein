@@ -133,6 +133,35 @@ test_compiler() {
     fi
     echo "skeinc: $name ok"
   done
+  # Supervision policies (M2.8, D-088; native only, as Phase 0 has only :cancel-siblings):
+  # each prints its .expected on standard output, every ";; stderr: " line on standard
+  # error, and exits with its ";; status: " (0 if none).
+  for program in host/tests/fixtures/supervise/*.skn; do
+    name=supervise-$(basename "$program" .skn)
+    "$skeinc" build "$program" -o "build/examples/$name$exe" > /dev/null
+    status=0
+    "build/examples/$name$exe" > "build/examples/$name.out" 2> "build/examples/$name.err" \
+      || status=$?
+    expected_status=$(sed -n 's/^;; status: //p' "$program" | tr -d '\r')
+    if [ "$status" != "${expected_status:-0}" ]; then
+      echo "skeinc: $name exited with $status, not ${expected_status:-0}"
+      cat "build/examples/$name.err"
+      exit 1
+    fi
+    while IFS= read -r line; do
+      if ! grep -qF -- "$line" "build/examples/$name.err"; then
+        echo "skeinc: $name didn't print to stderr: $line"
+        exit 1
+      fi
+    done < <(sed -n 's/^;; stderr: //p' "$program" | tr -d '\r')
+    if ! diff --strip-trailing-cr "${program%.skn}.expected" "build/examples/$name.out" \
+         > /dev/null; then
+      echo "skeinc: $name differs from its .expected"
+      diff --strip-trailing-cr "${program%.skn}.expected" "build/examples/$name.out" | head -20
+      exit 1
+    fi
+    echo "skeinc: $name ok"
+  done
   # A million channel messages between 10,000 fibers (M2.3; native only).
   "$skeinc" build host/tests/fixtures/ring-fibers.skn --profile release \
     -o "build/examples/ring-fibers$exe" > /dev/null

@@ -54,6 +54,8 @@ const t_hash = 7;
 const t_fiber = 8;
 /// The dynamic bindings in force where it was spawned, which it starts with (D-076).
 const t_bindings = 9;
+/// Under :restart-fiber, the times (monotonic nanoseconds) it was restarted, or nil.
+const t_restarts = 10;
 
 const State = enum(i64) { pending, running, done, failed, cancelled };
 
@@ -64,6 +66,13 @@ const n_children = 2;
 const n_hash = 3;
 /// The fiber running the nursery's body, if it runs in one: a failing child wakes it.
 const n_owner = 4;
+/// Its supervision policy (D-088): what a task's failure does.
+const n_policy = 5;
+/// Under :restart-fiber, how many restarts a task may have within n_within nanoseconds.
+const n_max_restarts = 6;
+const n_within = 7;
+
+const Policy = enum(i64) { cancel_siblings, ignore, crash, restart_fiber };
 
 // A channel: [capacity, items (vector), head (index of the next item), closed, takes,
 // puts, takers waiting, hash].
@@ -373,7 +382,7 @@ fn currentScopes() Value {
 // Tasks
 
 fn makeTask(f: Value, nursery: Value, scopes: Value) Value {
-    return coll.make(.task, &.{ f, Value.fromFixnum(@intFromEnum(State.pending)), Value.nil, Value.nil, Value.nil, nursery, scopes, identity(), Value.nil, dynamic.capture() });
+    return coll.make(.task, &.{ f, Value.fromFixnum(@intFromEnum(State.pending)), Value.nil, Value.nil, Value.nil, nursery, scopes, identity(), Value.nil, dynamic.capture(), Value.nil });
 }
 
 fn stateOf(t: Value) State {
@@ -399,7 +408,8 @@ fn finishTask(t: Value, state: State, v: Value) void {
         .done => set(t, t_result, v),
         .failed => {
             set(t, t_condition, v);
-            if (n != Value.nil and get(n, n_failure) == Value.nil) {
+            // Under :ignore a task fails alone.
+            if (n != Value.nil and policyOf(t) != .ignore and get(n, n_failure) == Value.nil) {
                 set(n, n_failure, v);
                 first_failure = true;
             }
@@ -464,15 +474,65 @@ fn runTask(t: Value) void {
     pushScope(&own, t, scope_one);
     var bindings: cond.Frame = undefined;
     const bound = dynamic.pushCopy(&bindings, get(t, t_bindings));
-    const r = tryCall(func.make(taskBody, "task"), &.{get(t, t_fn)}, &.{ cond.builtinType(.cancelled), cond.builtinType(.@"error") });
+    const types = [_]Value{ cond.builtinType(.cancelled), cond.builtinType(.@"error") };
+    var r = tryCall(func.make(taskBody, "task"), &.{get(t, t_fn)}, &types);
+    // :restart-fiber: run the function again from the start, while the limit allows.
+    while (r[0] > 0 and policyOf(t) == .restart_fiber and mayRestart(t)) {
+        reportTaskError("error in task (restarting it): ", r[1]);
+        r = tryCall(func.make(taskBody, "task"), &.{get(t, t_fn)}, &types);
+    }
     if (bound) cond.popFrame(&bindings);
     cond.popFrame(&own);
     cond.popFrame(&inherited);
     switch (r[0]) {
         -1 => finishTask(t, .done, r[1]),
         0 => finishTask(t, .cancelled, Value.nil),
-        else => finishTask(t, .failed, r[1]),
+        else => {
+            switch (policyOf(t)) {
+                .crash => cond.reportAndExit(r[1]),
+                .ignore => reportTaskError("error in task (ignored): ", r[1]),
+                else => {},
+            }
+            finishTask(t, .failed, r[1]);
+        },
     }
+}
+
+/// The policy of the nursery that owns `t` (a future has none: :cancel-siblings).
+fn policyOf(t: Value) Policy {
+    const n = get(t, t_nursery);
+    if (n == Value.nil) return .cancel_siblings;
+    return @enumFromInt(get(n, n_policy).toFixnum());
+}
+
+/// Under :restart-fiber: whether `t` may be restarted now, which counts as a restart.
+fn mayRestart(t: Value) bool {
+    const n = get(t, t_nursery);
+    if (get(n, n_cancelled) != Value.nil) return false;
+    const max = get(n, n_max_restarts).toFixnum();
+    const within = get(n, n_within).toFixnum();
+    const stamp: i64 = @intCast(platform.monotonicNanos());
+    var recent = coll.vectorOf(&.{});
+    const old = get(t, t_restarts);
+    if (old != Value.nil) {
+        for (0..coll.vectorCount(old)) |i| {
+            const at = coll.vectorNth(old, i).?;
+            if (stamp - at.toFixnum() < within) recent = coll.vectorConj(recent, at);
+        }
+    }
+    if (@as(i64, @intCast(coll.vectorCount(recent))) >= max) return false;
+    set(t, t_restarts, coll.vectorConj(recent, Value.fromFixnum(stamp)));
+    return true;
+}
+
+/// A line on stderr about a task's error: prefix, then the error's report.
+fn reportTaskError(prefix: []const u8, c: Value) void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(rt.scratch);
+    print.put(&out, prefix);
+    cond.writeReport(c, &out);
+    print.put(&out, "\n");
+    platform.writeStderr(out.items);
 }
 
 /// Ask `t` to stop at its next cancellation point. Returns true if it had not finished.
@@ -684,11 +744,51 @@ fn joinNursery(n: Value) Value {
     return interruption;
 }
 
+/// [policy max-restarts within-nanoseconds] from with-nursery's options (nil or a map with
+/// :on-error, :max-restarts and :within, D-088).
+fn nurseryOptions(opts: Value) [3]Value {
+    var policy: Policy = .cancel_siblings;
+    var max: i64 = 3;
+    var within: f64 = 5.0;
+    if (opts != Value.nil) {
+        if (!coll.isMap(opts)) rt.raise(.@"error", "with-nursery's options must be a map, not {s}", .{readable(opts)});
+        var known: usize = 0;
+        if (coll.mapGet(opts, names.keyword(null, "on-error"))) |p| {
+            known += 1;
+            policy = policyNamed(p);
+        }
+        if (coll.mapGet(opts, names.keyword(null, "max-restarts"))) |m| {
+            known += 1;
+            if (!m.isFixnum() or m.toFixnum() < 0) rt.raise(.@"error", "with-nursery's :max-restarts must be a count, not {s}", .{readable(m)});
+            max = m.toFixnum();
+        }
+        if (coll.mapGet(opts, names.keyword(null, "within"))) |w| {
+            known += 1;
+            if (!num.isNumber(w) or !(num.toF64(w) > 0)) rt.raise(.@"error", "with-nursery's :within must be a number of seconds, not {s}", .{readable(w)});
+            within = num.toF64(w);
+        }
+        if (known != coll.mapCount(opts)) rt.raise(.@"error", "with-nursery's options are :on-error, :max-restarts and :within, not {s}", .{readable(opts)});
+    }
+    return .{ Value.fromFixnum(@intFromEnum(policy)), Value.fromFixnum(max), Value.fromFixnum(@intFromFloat(@min(within, 1e9) * 1e9)) };
+}
+
+fn policyNamed(p: Value) Policy {
+    if (names.isKeyword(p) and names.nsOf(p) == null) {
+        const nm = names.nameOf(p);
+        if (std.mem.eql(u8, nm, "cancel-siblings")) return .cancel_siblings;
+        if (std.mem.eql(u8, nm, "ignore")) return .ignore;
+        if (std.mem.eql(u8, nm, "crash")) return .crash;
+        if (std.mem.eql(u8, nm, "restart-fiber")) return .restart_fiber;
+    }
+    rt.raise(.@"error", "with-nursery's :on-error must be :cancel-siblings, :ignore, :crash or :restart-fiber, not {s}", .{readable(p)});
+}
+
 /// with-nursery: run (body nursery) and wait for all its tasks. If one fails, cancel the
 /// others and the body, then re-signal that failure; if the body fails, cancel the tasks
 /// and re-signal its error.
-fn withNursery(body: Value) Value {
-    const n = coll.make(.nursery, &.{ Value.nil, Value.nil, coll.vectorOf(&.{}), identity(), fiberValue() });
+fn withNursery(opts: Value, body: Value) Value {
+    const policy = nurseryOptions(opts);
+    const n = coll.make(.nursery, &.{ Value.nil, Value.nil, coll.vectorOf(&.{}), identity(), fiberValue(), policy[0], policy[1], policy[2] });
     var frame: cond.Frame = undefined;
     pushScope(&frame, n, scope_one);
     const r = tryCall(body, &.{n}, &.{ cond.builtinType(.cancelled), cond.builtinType(.@"error") });
@@ -1001,9 +1101,10 @@ pub const entries = [_]Entry{
             return Value.nil;
         }
     }.f),
-    e("%with-nursery", 1, 1, struct {
+    // (%with-nursery body) or (%with-nursery options body)
+    e("%with-nursery", 1, 2, struct {
         fn f(a: Args) Value {
-            return withNursery(a[0]);
+            return if (a.len == 2) withNursery(a[0], a[1]) else withNursery(Value.nil, a[0]);
         }
     }.f),
     e("%spawn", 2, 2, struct {

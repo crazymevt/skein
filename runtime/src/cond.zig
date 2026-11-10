@@ -655,6 +655,12 @@ fn unhandled(c: Value) noreturn {
         const args = [_]Value{c};
         _ = func.call(debugger[0], 1, &args);
     }
+    reportAndExit(c);
+}
+
+/// Print an unhandled error as `skein run` does (the message and the restarts active here)
+/// and exit with status 1, without the debugger: also a nursery's :crash policy (D-088).
+pub fn reportAndExit(c: Value) noreturn {
     var out: std.ArrayList(u8) = .empty;
     print.put(&out, "error: ");
     writeReport(c, &out);

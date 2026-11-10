@@ -37,6 +37,11 @@
   (evp-is "(with-nursery [n] :body-value)" ":body-value")
   (fails "(spawn 5 1)" "spawn needs a nursery"))
 
+(test nursery-policies-in-phase-0
+  ;; The option map natively chooses a policy (D-088); Phase 0 has only :cancel-siblings.
+  (evp-is "(with-nursery [n {:on-error :cancel-siblings}] @(spawn n 7))" "7")
+  (fails "(with-nursery [n {:on-error :ignore}] 1)" "native only"))
+
 (test failing-task-cancels-siblings-and-propagates
   (evp-is "(let [sleeper (atom nil)]
              [(try (with-nursery [n]

@@ -361,7 +361,16 @@ TASK-TIMEOUT (and so do those of tasks it spawned meanwhile)."
       (register-condition-type type)
       (def-var (intern-var +core+ name) type))))
 
-(defcore "%with-nursery" (fn) (call-with-nursery (lambda (n) (scall fn n))))
+(defcore "%with-nursery" (options-or-fn &optional (fn nil fn-p))
+  ;; Natively a nursery takes a policy (D-088); Phase 0 has only :cancel-siblings.
+  (when fn-p
+    (let ((policy (and (map-p options-or-fn)
+                       (map-get options-or-fn (intern-kw "on-error") nil))))
+      (unless (or (null policy) (and (kw-p policy) (string= (kw-name policy) "cancel-siblings")))
+        (skein-error 'skein-error nil "with-nursery's policy ~A is native only"
+                     (readable-string policy)))))
+  (let ((fn (if fn-p fn options-or-fn)))
+    (call-with-nursery (lambda (n) (scall fn n)))))
 (defcore "%spawn" (nursery fn) (spawn-in nursery (lambda () (scall fn))))
 (defcore "%future" (fn) (start-future (lambda () (scall fn))))
 (defcore "%with-timeout" (seconds fn) (call-with-timeout seconds (lambda () (scall fn))))

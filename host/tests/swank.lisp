@@ -396,3 +396,30 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
     (swank-send s "(:emacs-rex (swank:sldb-abort) \"serve\" 4 7)")
     (is (swank-has (swank-until s "(:return (:abort \"division by zero\") 5)")
                    "(:debug-return 4 1 nil)"))))
+
+(test swank-policy-after-the-debugger
+  ;; In skein dev the debugger comes first; failing the task applies its nursery's policy
+  ;; (M2.8 step 2, D-088): under :ignore the program goes on.
+  (with-swank-program (s dir (("serve.skn" "(ns serve)
+(defonce go? (atom false))
+(defonce result (atom nil))
+(defn -main [& args]
+  (loop [] (when-not @go? (sleep 0.02) (recur)))
+  (with-nursery [n {:on-error :ignore}]
+    (spawn n (error \"ignored\"))
+    (reset! result @(spawn n :fine)))
+  (sleep 60))
+")))
+    (is (swank-has (swank-request s "(swank:interactive-eval \"(reset! go? true)\")" "\"serve\""
+                                  "t" 1)
+                   "(:return (:ok \"=> true\") 1)"))
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (swank-has m "(:debug 2 1 (\"ignored\"" "((\"abort\" \"Fail the task\"))") "~S" m))
+    (swank-send s "(:emacs-rex (swank:invoke-nth-restart-for-emacs 1 0) \"serve\" 2 2)")
+    (is (swank-has (swank-until s "(:debug-return") "(:debug-return 2 1 nil)"))
+    (loop repeat 100
+          until (search ":fine" (car (last (swank-request s "(swank:interactive-eval \"@result\")"
+                                                          "\"serve\"" "t" 3))))
+          do (sleep 0.05))
+    (is (swank-has (swank-request s "(swank:interactive-eval \"@result\")" "\"serve\"" "t" 4)
+                   "(:return (:ok \"=> :fine\") 4)"))))

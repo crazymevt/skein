@@ -1,0 +1,9 @@
+"first" true
+["ignored one" :good] [:good]
+[:ok 3]
+"always" 3
+4
+"with-nursery's :on-error must be :cancel-siblings, :ignore, :crash or :restart-fiber, not :explode"
+"with-nursery's options are :on-error, :max-restarts and :within, not {:on-eror :ignore}"
+"with-nursery's :max-restarts must be a count, not -1"
+"with-nursery's options must be a map, not [:ignore]"

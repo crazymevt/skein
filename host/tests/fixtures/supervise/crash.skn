@@ -1,0 +1,12 @@
+(ns crash)
+
+;; :crash (M2.8 step 2, D-088): a task's failure reports the error as an unhandled one
+;; does and exits with status 1, so "not reached" isn't printed.
+;; status: 1
+;; stderr: error: boom
+
+(println "before")
+(with-nursery [n {:on-error :crash}]
+  (spawn n (sleep 5))
+  (spawn n (error "boom")))
+(println "not reached")

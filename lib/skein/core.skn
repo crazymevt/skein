@@ -514,10 +514,16 @@ which gets its own copy. (set! *x* v) changes the innermost binding."
 
 (defmacro with-nursery
   "Run the body with a nursery bound to name; (spawn name expr) starts a task in it. Waits
-for every task. If one fails, the others and the body are cancelled and the failure is
-re-signaled here."
-  [[name] & body]
-  `(%with-nursery (fn [~name] ~@body)))
+for every task. An option map after the name, (with-nursery [n {:on-error policy}] ...),
+says what a task's failure does (D-088): :cancel-siblings (the default) cancels the other
+tasks and the body and re-signals the failure here; :ignore lets the task fail alone, with
+a line on stderr; :crash reports the error and exits with status 1; :restart-fiber runs
+the task again, at most :max-restarts times (3) within :within seconds (5), then fails as
+:cancel-siblings. A failed task's deref re-signals its error."
+  [[name opts] & body]
+  (if opts
+    `(%with-nursery ~opts (fn [~name] ~@body))
+    `(%with-nursery (fn [~name] ~@body))))
 
 (defmacro spawn
   "Start expr as a task in the nursery. Returns the task; @task waits for its value."
