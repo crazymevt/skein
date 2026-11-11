@@ -129,10 +129,14 @@ jobs:
       - name: Install SDL3 build and X11 packages (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build xvfb \
-            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
-            libxfixes-dev libxtst-dev
+          # Ubuntu's mirrors sometimes fail to resolve: try a few times (D-101).
+          for i in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake \
+              ninja-build xvfb libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+              libxss-dev libxfixes-dev libxtst-dev && break
+            sleep 30
+          done
+          dpkg -s cmake ninja-build xvfb libxtst-dev > /dev/null
 
       - name: Cache SDL3 (Linux)
         if: runner.os == 'Linux'
@@ -208,7 +212,12 @@ jobs:
         env:
           SLIME_VERSION: v2.32
         run: |
-          sudo apt-get install -y --no-install-recommends emacs-nox
+          for i in 1 2 3; do
+            sudo apt-get install -y --no-install-recommends emacs-nox && break
+            sleep 30
+            sudo apt-get update
+          done
+          dpkg -s emacs-nox > /dev/null
           git clone --depth 1 --branch "$SLIME_VERSION" https://github.com/slime/slime.git \
             "$RUNNER_TEMP/slime"
           timeout 900 emacs --batch -Q -L "$RUNNER_TEMP/slime" -L editors \
