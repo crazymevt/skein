@@ -7,7 +7,7 @@
  :main driftrock.main/-main
  :paths [".."]
  :bundle-id "org.skein-lang.driftrock"
- :deps {skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.1.0"}}
+ :deps {skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.2.0"}}
  :native {:libs {:macos ["vendor/macos/libSDL3.dylib"]
                  :linux ["vendor/linux/libSDL3.so.0"]
                  :windows ["vendor/windows/SDL3.dll"]}}}

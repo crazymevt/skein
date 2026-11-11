@@ -420,7 +420,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   2. ✅ By value in callbacks: `defcallback` parameters (as owned pointers) and results (a pointer or a map).
   3. ✅ `defcfun-ptr`, and one C symbol under several names with different signatures.
   4. ✅ Variadic shapes with `&`, including floats and small integers that C promotes.
-  5. `skein bindgen` emits by-value structs and variadic functions; skein-sdl3 is regenerated and tagged v0.2.0, and the examples' locks move to it; all of it on the three platforms in CI.
+  5. ✅ `skein bindgen` emits by-value structs and variadic functions; skein-sdl3 is regenerated and tagged v0.2.0, and the examples' locks move to it; all of it on the three platforms in CI.
 
 **Exit:** native tests pass structs by value to and from C functions and callbacks, call through function pointers and call variadic functions, on all three platforms, and the SDL3 bindings (crazymevt/skein-sdl3, D-095) are regenerated with the declarations that were skipped.
 

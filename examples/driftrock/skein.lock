@@ -1,3 +1,3 @@
 ;; The commit each git dependency resolved to (skein deps update moves them).
 ;; Commit this file with project.skn.
-{skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.1.0" :sha "53680545057a2b66e1e3635f707923701f2d27d1"}}
+{skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.2.0" :sha "239fc09bae6dbeba7d429ecd2560e15e7bf335b4"}}

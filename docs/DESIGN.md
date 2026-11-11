@@ -996,7 +996,7 @@ Phase 0 status (D-040):
 
 - **`skein.core`'s numbers and printing (M2.11, D-093):** as Clojure's, natively. `int?` is an integer that fits in 64 bits; `random-uuid` returns the UUID as a string (Skein has no UUID type); the `bit-` operations take fixnums. `format` writes Java's common directives: `%s` (as `print`), `%S`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%f`, `%e`, `%%` and `%n`, with the flags `- + space 0 ,`, a width and a precision. `read-string` reads the first form of a string as data, in programs built with `--eval` (the reader comes with the evaluator). `spit` takes `:append true`. When `*print-length*` is bound to n, collections print their first n elements and then `...`; Phase 0 ignores it.
 
-Bindings shipped as separate libraries: `sdl3` (windowing, input, the 2D renderer and the GPU API; D-020), `miniaudio`, `cimgui`, `box2d`, `stb`. The first, the SDL3 bindings (`sdl3.raw`), moved out of this repository to [crazymevt/skein-sdl3](https://github.com/crazymevt/skein-sdl3) in M2.12 (D-095); projects depend on it with `:deps {skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.1.0"}}`.
+Bindings shipped as separate libraries: `sdl3` (windowing, input, the 2D renderer and the GPU API; D-020), `miniaudio`, `cimgui`, `box2d`, `stb`. The first, the SDL3 bindings (`sdl3.raw`), moved out of this repository to [crazymevt/skein-sdl3](https://github.com/crazymevt/skein-sdl3) in M2.12 (D-095); projects depend on it with `:deps {skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.2.0"}}` (v0.2.0, M2.13, binds its variadic functions).
 
 ## 22. Open questions
 
