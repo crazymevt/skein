@@ -128,7 +128,10 @@
 
 (defun stored-value (cell value)
   "The representation of VALUE in a slot whose cell kind is CELL."
-  (if (eq cell :atom) (make-skein-atom value) value))
+  (case cell
+    (:atom (make-skein-atom value))
+    (:ref (skein-error 'skein-error nil ":cell :ref slots are native only (STM, D-092)"))
+    (t value)))
 
 (defvar value-checks-p t
   "True while slot :type checks are on.")
@@ -146,9 +149,10 @@
   (cond ((null x) nil)
         ((and (kw-p x) (string= (kw-name x) "atom")) :atom)
         ((and (kw-p x) (string= (kw-name x) "unsynchronized")) :unsynchronized)
-        ((and (kw-p x) (string= (kw-name x) "ref"))
-         (skein-error 'skein-error nil ":cell :ref is reserved and not supported yet"))
-        (t (skein-error 'skein-error nil ":cell must be :atom or :unsynchronized, not ~A"
+        ;; Natively a :ref cell holds a ref (STM, D-092); Phase 0 accepts the class, so
+        ;; code that defines one expands and loads, but can't make instances of it.
+        ((and (kw-p x) (string= (kw-name x) "ref")) :ref)
+        (t (skein-error 'skein-error nil ":cell must be :atom, :ref or :unsynchronized, not ~A"
                         (readable-string x)))))
 
 (defun define-skein-class (name supers slots)

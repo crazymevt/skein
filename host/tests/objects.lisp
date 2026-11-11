@@ -123,8 +123,10 @@
   (fails "(with {:a 1} :a 2)" "with needs an instance"))
 
 (test cell-options
-  (fails "(defclass r [] (x :cell :ref))" ":cell :ref is reserved and not supported yet")
-  (fails "(defclass r2 [] (x :cell :weird))" ":cell must be :atom or :unsynchronized")
+  ;; :cell :ref slots hold refs natively (STM, D-092); Phase 0 accepts the class but can't
+  ;; make instances.
+  (fails "(do (defclass r [] (x :cell :ref)) (make r))" ":cell :ref slots are native only")
+  (fails "(defclass r2 [] (x :cell :weird))" ":cell must be :atom, :ref or :unsynchronized")
   (compile-fails "(defclass r3 [] (x :init))" "slot options must come in pairs")
   (compile-fails "(defclass r4 [] x)" "defclass slots look like (name :option value ...)")
   (compile-fails "(defclass r5 x)" "defclass needs a vector of superclasses"))
