@@ -6,10 +6,11 @@
 ;;;;
 ;;;; Run it from the checkout, where a display is available (under xvfb-run on Linux CI). It
 ;;;; copies examples/driftrock to a temporary directory, runs
-;;;; `skein dev --no-server --no-swank driftrock/main.skn --frames 900 --autopilot
+;;;; `skein dev --no-server --no-swank driftrock/main.skn --frames 1200 --autopilot
 ;;;; --check-60fps --slow-frames` there, changes a constant in driftrock/game.skn three
-;;;; seconds into the game, and exits with 0 if every check passed. SKEIN_LIVE_EDIT_LIMIT
-;;;; sets the limit in seconds (default 1).
+;;;; times from three seconds into the game, a second apart, and exits with 0 if every check
+;;;; passed: the median edit runs compiled within the limit, and each within twice it
+;;;; (D-101). SKEIN_LIVE_EDIT_LIMIT sets the limit in seconds (default 1).
 
 (require :sb-posix)
 
@@ -66,7 +67,7 @@
          (game (merge-pathnames "driftrock/game.skn" dir)))
     (copy-directory (merge-pathnames "examples/driftrock/" *root*) (merge-pathnames "driftrock/" dir))
     (let* ((args (list "dev" "--no-server" "--no-swank" "driftrock/main.skn"
-                       "--frames" "900" "--autopilot" "--check-60fps" "--slow-frames"))
+                       "--frames" "1200" "--autopilot" "--check-60fps" "--slow-frames"))
            ;; On Windows, through skein.cmd: a search for bash there can find WSL's
            ;; bash.exe in System32 rather than Git's.
            (process (if (member :win32 *features*)
@@ -93,39 +94,57 @@
         (multiple-value-bind (started i) (wait-for "; skein dev" :timeout 900)
           (declare (ignore started))
           (sleep 3)
-          (let* ((text (with-open-file (s game) (let ((str (make-string (file-length s))))
-                                                  (subseq str 0 (read-sequence str s)))))
-                 (old "(def turn-speed 4.2)")
-                 (at (or (search old text) (fail "~A has no ~A" game old)))
-                 (saved (now)))
-            (with-open-file (s game :direction :output :if-exists :supersede)
-              (write-string (concatenate 'string (subseq text 0 at) "(def turn-speed 4.3)"
-                                         (subseq text (+ at (length old))))
-                            s))
-            (multiple-value-bind (compiled j) (wait-for "; compiled game.skn" :after i :timeout 30)
-              (let ((took (- compiled saved)))
-                (format t "live-edit: saved at ~,3F s, compiled code running ~,3F s later~%"
-                        saved took)
-                (when (> took *limit*)
-                  (fail "the change took ~,3F s to run compiled, over ~,3F s" took *limit*)))
-              ;; The new value is in force, in compiled code.
-              (say "[driftrock.game/turn-speed (%evaluated? driftrock.game/update!)]")
-              (wait-for "[4.3 false]" :after j :timeout 10)
-              ;; No frame over budget from the save until half a second after the swap.
-              (wait-for "the REPL is still running" :after j :timeout 120)
-              (sb-thread:with-mutex (*lock*)
-                (loop for (time . line) across *lines*
-                      when (and (search "slow frame" line) (<= (- saved 0.1) time (+ compiled 0.5)))
-                        do (fail "a frame went over the budget around the reload: ~A" line)
-                      when (search "error in thread" line)
-                        do (fail "the program failed: ~A" line)))
+          ;; Three edits, a second apart: a shared CI runner has slow moments, so the
+          ;; median is judged against the limit, and each edit against twice it (D-101).
+          (let ((edits '()) (after i))
+            (loop for (old new) in '(("(def turn-speed 4.2)" "(def turn-speed 4.3)")
+                                     ("(def turn-speed 4.3)" "(def turn-speed 4.4)")
+                                     ("(def turn-speed 4.4)" "(def turn-speed 4.5)"))
+                  do (let* ((text (with-open-file (s game)
+                                    (let ((str (make-string (file-length s))))
+                                      (subseq str 0 (read-sequence str s)))))
+                            (at (or (search old text) (fail "~A has no ~A" game old)))
+                            (saved (now)))
+                       (with-open-file (s game :direction :output :if-exists :supersede)
+                         (write-string (concatenate 'string (subseq text 0 at) new
+                                                    (subseq text (+ at (length old))))
+                                       s))
+                       (multiple-value-bind (compiled j)
+                           (wait-for "; compiled game.skn" :after after :timeout 30)
+                         (format t "live-edit: saved at ~,3F s, compiled code running ~,3F s ~
+                                    later~%" saved (- compiled saved))
+                         (push (list saved compiled) edits)
+                         (setf after j)
+                         (sleep 1))))
+            (setf edits (reverse edits))
+            (let* ((tooks (mapcar (lambda (e) (- (second e) (first e))) edits))
+                   (median (second (sort (copy-list tooks) #'<))))
+              (format t "live-edit: the median edit ran compiled ~,3F s after saving~%" median)
+              (when (> median *limit*)
+                (fail "the median edit took ~,3F s to run compiled, over ~,3F s" median *limit*))
+              (dolist (took tooks)
+                (when (> took (* 2 *limit*))
+                  (fail "an edit took ~,3F s to run compiled, over ~,3F s" took (* 2 *limit*)))))
+            ;; The last value is in force, in compiled code.
+            (say "[driftrock.game/turn-speed (%evaluated? driftrock.game/update!)]")
+            (setf after (nth-value 1 (wait-for "[4.5 false]" :after after :timeout 10)))
+            ;; No frame over budget from each save until half a second after its swap.
+            (wait-for "the REPL is still running" :after after :timeout 120)
+            (sb-thread:with-mutex (*lock*)
+              (loop for (time . line) across *lines*
+                    when (and (search "slow frame" line)
+                              (some (lambda (e) (<= (- (first e) 0.1) time (+ (second e) 0.5)))
+                                    edits))
+                      do (fail "a frame went over the budget around a reload: ~A" line)
+                    when (search "error in thread" line)
+                      do (fail "the program failed: ~A" line)))
               (say ":quit")
               (loop repeat 600 while (sb-ext:process-alive-p process) do (sleep 0.05))
               (when (sb-ext:process-alive-p process)
                 (sb-ext:process-kill process 9)
                 (fail "skein dev did not exit after :quit"))
               (format t "live-edit: passed~%")
-              (sb-ext:exit :code 0))))))))
+              (sb-ext:exit :code 0)))))))
 
 (defun uiop-temp ()
   (let ((tmp (or (sb-posix:getenv "TMPDIR") (sb-posix:getenv "TEMP") (sb-posix:getenv "TMP")
