@@ -648,7 +648,9 @@ const PromiseWait = struct {
 /// Who runs code here: the fiber, or on another thread the thread.
 fn runnerId() Value {
     if (sched.inFiber()) return fiberValue();
-    return Value.fromFixnum(-@as(i64, @intCast(std.Thread.getCurrentId() & 0xffffffffffff)) - 1);
+    // A thread id is 32 bits on Windows, 64 elsewhere.
+    const id: u64 = @intCast(std.Thread.getCurrentId());
+    return Value.fromFixnum(-@as(i64, @intCast(id & 0xffffffffffff)) - 1);
 }
 
 /// deref of a promise or a delay: (deref p) or (deref p seconds timeout-value).
