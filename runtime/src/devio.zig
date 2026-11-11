@@ -318,6 +318,18 @@ fn runAttached(argv: Value, env: Value) Value {
 
 const ModuleInit = *const fn (count: u32, vars: [*]const Value) callconv(.c) void;
 
+const LoadCall = struct { path: [:0]const u8, why: []u8, init: ?*anyopaque = null, handle: bool = false };
+
+/// Loading a library can take tens of milliseconds (macOS checks its signature) and
+/// touches no Skein objects, so it's a blocking call: a collection needn't wait for it,
+/// which would stall every thread, a game's frame included.
+fn loadBlocking(arg: ?*anyopaque) void {
+    const c: *LoadCall = @ptrCast(@alignCast(arg));
+    const handle = platform.loadLibrary(c.path, c.why) orelse return;
+    c.handle = true;
+    c.init = platform.librarySymbol(handle, "sk_module_init");
+}
+
 /// Load the module at `path` and run its init function with `vars`, a vector of vars.
 /// Modules are never unloaded: running frames and closures may still use their code.
 fn loadModule(path: Value, vars: Value) Value {
@@ -336,10 +348,11 @@ fn loadModule(path: Value, vars: Value) Value {
     defer alloc.free(p);
     var why: [512]u8 = undefined;
     @memset(&why, 0);
-    const handle = platform.loadLibrary(p, &why) orelse
+    var call: LoadCall = .{ .path = p, .why = &why };
+    io.pathBlocking(loadBlocking, &call);
+    if (!call.handle)
         rt.raise(.@"error", "cannot load the module {s}: {s}", .{ p, std.mem.sliceTo(&why, 0) });
-    const sym = platform.librarySymbol(handle, "sk_module_init") orelse
-        rt.raise(.@"error", "the module {s} has no sk_module_init", .{p});
+    const sym = call.init orelse rt.raise(.@"error", "the module {s} has no sk_module_init", .{p});
     const init: ModuleInit = @ptrCast(@alignCast(sym));
     init(@intCast(n), vs.ptr);
     return Value.true;

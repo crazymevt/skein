@@ -11,7 +11,9 @@ Options: --frames N stops after N frames, --autopilot plays by itself, --no-vsyn
 as fast as it can, and --screenshot file.bmp saves the last frame. On exit it prints
 frame-time statistics and how long start-up took (until -main ran, and until the first
 frame); with --check-60fps it fails if the 99th-percentile frame takes more than 16.67 ms
-of work, and with --check-startup if -main started more than 0.1 s after the program."
+of work, and with --check-startup if -main started more than 0.1 s after the program.
+--slow-frames prints a line for each frame after the first 30 whose work is over the
+budget (CI's live-edit check, host/tools/live-edit.lisp, looks for them)."
   (:require [skein.ffi :as ffi]
             [skein.game :as game]
             [skein.time :as time]
@@ -32,6 +34,7 @@ of work, and with --check-startup if -main started more than 0.1 s after the pro
           "--screenshot" (recur (assoc opts :screenshot b) (nnext args))
           "--check-60fps" (recur (assoc opts :check true) (next args))
           "--check-startup" (recur (assoc opts :check-startup true) (next args))
+          "--slow-frames" (recur (assoc opts :slow-frames true) (next args))
           (error (str "unknown option " a)))))))
 
 (defn key? [keys scancode] (ffi/get keys bool scancode))
@@ -113,7 +116,11 @@ of work, and with --check-startup if -main started more than 0.1 s after the pro
             :update (fn [dt] (g/update! @input dt))
             :render (fn [_]
                       (draw/world! renderer @g/world @fps)
-                      (swap! work-times conj (- (time/now) @work-start))
+                      (let [work (- (time/now) @work-start)]
+                        (when (and (:slow-frames opts) (> @frames 30) (> work budget))
+                          (println (str "slow frame " @frames ": "
+                                        (/ (int (* work 100000.0)) 100.0) " ms")))
+                        (swap! work-times conj work))
                       (when (and (:screenshot opts) (= (inc @frames) (:frames opts)))
                         (save-screenshot! renderer (:screenshot opts)))
                       (sdl/render-present renderer)

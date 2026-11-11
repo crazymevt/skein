@@ -278,6 +278,17 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a ./skein run examples/driftrock/main.skn --frames 600 --autopilot --check-60fps
 
+      # M2.9: edit Driftrock while it plays under native skein dev; the change must run as
+      # compiled code within a second of saving, with no frame over budget around the
+      # reload (D-091).
+      - name: Driftrock live edit
+        if: runner.os != 'Linux'
+        run: sbcl --script host/tools/live-edit.lisp
+
+      - name: Driftrock live edit (Linux, under Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a sbcl --script host/tools/live-edit.lisp
+
   # M1.11: each package that the Linux job made runs on its platform, which has no SBCL,
   # Zig or Skein checkout installed.
   packages:

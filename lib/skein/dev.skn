@@ -592,7 +592,7 @@ while a module is loaded: a channel holding one token when it's taken."
          (announce (str "; error reloading " (file-name file) ": " (condition-message e))))))
 
 (defn- start-watcher
-  "Reload the program's source files when they change, checking every 0.25 s. Returns a
+  "Reload the program's source files when they change, checking every 0.1 s. Returns a
 function that stops it."
   []
   (let [dates (atom (into {} (map (fn [f] [f (%file-mtime f)]) (watched-files))))
@@ -612,7 +612,7 @@ function that stops it."
                        (reload-changed f)))))
                (catch error e
                  (announce (str "; error in the file watcher: " (condition-message e)))))
-          (sleep 0.25)
+          (sleep 0.1)
           (recur))))
     (fn [] (reset! stop true))))
 
