@@ -219,8 +219,10 @@ test_compiler() {
   echo "skeinc: no eval without --eval"
   # Every example and fixture again with SKEIN_GC_VERIFY=1 (D-073): each collection is
   # major and is followed by a check that nothing points at an object that's gone.
+  # Each program is named as it starts, so a log shows which one a hang is in.
   for expected in examples/*.expected build/examples/native-*.expected; do
     name=$(basename "$expected" .expected)
+    echo "skeinc: $name with SKEIN_GC_VERIFY=1"
     if ! SKEIN_GC_VERIFY=1 "build/examples/$name$exe" 2> "build/examples/$name.verify-err" \
          | diff --strip-trailing-cr "$expected" - > /dev/null; then
       echo "skeinc: $name fails with SKEIN_GC_VERIFY=1"
@@ -231,6 +233,7 @@ test_compiler() {
   # STM keeps heap values in transactions and refs (D-092).
   for program in host/tests/fixtures/stm/*.skn; do
     name=stm-$(basename "$program" .skn)
+    echo "skeinc: $name with SKEIN_GC_VERIFY=1"
     if ! SKEIN_GC_VERIFY=1 "build/examples/$name$exe" 2> "build/examples/$name.verify-err" \
          | diff --strip-trailing-cr "${program%.skn}.expected" - > /dev/null; then
       echo "skeinc: $name fails with SKEIN_GC_VERIFY=1"

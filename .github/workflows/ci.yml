@@ -172,6 +172,8 @@ jobs:
           "SDL3_DLL=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Run tests
+        # About 30 minutes on each platform; a hang fails here rather than after 6 hours.
+        timeout-minutes: 75
         run: make test
 
       - name: Launcher (bash)
