@@ -319,6 +319,14 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a sbcl --script host/tools/live-debug.lisp
 
+      # M2.15: the same through SLIME, with the Emacs and SLIME the SLIME session installed:
+      # SLDB for a bug compiled into a job, the fix with C-c C-c, and retry-frame (D-101).
+      - name: Driftrock SLIME session (Linux, under Xvfb)
+        if: runner.os == 'Linux'
+        run: |
+          timeout 1200 xvfb-run -a emacs --batch -Q -L "$RUNNER_TEMP/slime" -L editors \
+            -l editors/tests/driftrock-session.el
+
   # M1.11: each package that the Linux job made runs on its platform, which has no SBCL,
   # Zig or Skein checkout installed.
   packages:

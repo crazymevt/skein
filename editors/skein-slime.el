@@ -47,6 +47,10 @@ nil finds `skein' (`skein.cmd' on Windows) in the file's directory or the
 nearest one above it that has it, then on the PATH."
   :type '(choice (const :tag "Find it" nil) file))
 
+(defcustom skein-slime-program-args nil
+  "Arguments `skein-slime' passes to the program after its file, to its `-main'."
+  :type '(repeat string))
+
 ;;; Namespaces
 
 (defun skein-slime-buffer-namespace ()
@@ -147,8 +151,8 @@ built and running."
     (with-current-buffer buffer
       (erase-buffer)
       (setq default-directory (file-name-directory file))
-      (make-comint-in-buffer "skein-dev" buffer launcher nil "dev" "--no-server"
-                             "--swank-port" "0" (file-name-nondirectory file))
+      (apply #'make-comint-in-buffer "skein-dev" buffer launcher nil "dev" "--no-server"
+             "--swank-port" "0" (file-name-nondirectory file) skein-slime-program-args)
       (add-hook 'comint-output-filter-functions #'skein-slime--watch-output nil t))
     (display-buffer buffer)
     buffer))

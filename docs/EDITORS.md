@@ -40,7 +40,9 @@ Start the program from Emacs with **`M-x skein-slime`** in its source buffer: it
 and connects SLIME once the program is running. Or run `./skein dev game.skn` in a
 terminal and **`M-x skein-slime-connect`** (port 4005; with `C-u`, ask for another). It
 connects to `127.0.0.1`, as the server listens on IPv4 only. Set `skein-slime-program`
-if the `skein` launcher isn't in the file's directory, one above it, or on the `PATH`.
+if the `skein` launcher isn't in the file's directory, one above it, or on the `PATH`, and
+`skein-slime-program-args` to pass arguments to the program's `-main` (Driftrock's
+`("--autopilot")`, say).
 
 | Key | Does |
 |---|---|
