@@ -61,7 +61,11 @@ The argument list of the call around the cursor shows in the echo area as you ty
 and the Skein functions on the stack. So does an error in the running program that nothing
 handles, in its main thread or in a task: that thread waits in SLDB, as it would at the
 terminal. A task's SLDB has an `abort` restart, "Fail the task", after which its nursery
-handles the failure. In SLDB, a number
+handles the failure, and before it the restarts of the code that spawned the task, marked
+"(in main thread)": for a crash in one of a game's jobs, fix the code with `C-c C-c` and
+choose `retry-frame` to run the frame again (D-101). While a game's frame waits in SLDB,
+`skein.game/run-loop` calls its `:paused` function, so the game can keep its window
+alive. In SLDB, a number
 or `RET` on a restart invokes it, `a` aborts, `q` returns to the top level, `v` on a frame
 shows its function's definition, `e` evaluates a form in the failing thread and `C`
 inspects the condition. If Emacs isn't connected, or disconnects first, the program's error
@@ -73,6 +77,14 @@ show no local variables; the runtime's functions written in Zig (`str`, `count`,
 have no argument lists or docstrings; and the inspector has no actions.
 
 SLY (Slynk) isn't supported yet.
+
+**Emacs in a terminal on macOS.** Homebrew's `emacs` runs only in a terminal, where the
+Option key types characters (`≈`) rather than acting as Meta, or arrives as another key
+when the terminal treats it as Meta. Press `Esc` then the key instead (`Esc x` for
+`M-x`), set the terminal's Option key to Meta, or install Emacs.app
+(`brew install --cask emacs`). With Emacs 31, SLIME 2.32's contribs warn that they lack a
+`lexical-binding` cookie; the warnings are harmless, and
+`(setq warning-suppress-types '((files)))` silences them.
 
 ## Emacs: clojure-mode and inf-clojure
 
@@ -163,4 +175,13 @@ SLIME checked out somewhere:
 
 ```sh
 emacs --batch -Q -L /path/to/slime -L editors -l editors/tests/slime-session.el
+```
+
+It also runs `editors/tests/driftrock-session.el`, which debugs Driftrock through SLIME
+while it plays (M2.15): a bug compiled into one of its jobs, SLDB's `retry-frame` "(in
+main thread)", the fix with `C-c C-c`, and the game playing on. It needs a display (CI
+runs it under `xvfb-run`):
+
+```sh
+emacs --batch -Q -L /path/to/slime -L editors -l editors/tests/driftrock-session.el
 ```
