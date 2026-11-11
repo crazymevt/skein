@@ -1,0 +1,75 @@
+(ns core-more
+  (:require [skein.test :refer [deftest is are testing run-tests]]))
+
+;; skein.core's additions of M2.11 step 3 (D-093), natively, compared with
+;; core-more.expected: the macros, and the seq and function helpers.
+
+(deftest macros
+  (are [x y] (= x y)
+    6 (cond-> 1 true inc false (* 10) true (* 3))
+    [0 1] (cond->> [1] true (cons 0) false (map inc) true vec)
+    :two (condp = 2 1 :one 2 :two :other)
+    :other (condp = 9 1 :one 2 :two :other)
+    3 (condp some [1 2 3] #{0 5} :>> inc #{3 4} :>> identity :none)
+    :a (when-first [x [:a :b]] x)
+    nil (when-first [x []] :never)
+    [1 2 3 4] (vec (lazy-cat [1 2] [3 4]))
+    "a 1\nb\n" (with-out-str (println "a" 1) (print "b") (println))
+    "" (with-out-str nil))
+  (is (thrown-with-msg? error "no clause" (condp = 3 1 :one)))
+  (testing "nested with-out-str"
+    (is (= ["inner" "outer\n"]
+           (let [inner (atom nil)
+                 outer (with-out-str (reset! inner (with-out-str (print "inner")))
+                                     (println "outer"))]
+             [@inner outer]))))
+  (testing "time prints and returns"
+    (let [out (with-out-str (is (= 3 (time (+ 1 2)))))]
+      (is (= "Elapsed time: " (subs out 0 14))))))
+
+(deftest seqs
+  (are [x y] (= x y)
+    [[1 1] [2] [3 3 3] [1]] (map vec (partition-by identity [1 1 2 3 3 3 1]))
+    [0 3 6 9] (take-nth 3 (range 10))
+    [8 9] (take-last 2 (range 10))
+    nil (take-last 2 [])
+    [0 1 2] (drop-last 2 (range 5))
+    [0 1 2 3] (drop-last (range 5))
+    [:b :d] (keep-indexed (fn [i x] (when (odd? i) x)) [:a :b :c :d])
+    [0 1 3 6 10] (reductions + (range 5))
+    [5 6 8] (reductions + 5 [1 2])
+    [0] (reductions + [])
+    [[1 [2 [3]]] 1 [2 [3]] 2 [3] 3] (tree-seq vector? seq [1 [2 [3]]])
+    [2 3] (subvec [1 2 3 4] 1 3)
+    [3 4] (subvec [1 2 3 4] 2)
+    [3 2 1] (rseq [1 2 3])
+    nil (rseq [])
+    {:a 2 :b 3} (update-vals {:a 1 :b 2} inc)
+    {"a" 1} (update-keys {:a 1} name)
+    true (distinct? 1 2 3)
+    false (distinct? 1 2 1))
+  (is (thrown? error (subvec [1 2] 1 5)))
+  (let [log (atom [])]
+    (is (nil? (run! (fn [x] (swap! log conj x)) [1 2 3])))
+    (is (= [1 2 3] @log)))
+  (testing "random"
+    (dotimes [_ 50]
+      (let [v (vec (range 20))]
+        (is (= v (sort (shuffle v))))
+        (is (contains? (set v) (rand-nth v)))))))
+
+(deftest functions
+  (are [x y] (= x y)
+    true ((some-fn even? zero?) 1 2)
+    nil ((some-fn even?) 1 3)
+    true ((every-pred odd? pos?) 1 3 5)
+    false ((every-pred odd? pos?) 1 -3)
+    [3 :c] (max-key first [1 :a] [3 :b] [3 :c] [2 :d])
+    [1 :e] (min-key first [1 :a] [3 :b] [1 :e])
+    :done (trampoline (fn down [n] (if (zero? n) :done (fn [] (down (dec n))))) 100000))
+  (let [calls (atom 0)
+        slow (memoize (fn [x] (swap! calls inc) (* x x)))]
+    (is (= [4 4 9] [(slow 2) (slow 2) (slow 3)]))
+    (is (= 2 @calls))))
+
+(prn (select-keys (run-tests 'core-more) [:test :fail :error]))

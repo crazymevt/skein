@@ -379,6 +379,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     ;; String cursors (M2.11, D-019, D-093)
     "%string-end" "%string-char-at" "%string-next" "%string-slice" "%string-find"
     "%string-cursor->index" "%string-index->cursor" "%string-ascii-case"
+    ;; skein.core's additions (M2.11, D-093)
+    "%with-out-str"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

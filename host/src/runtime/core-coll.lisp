@@ -795,3 +795,7 @@ REDUCED; returns the unwrapped result."
                        ((and (not (truthy-p upper)) (char<= #\A ch #\Z)) (char-downcase ch))
                        (t ch)))
        s))
+
+(defcore "%with-out-str" (f)
+  ;; with-out-str (M2.11): Phase 0 prints to *standard-output*.
+  (with-output-to-string (*standard-output*) (scall f)))

@@ -623,6 +623,12 @@ const base_table = [_]Entry{
     }.f),
     // Printing
     e("println", 0, null, printFn(false, true)),
+    // (%with-out-str f): what (f) prints, as a string (with-out-str, M2.11).
+    e("%with-out-str", 1, 1, struct {
+        fn f(a: Args) Value {
+            return print.withOutStr(a[0]);
+        }
+    }.f),
     e("print", 0, null, printFn(false, false)),
     e("prn", 0, null, printFn(true, true)),
     e("pr", 0, null, printFn(true, false)),

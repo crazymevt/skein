@@ -798,3 +798,148 @@ only symbols."
       (doseq [[pattern init] (partition 2 bindings)]
         (pb pattern init))
       (persistent! out))))
+
+;;; ------------------------------------------------------------------------------------
+;;; More of Clojure's functions (M2.11 step 3, D-093). Native only: Phase 0 doesn't have
+;;; them (D-072), and their fixture is native.
+
+(defn partition-by
+  "A lazy seq of runs of consecutive elements for which f gives the same value."
+  [f coll]
+  (lazy-seq
+   (when-let [s (seq coll)]
+     (let [v (f (first s))
+           run (cons (first s) (take-while (fn [x] (= v (f x))) (rest s)))]
+       (cons run (partition-by f (drop (count run) s)))))))
+
+(defn take-nth
+  "A lazy seq of every nth element, starting with the first."
+  [n coll]
+  (when-not (pos? n) (error "take-nth needs a positive step, not" n))
+  (lazy-seq
+   (when-let [s (seq coll)]
+     (cons (first s) (take-nth n (drop n s))))))
+
+(defn take-last
+  "A seq of the last n elements, or nil if there are none."
+  [n coll]
+  (let [v (vec coll)]
+    (seq (subvec* v (max 0 (- (count v) n)) (count v)))))
+
+(defn drop-last
+  "A lazy seq of the elements but the last n (1)."
+  ([coll] (drop-last 1 coll))
+  ([n coll] (map (fn [x _] x) coll (drop n coll))))
+
+(defn keep-indexed
+  "A lazy seq of the non-nil results of (f index element)."
+  [f coll]
+  (keep (fn [[i x]] (f i x)) (map-indexed vector coll)))
+
+(defn reductions
+  "A lazy seq of the intermediate values of (reduce f init coll), init first."
+  ([f coll]
+   (lazy-seq
+    (if-let [s (seq coll)]
+      (reductions f (first s) (rest s))
+      (list (f)))))
+  ([f init coll]
+   (cons init
+         (lazy-seq
+          (when-let [s (seq coll)]
+            (reductions f (f init (first s)) (rest s)))))))
+
+(defn tree-seq
+  "A lazy seq of the nodes of a tree, depth first: branch? says whether a node has
+children, which (children node) gives."
+  [branch? children root]
+  (letfn [(walk [node]
+            (lazy-seq
+             (cons node (when (branch? node) (mapcat walk (children node))))))]
+    (walk root)))
+
+(defn shuffle
+  "The elements of coll in a random order, as a vector."
+  [coll]
+  (loop [v (vec coll) i (dec (count v))]
+    (if (pos? i)
+      (let [j (rand-int (inc i))]
+        (recur (assoc v i (nth v j) j (nth v i)) (dec i)))
+      v)))
+
+(defn rand-nth
+  "A random element of coll, which must not be empty."
+  [coll]
+  (nth coll (rand-int (count coll))))
+
+(defn subvec
+  "The elements of the vector v from index start up to end (or its end), as a vector."
+  ([v start] (subvec v start (count v)))
+  ([v start end]
+   (when-not (<= 0 start end (count v))
+     (error "subvec: no range" start "to" end "in a vector of" (count v)))
+   (subvec* v start end)))
+
+(defn rseq
+  "The elements of a vector in reverse order, or nil if it is empty."
+  [v]
+  (seq (reverse v)))
+
+(defn update-vals
+  "m with f applied to each value."
+  [m f]
+  (persistent! (reduce-kv (fn [acc k v] (assoc! acc k (f v))) (transient {}) m)))
+
+(defn update-keys
+  "m with f applied to each key."
+  [m f]
+  (persistent! (reduce-kv (fn [acc k v] (assoc! acc (f k) v)) (transient {}) m)))
+
+(defn run!
+  "Call f on each element of coll, for its effects; nil."
+  [f coll]
+  (reduce (fn [_ x] (f x) nil) nil coll)
+  nil)
+
+(defn distinct?
+  "True if no two of the arguments are equal."
+  [& xs]
+  (= (count xs) (count (set xs))))
+
+(defn some-fn
+  "A function that is true (the first true result) if any of the predicates is true of
+any of its arguments."
+  [& preds]
+  (fn [& args] (some (fn [p] (some p args)) preds)))
+
+(defn every-pred
+  "A function that is true if every predicate is true of every one of its arguments."
+  [& preds]
+  (fn [& args] (boolean (every? (fn [p] (every? p args)) preds))))
+
+(defn memoize
+  "A function like f that keeps each result by its arguments and returns it again."
+  [f]
+  (let [cache (atom {})]
+    (fn [& args]
+      (if-let [e (find @cache args)]
+        (val e)
+        (let [v (apply f args)]
+          (swap! cache assoc args v)
+          v)))))
+
+(defn trampoline
+  "Call f (with args); while the result is a function, call it with no arguments. For
+mutual recursion without growing the stack."
+  ([f] (loop [r (f)] (if (fn? r) (recur (r)) r)))
+  ([f & args] (trampoline (fn [] (apply f args)))))
+
+(defn max-key
+  "The x for which (k x) is greatest (the last of several)."
+  [k x & more]
+  (reduce (fn [a b] (if (>= (k b) (k a)) b a)) x more))
+
+(defn min-key
+  "The x for which (k x) is least (the last of several)."
+  [k x & more]
+  (reduce (fn [a b] (if (<= (k b) (k a)) b a)) x more))

@@ -259,6 +259,37 @@ pub fn writeFloat(comptime T: type, x: T, out: *std.ArrayList(u8)) void {
 /// code it evaluates. Vars are permanent, so this needn't be a root.
 pub var output_var: ?Value = null;
 
+/// with-out-str's var (M2.11, D-093): while it is bound (to an atom of a vector of
+/// strings), what is printed is added to it instead. It comes before output_var, so
+/// with-out-str works inside a REPL's evaluation too. Made on first use; a root.
+var capture_var: [1]Value = .{Value.nil};
+var capture_lock: @import("platform").Mutex = .{};
+
+fn captureVar() Value {
+    capture_lock.lock();
+    defer capture_lock.unlock();
+    if (capture_var[0] == Value.nil) {
+        const v = names.makeVar("skein.core", "%captured-output");
+        names.setDynamic(v);
+        @import("gc.zig").addRoots(&capture_var);
+        capture_var[0] = v;
+    }
+    return capture_var[0];
+}
+
+/// with-out-str: call `f` with what it prints (and the tasks it starts) captured; the text.
+pub fn withOutStr(f: Value) Value {
+    const parts = coll.makeAtom(coll.vectorOf(&.{}));
+    const v = captureVar();
+    const sk_with_bindings = @extern(*const fn (u32, ?[*]const Value, Value, Value, Value) callconv(.c) Value, .{ .name = "sk_with_bindings" });
+    _ = sk_with_bindings(1, &.{v}, coll.vectorOf(&.{names.symbol(null, "%captured-output")}), coll.vectorOf(&.{parts}), f);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(rt.scratch);
+    const captured = coll.atomGet(parts);
+    for (0..coll.vectorCount(captured)) |i| put(&out, @import("string.zig").bytes(coll.vectorNth(captured, i).?));
+    return @import("string.zig").make(out.items);
+}
+
 /// Print `values` separated by spaces, then a newline if `newline`, to standard output (or
 /// the function bound to output_var), in one write, so lines don't interleave.
 pub fn printValues(values: []const Value, readably: bool, newline: bool) void {
@@ -269,6 +300,17 @@ pub fn printValues(values: []const Value, readably: bool, newline: bool) void {
         write(v, &out, readably);
     }
     if (newline) put(&out, "\n");
+    if (capture_var[0] != Value.nil) {
+        if (@import("dynamic.zig").bound(capture_var[0])) |parts| {
+            if (parts != Value.nil) {
+                const text = @import("string.zig").make(out.items);
+                while (true) {
+                    const old = coll.atomGet(parts);
+                    if (coll.atomCompareAndSet(parts, old, coll.vectorConj(old, text))) return;
+                }
+            }
+        }
+    }
     if (output_var) |ov| {
         if (@import("dynamic.zig").bound(ov)) |sink| {
             if (sink != Value.nil) {

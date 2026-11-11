@@ -581,3 +581,70 @@ reloading the file: (defonce world (atom (new-world)))."
   [var-name expr]
   `(when-not (%var-bound? '~(symbol (%current-namespace-name) (name var-name)))
      (def ~var-name ~expr)))
+
+;;; ------------------------------------------------------------------------------------
+;;; More of Clojure's macros (M2.11 step 3, D-093)
+
+(defmacro cond->
+  "Thread expr through each form whose test is true: (cond-> x (pos? x) inc ...)."
+  [expr & clauses]
+  (when (odd? (count clauses)) (error "cond-> needs tests and forms in pairs"))
+  (let [g (gensym "cond__")]
+    `(let [~g ~expr
+           ~@(mapcat (fn [[test form]] [g `(if ~test (-> ~g ~form) ~g)]) (partition 2 clauses))]
+       ~g)))
+
+(defmacro cond->>
+  "Like cond->, threading as ->> does: as the last argument of each form."
+  [expr & clauses]
+  (when (odd? (count clauses)) (error "cond->> needs tests and forms in pairs"))
+  (let [g (gensym "cond__")]
+    `(let [~g ~expr
+           ~@(mapcat (fn [[test form]] [g `(if ~test (->> ~g ~form) ~g)]) (partition 2 clauses))]
+       ~g)))
+
+(defmacro condp
+  "(condp pred expr test1 result1 ...): the result of the first test for which
+(pred test expr) is true, or the last argument (a default) if their count is odd, else an
+error. A clause test :>> f calls f with what pred returned."
+  [pred expr & clauses]
+  (let [gp (gensym "pred__")
+        ge (gensym "expr__")
+        emit (fn emit [clauses]
+               (let [n (if (= :>> (second clauses)) 3 2)
+                     [a b c] clauses
+                     more (drop n clauses)]
+                 (cond (empty? clauses)
+                       `(error (str "condp has no clause for " (pr-str ~ge)))
+                       (= 1 (count clauses)) a
+                       (= 3 n) `(if-let [r# (~gp ~a ~ge)] (~c r#) ~(emit more))
+                       :else `(if (~gp ~a ~ge) ~b ~(emit more)))))]
+    `(let [~gp ~pred ~ge ~expr]
+       ~(emit clauses))))
+
+(defmacro when-first
+  "(when-first [x coll] body...): with x bound to the first element of coll, unless it is
+empty."
+  [[x coll] & body]
+  `(when-let [s# (seq ~coll)]
+     (let [~x (first s#)]
+       ~@body)))
+
+(defmacro lazy-cat
+  "A lazy seq of the elements of the colls, each evaluated only when it is reached."
+  [& colls]
+  `(concat ~@(map (fn [c] `(lazy-seq ~c)) colls)))
+
+(defmacro time
+  "Evaluate expr, print how long it took, and return its value."
+  [expr]
+  `(let [start# (skein.time/now)
+         value# ~expr]
+     (println (str "Elapsed time: " (* 1000.0 (- (skein.time/now) start#)) " msecs"))
+     value#))
+
+(defmacro with-out-str
+  "Evaluate the body and return what it printed, as a string, instead of printing it."
+  [& body]
+  `(%with-out-str (fn [] ~@body)))
+
