@@ -686,7 +686,7 @@ skein bindgen SDL_video.h SDL_render.h ... -I /opt/homebrew/include --prefix SDL
 ```
 
 - The front end is `clang` itself (its JSON AST dump and `-E -dD` output), so generating needs clang on the `PATH` (or `SKEIN_CLANG`); using the output does not.
-- Only declarations from the headers named on the command line, whose names start with the prefix, are emitted; structs they hold by value come along. The SDL3 bindings live in their own repository, [crazymevt/skein-sdl3](https://github.com/crazymevt/skein-sdl3), whose `make bindings` regenerates `src/sdl3/raw.skn` (M2.12, D-095).
+- Only declarations from the headers named on the command line, whose names start with the prefix, are emitted; structs they hold by value come along. Functions that take or return structs by value are emitted as such, and variadic ones with their fixed parameters and `&` (M2.13, D-096); inline functions are skipped. The SDL3 bindings live in their own repository, [crazymevt/skein-sdl3](https://github.com/crazymevt/skein-sdl3), whose `make bindings` regenerates `src/sdl3/raw.skn` (M2.12, D-095).
 - Naming: types keep the prefix (`SDL_FRect` → `sdl-frect`); functions and constants drop it (`SDL_CreateWindow` → `create-window`, `SDL_INIT_VIDEO` → `init-video`). If that name is taken, the prefixed name is used.
 - Each enum becomes a `defcenum` (keys without the common prefix, e.g. `:quit`) and also one integer constant per enumerator (`event-quit`), for struct fields that hold enum values as integers. Constant `#define`s become `def`s.
 - Variadic and inline functions, by-value structs, bit fields and anonymous members are skipped with a `;; skipped` comment.

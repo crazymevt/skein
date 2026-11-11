@@ -459,13 +459,24 @@ warning is signaled inside a barrier too, so a handler that tries to exit is sto
   (let ((c (define-enum name base (seq-to-cl values))))
     (def-var (intern-var *current-namespace* (sym-name name)) c)
     nil))
+(defun by-value-record-p (type)
+  "True if TYPE names a struct or union, which a function would take or return by value."
+  (and (not (primitive-type-p type)) (or (ctype-p type) (sym-p type))
+       (let ((c (ignore-errors (resolve-type type))))
+         (and c (not (eq (ctype-kind c) :enum))))))
+
 (defffi "%define-function" (name c-name return-type params blocking owned)
-  (if (some #'sym-p (seq-to-cl params))
-      ;; A variadic call shape (its & stays in the parameters) is native only (D-096).
+  (if (or (some #'sym-p (seq-to-cl params))
+          (by-value-record-p return-type)
+          (some (lambda (p) (by-value-record-p (skein.runtime:vector-nth p 1)))
+                (seq-to-cl params)))
+      ;; A variadic call shape (its & stays in the parameters), or structs by value, are
+      ;; native only (M2.13, D-096).
       (def-var (intern-var *current-namespace* (sym-name name))
                (lambda (&rest args)
                  (declare (ignore args))
-                 (ffi-error "~A: variadic C calls are native only (D-096)" (sym-name name))))
+                 (ffi-error "~A: variadic calls and structs by value are native only (D-096)"
+                            (sym-name name))))
       (define-foreign-function name c-name return-type
         (mapcar (lambda (p) (vector-to-list p)) (seq-to-cl params))
         (truthy-p blocking) (truthy-p owned)))

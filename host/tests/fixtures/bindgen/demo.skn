@@ -42,13 +42,13 @@
 
 (ffi/defcfun create-window "DEMO_CreateWindow" (ptr demo-window)
   [title c-string, w i32, h i32, flags u64])
-;; skipped DEMO_GetCenter: passes the struct DEMO_FPoint by value
+(ffi/defcfun get-center "DEMO_GetCenter" demo-fpoint [rect (ptr demo-rect)])
 (ffi/defcfun get-error "DEMO_GetError" c-string [])
 (ffi/defcfun get-gpu-device-count "DEMO_GetGPUDeviceCount" u64 [])
 (ffi/defcfun get-window-size "DEMO_GetWindowSize" bool
   [window (ptr demo-window), w (ptr i32), h (ptr i32)])
 (ffi/defcfun init "DEMO_Init" bool [flags u32])
-;; skipped DEMO_Log: variadic
+(ffi/defcfun log "DEMO_Log" i32 [fmt c-string &])
 (ffi/defcfun malloc "DEMO_Malloc" ptr [size u64])
 (ffi/defcfun mix "DEMO_Mix" f64 [a f32, b f64, c i8, d u64])
 (ffi/defcfun ^:blocking poll-event "DEMO_PollEvent" bool [event (ptr demo-event)])

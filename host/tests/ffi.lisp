@@ -218,9 +218,12 @@
              "nope42")
   (ffi-fails "(ffi/defcfun f \"abs\" i32 [x no-such-type])" "unknown foreign type no-such-type")
   (ffi-fails "(ffi/defcfun f \"abs\" i32 [x])" "C parameters look like")
+  ;; Structs by value are native only (M2.13, D-096): Phase 0 defines the function, so
+  ;; generated bindings load, and calling it says so.
   (ffi-fails "(ffi/defcstruct point (x i32) (y i32))
-              (ffi/defcfun f \"abs\" i32 [p point])"
-             "pass it by pointer")
+              (ffi/defcfun f \"abs\" i32 [p point])
+              (f nil)"
+             "structs by value are native only")
   (ffi-fails "(ffi/defcstruct point (x i32))
               (ffi/with-foreign [p (ffi/alloc point)] (ffi/field p point :z))"
              "has no field :z"))

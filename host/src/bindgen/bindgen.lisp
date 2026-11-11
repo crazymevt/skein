@@ -252,8 +252,6 @@ type cannot be expressed."
              (cond ((null type) nil)
                    ((member kind '(:opaque))
                     (unsupported-type "uses the incomplete type ~A by value" base))
-                   ((and (eq kind :record) (not (eq context :field)))
-                    (unsupported-type "passes the struct ~A by value" base))
                    ((and (string= type "void") (not (eq context :return)))
                     (unsupported-type "has a void value"))
                    (dims (format nil "(array ~A ~D)" type (reduce #'* dims)))
@@ -809,8 +807,7 @@ INDENT spaces, then CLOSE."
 
 (defun emit-function (out function)
   (let ((c-name (jget function "name")))
-    (cond ((eq (jget function "variadic") t) (emit-skipped out c-name "variadic"))
-          ((or (eq (jget function "inline") t) (equal (jget function "storageClass") "static"))
+    (cond ((or (eq (jget function "inline") t) (equal (jget function "storageClass") "static"))
            (emit-skipped out c-name "inline"))
           (t
            (handler-case
@@ -825,10 +822,18 @@ INDENT spaces, then CLOSE."
                       (name (or (claim-name c-name)
                                 (unsupported-type "its name is taken")))
                       (blocking (member c-name (opt-blocking *options*) :test #'string=)))
-                 (let ((head (format nil "(ffi/defcfun ~:[~;^:blocking ~]~A ~S ~A"
+                 (let* ((head (format nil "(ffi/defcfun ~:[~;^:blocking ~]~A ~S ~A"
                                      blocking name c-name ret))
                        (items (loop for (pname ptype) in params
-                                    collect (format nil "~A ~A" pname ptype))))
+                                    collect (format nil "~A ~A" pname ptype)))
+                      ;; A variadic function (M2.13, D-096): its fixed parameters, then
+                      ;; &, a shape with no variadic arguments; programs declare more.
+                      (items (if (eq (jget function "variadic") t)
+                                 (if items
+                                     (append (butlast items)
+                                             (list (format nil "~A &" (car (last items)))))
+                                     (unsupported-type "is variadic with no parameter before ..."))
+                                 items)))
                    (if (<= (+ (length head) (length (format nil " [~{~A~^, ~}])" items))) 100)
                        (format out "~A [~{~A~^, ~}])~%" head items)
                        (progn (if (<= (length head) 100)
