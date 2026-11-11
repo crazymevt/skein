@@ -377,7 +377,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order (D-092):
   1. ✅ Refs and transactions in the runtime: `ref`, `deref` (a transaction sees its own consistent view), `dosync`, `alter`, `ref-set`, `commute`, `ensure` and `io!`. Serializable: a global version clock, each ref's version and lock word, reads validated at commit, writes buffered and applied under short locks, commutes applied at commit; a conflict retries the body, yielding the fiber with backoff, up to 10,000 times, then signals an error. A nested `dosync` joins the outer one; an error abandons the transaction. Inside a transaction `io!`, channel operations, `sleep` and `on-main-thread` signal an error. Native tests: randomized transactions against a sequential model, and a concurrent transfer test that keeps its total.
   2. ✅ `:cell :ref` slots: reading the slot reads the ref (inside a transaction, its view), `set-slot!` and `update-slot!` inside `dosync` are `ref-set` and `alter`, and `(cell obj :k)` gives the ref; outside a transaction they signal an error. Class redefinition keeps the refs.
-  3. `retry-transaction`: `dosync` establishes a restart that runs the body again from the start, which the debugger offers in `skein dev` (fix the code, then retry); nothing a transaction wrote is visible before it commits. DESIGN §8 and §13.3 brought up to date.
+  3. ✅ `retry-transaction`: `dosync` establishes a restart that runs the body again from the start, which the debugger offers in `skein dev` (fix the code, then retry); nothing a transaction wrote is visible before it commits. DESIGN §8 and §13.3 brought up to date.
 
 **Exit:** randomized tests against a model, and a concurrent transfer test that keeps its total, pass natively.
 

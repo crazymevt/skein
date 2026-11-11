@@ -12,3 +12,6 @@
 io! outside a transaction runs
 2 1 1
 "a ref holding 4"
+["retry-transaction"]
+["retry-transaction"]
+1 3 1

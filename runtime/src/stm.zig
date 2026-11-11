@@ -316,9 +316,27 @@ fn commit(tx: *Txn) bool {
     return c.ok;
 }
 
+/// The function of the retry-transaction restart: run the transaction again, as a
+/// conflict does (its captured value is the transaction's address).
+fn retryRestart(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
+    _ = argc;
+    _ = argv;
+    const tx: *Txn = @ptrFromInt(@as(usize, @intCast(func.capturedOf(self, 0).toFixnum())));
+    conflict(tx);
+}
+
 fn attemptBody(ctx: *anyopaque) callconv(.c) Value {
     const tx: *Txn = @ptrCast(@alignCast(ctx));
-    return func.call(tx.body, 0, &.{});
+    // retry-transaction (D-092): the debugger offers it for an error in the body, so the
+    // code can be fixed and the transaction run again; nothing it wrote was committed.
+    var restart_names = [_]Value{@import("names.zig").symbol(null, "retry-transaction")};
+    const fns = [_]Value{func.closure(retryRestart, "retry-transaction", &.{Value.fromFixnum(@intCast(@intFromPtr(tx)))})};
+    const reports = [_]Value{@import("string.zig").make("Run the transaction again from the start")};
+    var frame: cond.Frame = undefined;
+    cond.pushRestarts(&frame, &restart_names, &fns, &reports);
+    const v = func.call(tx.body, 0, &.{});
+    cond.popFrame(&frame);
+    return v;
 }
 
 /// Wait a little before trying again, longer the more tries failed.

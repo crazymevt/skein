@@ -697,7 +697,7 @@ Live development is a first-class requirement, not an add-on.
   - `defstruct :value`: changing the layout invalidates code compiled against the old layout. Dependents are recompiled when they're reloaded, and the REPL warns about live arrays with the old layout.
   - `defmacro`: affects only code expanded afterwards. The REPL can list dependents to recompile.
 - **File reload:** `(reload 'game.enemies)` re-evaluates a namespace. A file watcher (`skein dev`) reloads changed files automatically.
-- **Error recovery:** unhandled errors suspend the fiber and open the debugger (§10). Restarts include `retry-frame`, `skip-frame`, `use-value` and `abort-fiber`.
+- **Error recovery:** unhandled errors suspend the fiber and open the debugger (§10). Restarts include `retry-frame`, `skip-frame`, `use-value`, `abort-fiber` and, inside `dosync`, `retry-transaction` (§13.3).
 - **Inspector:** inspect any object, including class instances, value structs and arrays.
 - **State preservation:** `defonce` defines a var only if it's unbound, so world state survives reloads.
 

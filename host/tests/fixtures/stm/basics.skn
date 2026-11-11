@@ -45,3 +45,15 @@
 (defgeneric describe [x])
 (defmethod describe [(x ref)] (str "a ref holding " @x))
 (prn (describe b))
+
+;; dosync establishes retry-transaction (step 3), which runs the body again; nothing the
+;; abandoned attempt wrote is kept.
+(let [r (ref 0)
+      tries (atom 0)]
+  (prn (handler-bind [error (fn [c]
+                              (prn (mapv (fn [x] (name (restart-name x))) (compute-restarts c)))
+                              (invoke-restart 'retry-transaction))]
+         (dosync (alter r inc)
+                 (when (< (swap! tries inc) 3) (error "not yet"))
+                 @r))
+       @tries @r))
