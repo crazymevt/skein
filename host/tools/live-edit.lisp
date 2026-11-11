@@ -130,8 +130,19 @@
             (setf after (nth-value 1 (wait-for "[4.5 false]" :after after :timeout 10)))
             ;; No frame over budget from each save until half a second after its swap.
             (wait-for "the REPL is still running" :after after :timeout 120)
-            (sb-thread:with-mutex (*lock*)
-              (loop for (time . line) across *lines*
+            ;; Judged on a copy: fail takes the lock to print every line.
+            (let ((lines (sb-thread:with-mutex (*lock*) (copy-seq *lines*))))
+              ;; Every slow frame, inside the edits' windows or not, with where it fell: on
+              ;; a shared runner, to tell the reloads' stalls from the runner's.
+              (loop for (time . line) across lines
+                    for at = (search "slow frame" line)
+                    when at
+                      do (let ((e (first (sort (copy-list edits) #'<
+                                               :key (lambda (e) (abs (- time (first e))))))))
+                           (format t "live-edit: ~A at ~,3F s: ~,3F s from a save, ~,3F s from ~
+                                      its swap~%"
+                                   (subseq line at) time (- time (first e)) (- time (second e)))))
+              (loop for (time . line) across lines
                     when (and (search "slow frame" line)
                               (some (lambda (e) (<= (- (first e) 0.1) time (+ (second e) 0.5)))
                                     edits))
