@@ -734,7 +734,21 @@ pub fn setSlotValue(obj: Value, key: Value, v: Value) Value {
     const i = instanceSlot(obj, key, "set-slot!");
     const cell = slotCell(slot(obj, i_slots), i);
     if (cell == Value.nil) immutable(obj, key);
-    if (isKw(cell, "atom")) return coll.atomReset(value(obj, i), v);
+    if (isKw(cell, "atom")) {
+        // The cell is an atom: its validator and watches see the change, as reset!'s
+        // (M2.11, D-093).
+        const at = value(obj, i);
+        const watch = @import("watch.zig");
+        if (!watch.watched(at)) return coll.atomReset(at, v);
+        watch.validate(at, v);
+        while (true) {
+            const old = coll.atomGet(at);
+            if (coll.atomCompareAndSet(at, old, v)) {
+                watch.notify(at, old, v);
+                return v;
+            }
+        }
+    }
     if (isKw(cell, "ref")) return stm.setSlotRef(value(obj, i), v, "set-slot!");
     checkOwner(obj, key);
     setValue(obj, i, v);
@@ -755,7 +769,12 @@ pub fn updateSlot(obj: Value, key: Value, f: Value, args: []const Value) Value {
             const old = coll.atomGet(at);
             buf[0] = old;
             const new = func.call(f, @intCast(1 + args.len), &buf);
-            if (coll.atomCompareAndSet(at, old, new)) return new;
+            const watch = @import("watch.zig");
+            watch.validate(at, new);
+            if (coll.atomCompareAndSet(at, old, new)) {
+                watch.notify(at, old, new);
+                return new;
+            }
         }
     }
     if (isKw(cell, "ref")) return stm.updateSlotRef(value(obj, i), f, args);

@@ -223,7 +223,7 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 | `promise` | a value delivered once (`deliver`); `@p` waits for it, with an optional timeout as for futures (M2.11) |
 | `delay` | `(delay body...)` runs the body at the first `@d` or `force` and keeps its value or its error; other fibers that deref it meanwhile wait (M2.11) |
 
-Atoms and refs take a validator (`(atom x :validator f)`, `set-validator!`), which can reject a new value with an error, and watches (`add-watch`, `remove-watch`), called after each change as `(f key reference old new)`; a ref's validator runs at commit and its watches after it. `swap-vals!` and `reset-vals!` return `[old new]` (M2.11, D-093).
+Atoms and refs take a validator (`(atom x :validator f)`, `set-validator!`), which can reject a new value with an error, and watches (`add-watch`, `remove-watch`), called after each change as `(f key reference old new)`; a ref's validator runs at commit and its watches after it. A cell slot's atom, `(cell obj :slot)`, has them too: `set-slot!` and `update-slot!` change it as `reset!` and `swap!` do. `swap-vals!` and `reset-vals!` return `[old new]` (M2.11, D-093).
 | `array` | a mutable, fixed-length, typed array (§9) |
 | `chan` | a channel (§13) |
 

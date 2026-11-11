@@ -89,6 +89,23 @@
       (is (= [3 :x] (reset-vals! a :x)))
       (is (= :x @a)))))
 
+(defclass gauge [] (level :cell :atom :init 0))
+
+(deftest cell-slot-watches
+  ;; A cell slot's atom tells its watches and validator about set-slot! and update-slot!,
+  ;; as reset! and swap! do (skein-ui's properties need it).
+  (let [g (make gauge)
+        seen (atom [])]
+    (add-watch (cell g :level) :log (fn [k r old new] (swap! seen conj [old new])))
+    (set-slot! g :level 5)
+    (update-slot! g :level + 2)
+    (is (= [[0 5] [5 7]] @seen))
+    (set-validator! (cell g :level) (fn [v] (< v 10)))
+    (is (thrown-with-msg? error "validator rejected" (set-slot! g :level 50)))
+    (is (thrown-with-msg? error "validator rejected" (update-slot! g :level + 20)))
+    (is (= 7 (:level g)))
+    (is (= 2 (count @seen)))))
+
 (deftest ref-watches-and-validators
   (let [r (ref 1)
         seen (atom [])]

@@ -307,7 +307,8 @@ the thread that owns OBJ. Returns VALUE."
          (value (checked-slot-value slot value)))
     (case (slot-cell slot)
       ((nil) (immutable-slot-error obj key))
-      (:atom (setf (skein-atom-value (slot-value obj name)) value))
+      ;; As reset!: the atom's validator and watches see it (M2.11).
+      (:atom (atom-reset (slot-value obj name) value) value)
       (:unsynchronized (check-slot-owner obj key)
        (setf (slot-value obj name) value)))))
 
