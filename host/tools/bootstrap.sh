@@ -244,6 +244,16 @@ test_projects() {
     echo "skeinc: a missing tag wasn't an error: $missing"
     exit 1
   fi
+  # A :local folder given by an absolute path (on Windows, C:/...) is that folder, not one
+  # under the project's.
+  printf '{:name "app" :main app.main/-main\n :deps {my/gitlib {:local "%s"}}}\n' "$gd/lib" \
+    > "$gd/app/project.skn"
+  local_abs=$(cd "$gd/app" && "$root/$skeinc" build -o "app$exe" > /dev/null \
+                && ./app$exe | tr -d '\r')
+  if [ "$local_abs" != v3-moved ]; then
+    echo "skeinc: an absolute :local path didn't build: $local_abs"
+    exit 1
+  fi
   echo "skeinc: git dependencies ok"
   # Transitive git dependencies (step 4): a needs b at v1 and c needs b at v2. A project
   # with a gets b too, in its skein.lock; with a and c it's an error, unless the project

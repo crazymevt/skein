@@ -599,10 +599,13 @@ function to call). Returns the executable's path."
 ;;; Projects: project.skn (DESIGN §20.2, M1.11, D-069)
 
 (defn- directory-path
-  "dir as a directory of the project in project-dir: ending with /."
+  "dir as a directory of the project in project-dir, ending with /: dir itself if it is
+absolute (/x, or C:/x on Windows)."
   [project-dir dir]
-  (let [dir (apply str (map (fn [c] (if (= c \\) \/ c)) dir))]
-    (str project-dir dir (if (or (empty? dir) (= (last dir) \/)) "" "/"))))
+  (let [dir (apply str (map (fn [c] (if (= c \\) \/ c)) dir))
+        absolute (or (= (first dir) \/)
+                     (and (> (count dir) 2) (= (nth dir 1) \:) (= (nth dir 2) \/)))]
+    (str (if absolute "" project-dir) dir (if (or (empty? dir) (= (last dir) \/)) "" "/"))))
 
 (def ^:private check-deps!)
 
