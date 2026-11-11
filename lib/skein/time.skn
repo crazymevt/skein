@@ -3,10 +3,58 @@
   (now)     seconds since the program started, an f64, from a monotonic clock
   (now-ns)  the same in nanoseconds, an integer
   (epoch-millis)  the wall-clock time: milliseconds since 1970 (UTC), an integer
-sleep is in skein.core.")
+utc-time and local-time give a time's calendar date and time of day, utc-offset the local
+time zone's offset. sleep is in skein.core.")
 
 (defn epoch-millis
   "The wall-clock time: milliseconds since 1970-01-01 UTC, an integer, as io/modified-time
 gives a file's. Unlike now, it jumps when the system's clock is set."
   []
   (%epoch-millis))
+
+(defn utc-offset
+  "The local time zone's offset from UTC, in seconds east (-18000 in New York in winter),
+now or at millis since 1970: daylight time changes it."
+  ([] (utc-offset (epoch-millis)))
+  ([millis] (%utc-offset millis)))
+
+(defn- civil-from-days
+  "[year month day] of the day days after 1970-01-01, in the proleptic Gregorian calendar
+(Howard Hinnant's days_from_civil, inverted)."
+  [days]
+  (let [z (+ days 719468)
+        era (quot (if (>= z 0) z (- z 146096)) 146097)
+        doe (- z (* era 146097))
+        yoe (quot (- doe (quot doe 1460) (- (quot doe 36524)) (quot doe 146096)) 365)
+        doy (- doe (- (+ (* 365 yoe) (quot yoe 4)) (quot yoe 100)))
+        mp (quot (+ (* 5 doy) 2) 153)
+        day (inc (- doy (quot (+ (* 153 mp) 2) 5)))
+        month (if (< mp 10) (+ mp 3) (- mp 9))
+        year (+ yoe (* era 400))]
+    [(if (<= month 2) (inc year) year) month day]))
+
+(defn- calendar-time
+  "The calendar time millis since 1970 is, offset seconds east of UTC."
+  [millis offset]
+  (let [ms (+ millis (* 1000 offset))
+        days (quot (- ms (mod ms 86400000)) 86400000)
+        in-day (mod ms 86400000)
+        [year month day] (civil-from-days days)]
+    {:year year :month month :day day
+     :hour (quot in-day 3600000) :minute (mod (quot in-day 60000) 60)
+     :second (mod (quot in-day 1000) 60) :millis (mod in-day 1000)
+     ;; 1970-01-01 was a Thursday; Monday is 1, Sunday 7 (ISO 8601).
+     :weekday (inc (mod (+ days 3) 7))
+     :offset offset}))
+
+(defn utc-time
+  "The time now, or millis since 1970, as a calendar time in UTC: {:year :month (1 to 12)
+:day :hour :minute :second :millis :weekday (1, Monday, to 7) :offset (0)}."
+  ([] (utc-time (epoch-millis)))
+  ([millis] (calendar-time millis 0)))
+
+(defn local-time
+  "The time now, or millis since 1970, as a calendar time in the local time zone, as
+utc-time gives it, with :offset the zone's offset from UTC in seconds."
+  ([] (local-time (epoch-millis)))
+  ([millis] (calendar-time millis (utc-offset millis))))

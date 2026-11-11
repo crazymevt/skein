@@ -717,7 +717,7 @@ is the Lisp backend's list."
     "%sorted-seq-from" "%sorted-compare" "%sorted-empty" "meta" "with-meta" "ex-info" "ex-data"
     "ex-cause" "ex-message" "%stat" "%delete-path" "%rename-path" "%read-bytes" "%write-bytes"
     "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes" "%stream-write"
-    "%stream-flush" "%stream-close" "%epoch-millis" "%write-stderr"
+    "%stream-flush" "%stream-close" "%epoch-millis" "%utc-offset" "%write-stderr"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

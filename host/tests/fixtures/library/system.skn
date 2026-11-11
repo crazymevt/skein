@@ -17,4 +17,19 @@
     (is (< 1700000000000 t 5000000000000))
     (is (<= t (time/epoch-millis)))))
 
+(deftest calendar-times
+  (is (= {:year 1970 :month 1 :day 1 :hour 0 :minute 0 :second 0 :millis 0 :weekday 4 :offset 0}
+         (time/utc-time 0)))
+  (is (= {:year 2000 :month 2 :day 29 :hour 23 :minute 59 :second 59 :millis 999 :weekday 2
+          :offset 0}
+         (time/utc-time 951868799999)))
+  (is (= [1969 12 31 23] ((juxt :year :month :day :hour) (time/utc-time -1))))
+  (let [t (time/epoch-millis)
+        offset (time/utc-offset t)
+        local (time/local-time t)]
+    (is (integer? offset))
+    (is (<= -50400 offset 50400))
+    (is (= offset (:offset local)))
+    (is (= (time/utc-time (+ t (* 1000 offset))) (assoc local :offset 0)))))
+
 (prn (select-keys (run-tests 'system) [:test :fail :error]))

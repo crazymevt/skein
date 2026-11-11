@@ -177,6 +177,14 @@ received to that form's metadata (as data), for %syntax-meta.")
   (multiple-value-bind (seconds microseconds) (sb-ext:get-time-of-day)
     (+ (* seconds 1000) (floor microseconds 1000))))
 
+(defcore "%utc-offset" (millis)
+  ;; The local time zone's offset from UTC, in seconds east, at MILLIS since 1970
+  ;; (skein.time/local-time, M2.14). CL's zone is hours west, not counting daylight time.
+  (multiple-value-bind (s m h d mo y dow dst zone)
+      (decode-universal-time (+ (floor millis 1000) 2208988800))
+    (declare (ignore s m h d mo y dow))
+    (round (- (* (if dst 3600 0) 1) (* zone 3600)))))
+
 (defcore "%write-stderr" (text)
   ;; skein.log's default handler (M2.11).
   (write-string text *error-output*)

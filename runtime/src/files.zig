@@ -352,6 +352,38 @@ fn close(h: Value) Value {
 const Args = []const Value;
 const Entry = io.Entry;
 
+/// C's struct tm: the nine fields every C library has first, then room for the rest.
+const Tm = extern struct {
+    sec: c_int,
+    min: c_int,
+    hour: c_int,
+    mday: c_int,
+    mon: c_int,
+    year: c_int,
+    wday: c_int,
+    yday: c_int,
+    isdst: c_int,
+    rest: [4]i64 = undefined,
+};
+
+extern "c" fn localtime_r(t: *const i64, out: *Tm) ?*Tm;
+extern "c" fn gmtime_r(t: *const i64, out: *Tm) ?*Tm;
+extern "c" fn _localtime64_s(out: *Tm, t: *const i64) c_int;
+extern "c" fn _gmtime64_s(out: *Tm, t: *const i64) c_int;
+
+fn utcOffset(seconds: i64) i64 {
+    var local: Tm = undefined;
+    var utc: Tm = undefined;
+    if (@import("builtin").os.tag == .windows) {
+        if (_localtime64_s(&local, &seconds) != 0 or _gmtime64_s(&utc, &seconds) != 0) return 0;
+    } else {
+        if (localtime_r(&seconds, &local) == null or gmtime_r(&seconds, &utc) == null) return 0;
+    }
+    const days: i64 = if (local.year == utc.year) local.yday - utc.yday else if (local.year > utc.year) 1 else -1;
+    return days * 86400 + (@as(i64, local.hour) - utc.hour) * 3600 + (@as(i64, local.min) - utc.min) * 60 +
+        (@as(i64, local.sec) - utc.sec);
+}
+
 pub const entries = [_]Entry{
     // (%write-stderr text): skein.log's default handler.
     .{ .name = "%write-stderr", .min = 1, .max = 1, .impl = struct {
@@ -366,6 +398,14 @@ pub const entries = [_]Entry{
         fn f(_: Args) Value {
             const t = std.Io.Clock.real.now(io.stdIo());
             return Value.fromFixnum(@intCast(@divFloor(t.nanoseconds, std.time.ns_per_ms)));
+        }
+    }.f },
+    // (%utc-offset millis): the local time zone's offset from UTC at that time, in
+    // seconds east (skein.time/local-time): the local and UTC calendar times, compared.
+    .{ .name = "%utc-offset", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            if (!a[0].isFixnum()) rt.raise(.type_error, "%utc-offset needs a time in milliseconds", .{});
+            return Value.fromFixnum(utcOffset(@divFloor(a[0].toFixnum(), 1000)));
         }
     }.f },
     .{ .name = "%stat", .min = 1, .max = 1, .impl = struct {

@@ -1390,3 +1390,11 @@ Date: 2026-11-11 · Status: Accepted
 - **Decision** (Jessie asked for the function; the name and argument order follow `.indexOf`): `(index-of coll x)` in `skein.core` returns the index of the first element of `coll` that is `=` to `x`, or `nil`; it takes any collection, a seq or a string (whose elements are characters), the collection first, as `.indexOf` does. Phase 0 and the native runtime have it.
 - **Alternatives:** a library helper in each project; the name `position`; the item first.
 - **Consequences:** `skein.string/index-of`, which finds a substring, keeps its name: a namespace's own var comes before `skein.core`'s, so code that refers or aliases `skein.string` is unchanged. Instances compare by identity under `=`, so `index-of` finds a widget among widgets.
+
+## D-100: Calendar times in `skein.time`
+Date: 2026-11-11 · Status: Accepted
+- **Context:** skein-ui's examples (M2.14) include a clock, which needs the local time of day, and a file browser, which shows dates. `skein.time` had only `epoch-millis`, milliseconds since 1970 in UTC; nothing knew the local time zone. Games and apps need local times as well, for saves and logs.
+- **Decision** (Jessie asked for utilities that belong in Skein to go there): `(time/local-time)` and `(time/utc-time)`, each also taking a time in milliseconds since 1970, return a map `{:year :month :day :hour :minute :second :millis :weekday :offset}`: months from 1, weekdays from 1 (Monday) to 7 (Sunday) as in ISO 8601, and `:offset` the zone's offset from UTC in seconds east. `(time/utc-offset)` gives the offset alone, now or at a time; daylight time changes it. A new primitive, `%utc-offset`, asks the C library natively (comparing `localtime_r` with `gmtime_r`, `_localtime64_s` on Windows) and `decode-universal-time` on the Phase 0 host; the calendar arithmetic is Skein (Howard Hinnant's civil-from-days), so the two agree.
+- **Alternatives:** returning a value struct; a full date-time library (zones by name, formatting, parsing), which can come later on top of these.
+- **Consequences:** formatting dates stays the program's (`format` with the map's fields).
+

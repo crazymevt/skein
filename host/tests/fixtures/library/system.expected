@@ -1,6 +1,6 @@
 
 Testing system
 
-Ran 2 tests containing 6 assertions.
+Ran 3 tests containing 13 assertions.
 0 failures, 0 errors.
-{:test 2, :fail 0, :error 0}
+{:test 3, :fail 0, :error 0}
