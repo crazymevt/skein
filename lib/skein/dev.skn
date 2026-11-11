@@ -91,6 +91,9 @@ text). output is the function code evaluated from it prints with, or nil."
    :quit (atom false)
    ;; Whether the console waits at its top-level prompt, where it takes debug sessions.
    :idle (atom false)
+   ;; Whether the console waits for a form it sent to be evaluated, which may be waiting
+   ;; for a task (D-101).
+   :evaluating (atom false)
    ;; Whether what the console last wrote ended a line.
    :fresh (atom true)})
 
@@ -334,29 +337,41 @@ from where it was signaled."
       (doseq [c cs] (service (>! (:inbox c) [:session session])))
       (service (>! (:inbox session) [:no-console])))))
 
+(defn- evaluating
+  "Call f, with the console marked as waiting for a form's evaluation meanwhile."
+  [console f]
+  (reset! (:evaluating console) true)
+  (try (f) (finally (reset! (:evaluating console) false))))
+
 (defn- remote-debug*
   "Debug the session from console: send it the forms typed here until it resumes."
   [console session]
-  (let [prefix (str "debug[" (:thread session) "] ")]
+  (let [prefix (str "debug[" (:thread session) "] ")
+        ;; Sessions offered meanwhile, for the console's prompt once this one ends (kept
+        ;; apart, since next-message would hand deferred ones straight back).
+        later (atom [])]
     (describe-error console (:condition session) (:restarts session)
                     (str " in thread " (:thread session)))
-    (loop []
-      (prompt console prefix)
-      (let [[kind x] (next-message console)]
-        (case kind
-          :eof (do (swap! (:deferred console) (fn [d] (into [[:eof]] d)))
-                   (reset! (:console session) nil)
-                   (service (>! (:inbox session) [:detach])))
-          :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur))
-          :session (do (defer! console [kind x]) (recur))
-          (let [reply (chan)]
-            (>! (:inbox session) [:form x reply console])
-            (let [[answer text] (<! reply)]
-              (case answer
-                :value (do (write! console text "\n") (recur))
-                :error (do (fresh-line! console) (write! console "error: " text "\n") (recur))
-                :message (do (write! console text) (recur))
-                (do (fresh-line! console) (write! console "; resumed\n"))))))))))
+    (try
+      (loop [show-prompt true]
+        (when show-prompt (prompt console prefix))
+        (let [[kind x] (next-message console)]
+          (case kind
+            :eof (do (swap! (:deferred console) (fn [d] (into [[:eof]] d)))
+                     (reset! (:console session) nil)
+                     (service (>! (:inbox session) [:detach])))
+            :read-error (do (fresh-line! console) (write! console "error: " x "\n") (recur true))
+            :session (do (swap! later conj [kind x]) (recur false))
+            (let [reply (chan)]
+              (>! (:inbox session) [:form x reply console])
+              (let [[answer text] (evaluating console (fn [] (<! reply)))]
+                (case answer
+                  :value (do (write! console text "\n") (recur true))
+                  :error (do (fresh-line! console) (write! console "error: " text "\n")
+                             (recur true))
+                  :message (do (write! console text) (recur true))
+                  (do (fresh-line! console) (write! console "; resumed\n"))))))))
+      (finally (swap! (:deferred console) into @later)))))
 
 (def ^:private remote-debug remote-debug*)
 
@@ -400,9 +415,10 @@ attach and evaluate what it sends in this fiber, where the restarts are."
     ;; disconnects before a restart is chosen.
     (when-let [swank @swank-debugger] (swank c frames))
     (when (empty? @consoles) (give-up))
-    ;; A console that is busy may be waiting for this very task (a deref at the REPL),
-    ;; so a task's error waits only for an idle one (D-088).
-    (when (and (not (%main-thread?)) (not-any? (fn [con] @(:idle con)) @consoles))
+    ;; A console evaluating a form may be waiting for this very task (a deref at the
+    ;; REPL), so a task's error gives up if every console is (D-088); one debugging
+    ;; another session, or just done with it, takes this one next (D-101).
+    (when (and (not (%main-thread?)) (every? (fn [con] @(:evaluating con)) @consoles))
       (give-up))
     (offer-session! session)
     (try
@@ -458,7 +474,8 @@ fails; its abort restart fails the task, as the error would have without the deb
           :session (do (when (claim! x console) (remote-debug console x)) (recur))
           (if (= (keyword-name x) "quit")
             (reset! (:quit console) true)
-            (do (eval-print console x "Return to the REPL") (recur))))))
+            (do (evaluating console (fn [] (eval-print console x "Return to the REPL")))
+                (recur))))))
     (finally
       (swap! consoles (fn [cs] (vec (remove (fn [c] (identical? c console)) cs))))
       ;; Any session this console was offered goes to the others.

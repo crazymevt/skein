@@ -551,6 +551,64 @@ executable's native path."
               (sb-ext:process-kill process 9))
             (sb-ext:process-wait process))))))
 
+;;; M2.15 step 1 (D-101): a task's error while the console debugs another session waits
+;;; for the console, rather than failing at once as though none would be free.
+
+(test dev-task-error-waits-for-a-busy-console
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("twotasks.skn" "(ns twotasks)
+(defn inner [x] (/ x 0))
+(defonce go? (atom false))
+(defn -main [& args]
+  (loop [] (when-not @go? (sleep 0.02) (recur)))
+  (with-nursery [n]
+    (let [a (spawn n (restart-case (inner 1) (use-ten [] :report \"Use ten\" 10)))
+          b (spawn n (sleep 0.5)
+                     (restart-case (inner 2) (use-ten [] :report \"Use ten\" 10)))]
+      (println \"first gave\" @a)
+      (println \"second gave\" @b)))
+  (println \"done\"))
+"))
+        (let* ((exe (native-dev-build dir "twotasks.skn"))
+               (process (sb-ext:run-program exe '() :wait nil :input :stream
+                                                    :output :stream :error :output
+                                                    :directory (uiop:native-namestring dir)
+                                                    :environment
+                                                    (cons "SKEIN_DEV=none"
+                                                          (sb-ext:posix-environ))))
+               (buffer (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+               (lock (sb-thread:make-mutex))
+               (input (sb-ext:process-input process)))
+          (collect-output (sb-ext:process-output process) buffer lock)
+          (unwind-protect
+               (block scenario
+                 (flet ((wait (text &optional (start 0))
+                          (or (wait-for-output buffer lock text :start start)
+                              (progn (fail "timed out waiting for ~S in:~%~A" text buffer)
+                                     (return-from scenario))))
+                        (say (line)
+                          (format input "~A~%" line)
+                          (finish-output input)))
+                   (let ((pos (wait "; skein dev")))
+                     (say "(reset! go? true)")
+                     (setf pos (wait "0: use-ten  Use ten" pos))
+                     ;; The second task fails while the console debugs the first.
+                     (sleep 1)
+                     (say "0")
+                     (setf pos (wait "first gave 10" pos))
+                     (setf pos (wait "0: use-ten  Use ten" pos))
+                     (say "0")
+                     (setf pos (wait "second gave 10" pos))
+                     (wait "done" pos)
+                     (say ":quit")
+                     (loop repeat 600 while (sb-ext:process-alive-p process) do (sleep 0.05))
+                     (is (not (sb-ext:process-alive-p process))
+                         "skein dev did not exit after :quit"))))
+            (when (sb-ext:process-alive-p process)
+              (sb-ext:process-kill process 9))
+            (sb-ext:process-wait process))))))
+
 ;;; M2.9 step 2 (D-091): skein dev evaluates a saved file at once, then compiles it in the
 ;;; background and swaps the compiled code in; (reload 'ns) does the same.
 
