@@ -65,12 +65,21 @@
                                (uiop-temp)))
          (game (merge-pathnames "driftrock/game.skn" dir)))
     (copy-directory (merge-pathnames "examples/driftrock/" *root*) (merge-pathnames "driftrock/" dir))
-    (let* ((process (sb-ext:run-program
-                     "bash" (list (namestring (merge-pathnames "skein" *root*))
-                                  "dev" "--no-server" "--no-swank" "driftrock/main.skn"
-                                  "--frames" "900" "--autopilot" "--check-60fps" "--slow-frames")
-                     :search t :wait nil :input :stream :output :stream :error :output
-                     :directory (namestring dir)))
+    (let* ((args (list "dev" "--no-server" "--no-swank" "driftrock/main.skn"
+                       "--frames" "900" "--autopilot" "--check-60fps" "--slow-frames"))
+           ;; On Windows, through skein.cmd: a search for bash there can find WSL's
+           ;; bash.exe in System32 rather than Git's.
+           (process (if (member :win32 *features*)
+                        (sb-ext:run-program
+                         "cmd" (list* "/c" (sb-ext:native-namestring
+                                            (merge-pathnames "skein.cmd" *root*))
+                                      args)
+                         :search t :wait nil :input :stream :output :stream :error :output
+                         :directory (namestring dir))
+                        (sb-ext:run-program
+                         "bash" (cons (namestring (merge-pathnames "skein" *root*)) args)
+                         :search t :wait nil :input :stream :output :stream :error :output
+                         :directory (namestring dir))))
            (input (sb-ext:process-input process)))
       (sb-thread:make-thread
        (lambda ()
