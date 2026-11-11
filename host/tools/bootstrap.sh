@@ -119,9 +119,9 @@ test_compiler() {
     exit 1
   fi
   echo "skeinc: dependencies ok"
-  # Git dependencies (M2.12 step 2): a repository made here, with tags v1 and v2, fetched
-  # into a cache under build/ by tag and by sha; a tag made after the first fetch is
-  # fetched; a missing one is an error.
+  # Git dependencies (M2.12 steps 2 and 3): a repository made here, with tags v1 and v2,
+  # fetched into a cache under build/ by tag and by sha; a tag made after the first fetch
+  # is fetched; skein.lock pins it; a missing tag is an error.
   local gd root
   root=$(pwd -W 2>/dev/null || pwd)
   gd="$root/build/examples/git-deps"
@@ -155,6 +155,30 @@ test_compiler() {
   listed=$(cd "$gd/app" && SKEIN_DEPS_DIR="$gd/cache" "$root/$skeinc" deps | tr -d '\r')
   if [[ "$listed" != "my/gitlib $gd/lib at "* ]]; then
     echo "skeinc: skeinc deps printed: $listed"
+    exit 1
+  fi
+  # skein.lock (step 3): it keeps v3's commit when the tag moves, until skeinc deps update;
+  # a locked, cached dependency builds with its repository gone.
+  if ! grep -q ':tag "v3" :sha' "$gd/app/skein.lock"; then
+    echo "skeinc: no skein.lock entry for v3"
+    exit 1
+  fi
+  (cd "$gd/lib" && write_gitlib v3-moved && "${g[@]}" commit -qam moved \
+     && "${g[@]}" tag -f v3 > /dev/null)
+  if [ "$(app_with ':tag "v3"')" != v3 ]; then
+    echo "skeinc: skein.lock didn't keep v3's commit when the tag moved"
+    exit 1
+  fi
+  (cd "$gd/app" && SKEIN_DEPS_DIR="$gd/cache" "$root/$skeinc" deps update > /dev/null)
+  if [ "$(app_with ':tag "v3"')" != v3-moved ]; then
+    echo "skeinc: skeinc deps update didn't move v3"
+    exit 1
+  fi
+  mv "$gd/lib" "$gd/lib-gone"
+  offline=$(app_with ':tag "v3"' 2>&1) || true
+  mv "$gd/lib-gone" "$gd/lib"
+  if [ "$offline" != v3-moved ]; then
+    echo "skeinc: a locked, cached dependency didn't build offline: $offline"
     exit 1
   fi
   status=0

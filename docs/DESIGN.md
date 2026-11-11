@@ -907,7 +907,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
 | `skein dev` | run with file watching, hot reload and a REPL server (§15) |
 | `skein host run\|dev\|repl ...` | the same on the Phase 0 SBCL host, as a reference (Phase 2, D-081) |
 | `skein test [path...]` | run the tests of the namespaces in the paths (default: the project's `:test-paths`, else `test/`) natively; exits with 1 if one fails (M2.11, D-093) |
-| `skein deps` | fetch the dependencies of the project in the current directory into the cache and print where each is (M2.12, D-094) |
+| `skein deps [update [lib...]]` | fetch the dependencies of the project in the current directory into the cache and print where each is; `update` resolves tags again from a fresh fetch and rewrites `skein.lock` (M2.12, D-094) |
 | `skein build [--target T] [--profile P]` | compile a native executable (Phase 1: `skein build [file.skn] [-o FILE] [--target T] [--profile dev\|release]`, by skeinc; with no file, the project in the current directory; D-069) |
 | `skein package` | create distributables |
 | `skein bindgen` | generate FFI bindings from C headers |

@@ -407,7 +407,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order (D-094):
   1. ✅ Reading `:deps` and resolving local folders, transitively, with the conflict rule: the project's source paths, `:native` libraries and `:assets` grow by its dependencies' in `build`, `run`, `dev`, `test` and `package`.
   2. ✅ Git dependencies: the cache, fetching and checking out with `git`, `:tag` and `:sha`, and `skein deps`; tests with local repositories made by `git`.
-  3. `skein.lock`: written when dependencies are first resolved, used after, and rewritten by `skein deps update [lib]`; offline builds from the cache; clear errors when git is missing or a fetch fails.
+  3. ✅ `skein.lock`: written when dependencies are first resolved, used after, and rewritten by `skein deps update [lib]`; offline builds from the cache; clear errors when git is missing or a fetch fails.
   4. Transitive git dependencies with the conflict rule, and packages carrying dependencies' native libraries and assets, on all three platforms; a dependency on a public GitHub repository in CI.
 
 **Exit:** a project that depends on a library in a git repository (a local repository in the tests, and one on GitHub in CI) and on a local folder builds, runs with `skein run` and `skein dev`, and packages with its dependencies' native libraries and assets, on all three platforms.

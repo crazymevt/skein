@@ -737,6 +737,13 @@ folder} or {:git url :tag t} or {:git url :sha s}."
       (%delete-tree tmp)
       (fail "cannot move " tmp " to " dir))))
 
+;; A fetch that fails says so, and that a dependency already in the cache builds without
+;; one (D-094).
+(defn- fetch-failed [lib url r]
+  (fail (pr-str lib) ": couldn't fetch " url ": "
+        (trim-end (str (:err r) (:out r)))
+        "\n(a dependency whose commit is in skein.lock and the cache builds offline)"))
+
 (defn- mirror!
   "The cache's bare mirror of the repository at url, cloned if it's missing."
   [lib url]
@@ -745,39 +752,64 @@ folder} or {:git url :tag t} or {:git url :sha s}."
     (when-not (io/file-exists? (str dir "HEAD"))
       (io/make-dirs root)
       (let [tmp (str root (repo-key url) ".tmp-" (%epoch-millis) "/")]
-        (git lib ["clone" "--quiet" "--mirror" url tmp] nil)
+        (let [r (git-run lib ["clone" "--quiet" "--mirror" url tmp] nil)]
+          (when-not (zero? (:exit r)) (%delete-tree tmp) (fetch-failed lib url r)))
         (move-into-place! tmp dir)))
     dir))
 
 (defn- commit-of
-  "The full sha of the commit that rev names in the mirror of url, fetching from url if
-the mirror doesn't know it."
-  [lib url mirror rev what]
+  "The full sha of the commit that rev names in the mirror of url, fetching from url
+first if fresh?, else only if the mirror doesn't know it."
+  [lib url mirror rev what fresh?]
   (let [find (fn []
                (let [r (git-run lib ["rev-parse" "--verify" "--quiet" (str rev "^{commit}")]
                                 mirror)]
-                 (when (zero? (:exit r)) (trim-end (:out r)))))]
-    (or (find)
-        (do (git lib ["fetch" "--quiet" "--prune"] mirror) (find))
+                 (when (zero? (:exit r)) (trim-end (:out r)))))
+        fetch (fn []
+                (let [r (git-run lib ["fetch" "--quiet" "--prune"] mirror)]
+                  (when-not (zero? (:exit r)) (fetch-failed lib url r))))]
+    (or (and (not fresh?) (find))
+        (do (fetch) (find))
         (fail (pr-str lib) ": " url " has no " what))))
 
+(defn- checkout-dir [url sha]
+  (str (deps-cache) "checkouts/" (repo-key url) "/" sha "/"))
+
 (defn- checkout!
-  "The cache's checkout of commit sha of the repository at url, made if it's missing."
-  [lib url mirror sha]
-  (let [root (str (deps-cache) "checkouts/" (repo-key url) "/")
-        dir (str root sha "/")]
+  "The cache's checkout of commit sha of the repository at url, made if it's missing
+(fetching the commit if the mirror lacks it)."
+  [lib url sha]
+  (let [dir (checkout-dir url sha)
+        root (directory-of (subs dir 0 (dec (count dir))))]
     (when-not (io/file-exists? dir)
-      (io/make-dirs root)
-      (let [tmp (str root sha ".tmp-" (%epoch-millis) "/")]
+      (let [mirror (mirror! lib url)
+            tmp (str root sha ".tmp-" (%epoch-millis) "/")]
+        (commit-of lib url mirror sha (str "commit " sha) false)
+        (io/make-dirs root)
         (git lib ["clone" "--quiet" "--shared" "--no-checkout" mirror tmp] nil)
         (git lib ["checkout" "--quiet" "--detach" sha] tmp)
         (move-into-place! tmp dir)))
     dir))
 
+(defn- pin-of [spec] (if (:tag spec) [:tag (:tag spec)] [:sha (:sha spec)]))
+
+(defn- lock-matches?
+  "True if locked, a lock entry, records what the git dependency spec names."
+  [spec locked]
+  (and locked (= (:git spec) (:git locked))
+       (if (:tag spec)
+         (= (:tag spec) (:tag locked))
+         (and (string? (:sha locked)) (nil? (:tag locked))
+              (<= (count (:sha spec)) (count (:sha locked)))
+              (= (:sha spec) (subs (:sha locked) 0 (count (:sha spec))))))))
+
 (defn- dep-source
-  "Where library lib, which the project in dir names with spec, is: {:id :dir}. Two
-dependencies with the same :id are the same version."
-  [lib spec dir]
+  "Where library lib, which the project in dir names with spec, is: {:id :dir}, and for a
+git dependency :lock, its lock entry. Two dependencies with the same :id are the same
+version. A git dependency uses the commit in lock (the root project's skein.lock) if
+that records the same spec and update? is false; else it resolves the tag or sha, with
+a fresh fetch if update?."
+  [lib spec dir lock update?]
   (cond (:local spec)
         (let [d (normalize-dir (directory-path dir (:local spec)))]
           (when-not (io/file-exists? d)
@@ -785,54 +817,116 @@ dependencies with the same :id are the same version."
           {:id (str "the folder " d) :dir d})
         :else
         (let [url (:git spec)
-              mirror (mirror! lib url)
-              sha (if (:tag spec)
-                    (commit-of lib url mirror (str "refs/tags/" (:tag spec))
-                               (str "tag " (:tag spec)))
-                    (commit-of lib url mirror (:sha spec) (str "commit " (:sha spec))))]
-          {:id (str url " at " sha) :dir (checkout! lib url mirror sha) :sha sha})))
+              locked (get lock lib)
+              sha (if (and (not update?) (lock-matches? spec locked))
+                    (:sha locked)
+                    (let [mirror (mirror! lib url)]
+                      (if (:tag spec)
+                        (commit-of lib url mirror (str "refs/tags/" (:tag spec))
+                                   (str "tag " (:tag spec)) update?)
+                        (commit-of lib url mirror (:sha spec) (str "commit " (:sha spec))
+                                   false))))
+              [k v] (pin-of spec)]
+          {:id (str url " at " sha) :dir (checkout! lib url sha)
+           :lock (assoc {:git url :sha sha} k v)})))
 
 (defn- by-name [deps] (sort-by (fn [[lib _]] (str lib)) deps))
 
+;;; skein.lock (step 3): beside project.skn, the commit each git dependency resolved to.
+
+(defn- lock-file [path] (str (directory-of path) "skein.lock"))
+
+(defn- read-lock
+  "The lock (library name -> {:git :tag or :sha :sha}) in the skein.lock beside the
+project.skn at path, or {} if there's none."
+  [path]
+  (let [file (lock-file path)]
+    (if-not (io/file-exists? file)
+      {}
+      (let [r (reader/make-reader (io/read-file file) {:file file :namespace "user"
+                                                       :resolve-alias (fn [_] nil)})
+            form (reader/read-form r false ::eof)
+            lock (when-not (= form ::eof) (expander/syntax-value form))]
+        (when-not (and (map? lock)
+                       (every? (fn [[k v]] (and (symbol? k) (map? v) (string? (:git v))
+                                                (string? (:sha v))))
+                               lock))
+          (fail file ": expected a map of library names to {:git url :sha commit}; delete "
+                "it to resolve the dependencies again"))
+        lock))))
+
+(defn- lock-text
+  "skein.lock's text for lock: a comment, then a map with an entry a line, by name."
+  [lock]
+  (let [entry (fn [[lib e]]
+                (str (pr-str lib) " {:git " (pr-str (:git e))
+                     (if (:tag e) (str " :tag " (pr-str (:tag e))) "")
+                     " :sha " (pr-str (:sha e)) "}"))]
+    (str ";; The commit each git dependency resolved to (skein deps update moves them).\n"
+         ";; Commit this file with project.skn.\n"
+         "{" (apply str (interpose "\n " (map entry (by-name lock)))) "}\n")))
+
+(defn- write-lock!
+  "Write lock to the skein.lock beside the project.skn at path, if it changed, and make
+one only if there are git dependencies."
+  [path lock]
+  (let [file (lock-file path)
+        text (lock-text lock)]
+    (when (if (io/file-exists? file)
+            (not= text (io/read-file file))
+            (seq lock))
+      (io/write-file file text))))
+
 (defn resolve-deps
   "The dependencies of project, read from the project.skn at path, followed through their
-own :deps: a vector of {:lib :dir :paths :native :assets}, the project's own first.
-Two versions of one library are an error unless the project names that library, which
-then wins (D-094)."
-  [path project]
-  (let [root (directory-of path)
-        pinned (set (keys (:deps project)))]
-    (loop [queue (mapv (fn [[lib spec]] [lib spec root nil]) (by-name (:deps project)))
-           chosen {}
-           out []]
-      (if (empty? queue)
-        out
-        (let [[lib spec dir from] (first queue)
-              queue (vec (rest queue))
-              src (dep-source lib spec dir)
-              prev (get chosen lib)]
-          (cond
-            (and prev (or (= (:id prev) (:id src)) (and from (contains? pinned lib))))
-            (recur queue chosen out)
+own :deps: a vector of {:lib :source :dir :paths :native :assets :project}, the
+project's own first. Two versions of one library are an error unless the project names
+that library, which then wins (D-094). Git dependencies use and update the project's
+skein.lock; opts' :update is the set of library names (or :all) whose tags are resolved
+again from a fresh fetch."
+  ([path project] (resolve-deps path project {}))
+  ([path project opts]
+   (let [root (directory-of path)
+         pinned (set (keys (:deps project)))
+         lock (read-lock path)
+         update? (fn [lib] (or (= :all (:update opts)) (contains? (:update opts) lib)))]
+     (loop [queue (mapv (fn [[lib spec]] [lib spec root nil]) (by-name (:deps project)))
+            chosen {}
+            locks {}
+            out []]
+       (if (empty? queue)
+         (do (write-lock! path locks) out)
+         (let [[lib spec dir from] (first queue)
+               queue (vec (rest queue))
+               prev (get chosen lib)]
+           (if (and prev from (contains? pinned lib))
+             ;; The project names lib, so its version wins: nothing to fetch.
+             (recur queue chosen locks out)
+             (let [src (dep-source lib spec dir lock (update? lib))]
+               (cond
+                 (and prev (= (:id prev) (:id src)))
+                 (recur queue chosen locks out)
 
-            prev
-            (fail "two versions of " (pr-str lib) ": " (:id prev) " (named by "
-                  (or (:from prev) "the project") ") and " (:id src) " (named by " from
-                  "); name " (pr-str lib) " in project.skn's :deps to choose one")
+                 prev
+                 (fail "two versions of " (pr-str lib) ": " (:id prev) " (named by "
+                       (or (:from prev) "the project") ") and " (:id src) " (named by " from
+                       "); name " (pr-str lib) " in project.skn's :deps to choose one")
 
-            :else
-            (let [d (:dir src)
-                  file (str d "project.skn")
-                  library (when (io/file-exists? file) (parse-project file true))
-                  native (into {} (map (fn [[os libs]] [os (mapv (fn [l] (str d l)) libs)])
-                                       (:libs (:native library))))]
-              (recur (into queue (map (fn [[l s]] [l s d (pr-str lib)])
-                                      (by-name (:deps library))))
-                     (assoc chosen lib {:id (:id src) :from from})
-                     (conj out {:lib lib :source (:id src) :dir d
-                                :paths (if library (:paths library) [d])
-                                :native native :assets (if library (:assets library) [])
-                                :project (when library file)})))))))))
+                 :else
+                 (let [d (:dir src)
+                       file (str d "project.skn")
+                       library (when (io/file-exists? file) (parse-project file true))
+                       native (into {} (map (fn [[os libs]]
+                                              [os (mapv (fn [l] (str d l)) libs)])
+                                            (:libs (:native library))))]
+                   (recur (into queue (map (fn [[l s]] [l s d (pr-str lib)])
+                                           (by-name (:deps library))))
+                          (assoc chosen lib {:id (:id src) :from from})
+                          (if (:lock src) (assoc locks lib (:lock src)) locks)
+                          (conj out {:lib lib :source (:id src) :dir d
+                                     :paths (if library (:paths library) [d])
+                                     :native native :assets (if library (:assets library) [])
+                                     :project (when library file)}))))))))))))
 
 (defn- dep-paths
   "The source paths of the dependencies deps."
@@ -1107,13 +1201,23 @@ skein.test/run-tests, and exits with 1 if a test failed."
 
 (defn- deps-command
   "skein deps: fetch the dependencies of the project in the current directory into the
-cache, and print where each one is (M2.12, D-094)."
+cache, and print where each one is; skein deps update [lib...]: resolve the tags of
+those libraries (all, with none named) again from a fresh fetch, and rewrite skein.lock
+(M2.12, D-094)."
   [args]
-  (when (seq args) (fail "skein deps: takes no arguments yet"))
+  (when-not (or (empty? args) (= "update" (first args)))
+    (fail "skein deps: expected nothing, or update and library names"))
   (when-not (io/file-exists? "project.skn")
     (fail "skein deps: expected a project.skn in the current directory"))
-  (let [project (read-project "project.skn")]
-    (doseq [d (resolve-deps "project.skn" project)]
+  (let [project (read-project "project.skn")
+        named (map symbol (rest args))
+        update (cond (empty? args) #{} (empty? named) :all :else (set named))
+        deps (resolve-deps "project.skn" project {:update update})
+        known (set (map :lib deps))]
+    (doseq [lib named]
+      (when-not (contains? known lib)
+        (fail "skein deps update: the project has no dependency " (pr-str lib))))
+    (doseq [d deps]
       (println (pr-str (:lib d)) (:source d)))))
 
 (defn- compiler-current?
@@ -1140,7 +1244,7 @@ bootstrap checks: lib/'s Skein and the runtime's Zig, C and headers)."
        " [args...]\n"
        "       skeinc repl\n"
        "       skeinc test [path...]\n"
-       "       skeinc deps\n"
+       "       skeinc deps [update [lib...]]\n"
        "       skeinc current\n"
        "With no file, build builds the project that ./project.skn describes; package puts it"
        " in dist/. run, dev and repl build the program (cached in .skein-cache/run/) and run"
