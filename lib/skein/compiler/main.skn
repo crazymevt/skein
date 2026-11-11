@@ -1299,7 +1299,11 @@ current, which exits with 0 if skeinc is newer than its sources."
                 (println "packaged" (package-project "project.skn" opts)))
             file
             (do (when-not (io/file-exists? file) (fail "skeinc build: file not found: " file))
-                (println "built" (build-program file opts)))
+                ;; A file in a project builds with its source paths and dependencies, as
+                ;; run and dev do (M2.12).
+                (println "built" (build-program file (merge (dissoc (project-options file)
+                                                                    :project-files)
+                                                             opts))))
             (io/file-exists? "project.skn")
             (println "built" (build-project "project.skn" opts))
             :else

@@ -944,7 +944,7 @@ Dependencies (M2.12, D-094):
 - Git dependencies are fetched with the `git` command into a cache shared by projects, one checkout per commit: `~/.skein/deps`, or `%LOCALAPPDATA%\skein\deps` on Windows (`SKEIN_DEPS_DIR` chooses another). The cache keeps a bare mirror of each repository, which answers which commit a tag or sha names, fetching only when it doesn't know.
 - `skein.lock`, beside `project.skn`, records the commit each git dependency resolved to; commit it with the project. `skein build`, `run`, `dev`, `test` and `package` fetch only what is missing, so a project whose dependencies are cached builds offline. `skein deps` fetches what the lock names; `skein deps update` (or `skein deps update lib`) resolves tags again and rewrites the lock.
 - A library's own `:deps` are followed. Two different versions of one library are an error naming both, unless the project's own `:deps` names that library, which then wins.
-- Dependencies' namespaces are found after the project's own, their `:native` libraries and `:assets` go into packages, and `skein dev` reloads the project's own files. `skein run` and `skein dev` use the project in the nearest directory at or above the file that has a `project.skn`.
+- Dependencies' namespaces are found after the project's own, their `:native` libraries and `:assets` go into packages, and `skein dev` reloads the project's own files. `skein run`, `skein dev` and `skein build file.skn` use the project in the nearest directory at or above the file that has a `project.skn`.
 
 ### 20.3 Testing
 `skein.test` follows the style of `clojure.test`: `deftest`, `is`, `testing`, fixtures. There is also property-based testing with `skein.test.check` (Deferred).
