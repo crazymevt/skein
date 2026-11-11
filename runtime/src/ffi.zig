@@ -466,6 +466,63 @@ fn fieldPut(p: Value, t: Value, key: Value, v: Value) Value {
 }
 
 // ---------------------------------------------------------------------------------------
+// Structs and unions by value (M2.13, D-096). The C backend declares a C type with the
+// layout of each one passed or returned by value, and calls these to fill one from a
+// Skein value and to keep a result.
+
+/// Fill the bytes at out with the struct or union t that v gives: a pointer to one
+/// (copied), or a map of its fields, nested maps for nested structs and unions; fields
+/// the map doesn't name are zero.
+fn structFrom(t: Value, v: Value, out: usize) void {
+    const size = layout(t).size;
+    const dst: [*]u8 = @ptrFromInt(out);
+    if (v != Value.nil and isPointer(v)) {
+        const src: [*]const u8 = @ptrFromInt(toAddress(v));
+        @memcpy(dst[0..size], src[0..size]);
+        return;
+    }
+    if (!coll.isMap(v)) fail("{s} by value needs a pointer to one or a map of its fields, not {s}", .{ ctypeName(t), readable(v) });
+    @memset(dst[0..size], 0);
+    const Fill = struct {
+        t: Value,
+        out: usize,
+        fn each(c: *@This(), k: Value, x: Value) bool {
+            const f = findField(c.t, k);
+            const at = c.out + f.offset;
+            if (f.type.isObjectOf(.ctype) and kindOf(f.type) != kind_enum) {
+                structFrom(f.type, x, at);
+            } else if (isInline(f.type)) {
+                fail("the field {s} is an array; set it through a pointer to the struct", .{readable(k)});
+            } else writeAt(at, f.type, x);
+            return true;
+        }
+    };
+    var ctx: Fill = .{ .t = t, .out = out };
+    coll.mapEach(v, &ctx, Fill.each);
+}
+
+/// (%ctype-layout t): [size alignment fields] of a struct or union type, fields as
+/// [name type offset] with resolved types, for the C backend's declarations.
+fn ctypeLayout(t: Value) Value {
+    if (!t.isObjectOf(.ctype) or kindOf(t) == kind_enum) fail("{s} is not a struct or union", .{readable(t)});
+    return coll.vectorOf(&.{ get(t, t_size), get(t, t_align), get(t, t_fields) });
+}
+
+export fn sk_ffi_struct_arg(v: Value, qualified: [*:0]const u8, out: *anyopaque) void {
+    const t = lookup(std.mem.span(qualified)) orelse fail("unknown foreign type {s}", .{qualified});
+    structFrom(t, v, @intFromPtr(out));
+}
+
+/// A by-value result: a copy of the size bytes at p, in C memory Skein owns.
+export fn sk_ffi_struct_result(p: *const anyopaque, size: usize) Value {
+    const mem = std.c.malloc(@max(size, 1)) orelse rt.fatal("out of memory", .{});
+    const dst: [*]u8 = @ptrCast(mem);
+    const src: [*]const u8 = @ptrCast(p);
+    @memcpy(dst[0..size], src[0..size]);
+    return makeOwned(@intFromPtr(mem));
+}
+
+// ---------------------------------------------------------------------------------------
 // Handles (DESIGN §14.2): stable integer tokens for Skein objects that C holds.
 
 var handles_lock: platform.Mutex = .{};
@@ -783,6 +840,11 @@ pub const entries = [_]Entry{
     .{ .name = "%ctype-info", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return ctypeInfo(a[0]);
+        }
+    }.f },
+    .{ .name = "%ctype-layout", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return ctypeLayout(a[0]);
         }
     }.f },
     .{ .name = "skein.ffi/%load-library", .min = 1, .max = 1, .impl = struct {

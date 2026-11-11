@@ -133,6 +133,10 @@ digits, so a following digit can't extend them, unlike \\x."
          ;; function definitions (C text) and their prototypes, in order
          :functions []
          :prototypes []
+         ;; C struct and union types declared for by-value FFI calls (M2.13, D-096), in
+         ;; order, and their names by the foreign type's qualified name
+         :ctypes []
+         :ctype-names {}
          ;; [fobj-name code-name display-name] for function objects made at startup
          :fn-objects []
          ;; the lines of the program body (the top-level forms)
@@ -683,7 +687,7 @@ is the Lisp backend's list."
     "%named-fn" "%arity-error" "%add-method" "%getenv" "%host-target"
     "%make-struct-def" "%struct-constructor"
     "%struct-predicate" "%struct-accessor" "%make-soa-def" "%soa-maker" "%soa-field"
-    "%ctype-info"
+    "%ctype-info" "%ctype-layout"
     ;; Evaluating code (M2.5, D-078; runtime/src/evaluate.zig)
     "eval" "load-file" "reload" "macroexpand-1" "macroexpand" "macroexpand-all"
     "%install-evaluator!" "%eval-registry" "%runtime-var-value" "%set-runtime-var-value!"
@@ -1435,10 +1439,61 @@ the var named name in this namespace to it, as Phase 0 does."
    "u16" "uint16_t" "u32" "uint32_t" "u64" "uint64_t" "f32" "float" "f64" "double"
    "bool" "_Bool" "void" "void" "c-string" "uintptr_t" "ptr" "void*"})
 
+;; Structs and unions by value (M2.13, D-096): a C type of the same layout for each one
+;; passed or returned by value, its fields named f0, f1, ..., with checks that its size
+;; and alignment are the runtime's.
+
+(def ^:private struct-c-type)
+
+(defn- ctype-named
+  "The struct, union or enum type that the qualified symbol q names, or nil."
+  [q]
+  (let [ns (when (namespace q) (%find-namespace (namespace q)))
+        var (when ns (%find-own-var ns (name q)))]
+    (when (and var (%var-defined? var) (%ctype-info (%var-value var)))
+      (%var-value var))))
+
+(defn- field-c-decl
+  "The C declaration of a struct field named nm of the (resolved) foreign type t."
+  [st node t nm]
+  (cond (and (symbol? t) (contains? ffi-primitive-types t))
+        (str (get ffi-c-types (name t)) " " nm)
+        (and (list? t) (symbol? (first t)) (= "array" (name (first t))))
+        (let [e (second t)
+              e (if (and (symbol? e) (not (contains? ffi-primitive-types e)))
+                  (or (ctype-named e) (unsupported node "unknown foreign type " (pr-str e)))
+                  e)]
+          (str (field-c-decl st node e nm) "[" (nth t 2) "]"))
+        (list? t) (str "void* " nm)
+        (%ctype-info t)
+        (let [[kind base] (%ctype-info t)]
+          (if (= kind :enum)
+            (field-c-decl st node base nm)
+            (str (struct-c-type st node t) " " nm)))
+        :else (unsupported node "unsupported foreign type in a struct: " (pr-str t))))
+
+(defn- struct-c-type
+  "The name of the C type declared (once) for the struct or union type t."
+  [st node t]
+  (let [[kind _ qname] (%ctype-info t)]
+    (or (get (:ctype-names @(:unit st)) qname)
+        (let [[size align fields] (%ctype-layout t)
+              nm (str "sk_ct_" (c-identifier qname))
+              members (map-indexed (fn [i [_ ft _]] (str (field-c-decl st node ft (str "f" i)) ";"))
+                                   fields)
+              decl (str "typedef " (if (= kind :union) "union" "struct") " { "
+                        (join " " members) " } " nm ";\n"
+                        "_Static_assert(sizeof(" nm ") == " size " && _Alignof(" nm ") == "
+                        align ", \"the layout of " (c-comment qname) "\");")]
+          (swap! (:unit st) (fn [u] (-> u
+                                        (update :ctypes conj decl)
+                                        (assoc-in [:ctype-names qname] nm))))
+          nm))))
+
 (defn- ffi-type-desc
   "How a C function takes or returns the foreign type t: {:kind :int, :float, :bool,
-:void, :c-string, :ptr or :enum; :c its C type; :name the primitive's name; :enum the
-qualified name of an enum}."
+:void, :c-string, :ptr, :enum or :struct; :c its C type; :name the primitive's name;
+:enum the qualified name of an enum; :ctype the qualified name of a struct or union}."
   [st node t c-name]
   (cond (and (symbol? t) (contains? ffi-primitive-types t))
         (let [n (name t)]
@@ -1458,8 +1513,8 @@ qualified name of an enum}."
           (cond (nil? info) (unsupported node "unknown foreign type " (pr-str t))
                 (= (first info) :enum)
                 (assoc (ffi-type-desc st node (second info) c-name) :kind :enum :enum (nth info 2))
-                :else (unsupported node (nth info 2) " is a " (name (first info))
-                                   "; pass it by pointer, as (ptr ...)")))
+                :else {:kind :struct :c (struct-c-type st node (%var-value var))
+                       :ctype (nth info 2)}))
         :else (unsupported node "unsupported foreign type " (pr-str t))))
 
 (defn- ffi-argument
@@ -1472,7 +1527,10 @@ described."
     :float (str "(" (:c desc) ")sk_ffi_to_f64(" arg ")")
     :bool (str "SK_TRUTHY(" arg ")")
     :c-string (str "sk_ffi_to_cstring(" arg ")")
-    :ptr (str "(void*)sk_ffi_to_address(" arg ")")))
+    :ptr (str "(void*)sk_ffi_to_address(" arg ")")
+    ;; By value: a C statement expression filling a temporary.
+    :struct (str "({ " (:c desc) " sk_s_; sk_ffi_struct_arg(" arg ", "
+                 (c-string-literal (:ctype desc)) ", &sk_s_); sk_s_; })")))
 
 (defn- ffi-result
   "The C expression converting r (a C expression giving a value as described) to an
@@ -1486,7 +1544,9 @@ sk_value."
     :float (if (= (:name desc) "f32") (str "sk_from_f32(" r ")") (str "sk_f64(" r ")"))
     :bool (str "SK_BOOL(" r ")")
     :c-string (str "sk_ffi_from_cstring(" r ")")
-    :ptr (str (if owned "sk_ffi_owned" "sk_ffi_pointer") "((uintptr_t)" r ")")))
+    :ptr (str (if owned "sk_ffi_owned" "sk_ffi_pointer") "((uintptr_t)" r ")")
+    ;; By value: a copy in C memory that Skein owns.
+    :struct (str "({ " (:c desc) " sk_r_ = " r "; sk_ffi_struct_result(&sk_r_, sizeof sk_r_); })")))
 
 (defn- emit-define-function
   "(skein.ffi/%define-function 'name \"c_name\" 'return '[[param type]...] blocking owned):
@@ -1550,7 +1610,8 @@ C type (looked up on the first call) and converts the result, as Phase 0's defcf
       (single-value st "SK_NIL"))))
 
 (def ^:private callback-zeros
-  {:int "0" :enum "0" :bool "0" :float "0.0" :c-string "nil" :ptr "nil" :void ""})
+  {:int "0" :enum "0" :bool "0" :float "0.0" :c-string "nil" :ptr "nil" :void ""
+   :struct "a zeroed struct"})
 
 (defn- emit-define-callback
   "(skein.ffi/%define-callback 'ns/name 'return '[[param type]...] f): a C function of
@@ -1945,6 +2006,7 @@ the globals and the functions."
            (if-let [d (get decls nm)] (str " /* " (c-comment d) " */") "")
            "\n"))
     (put "\n")
+    (doseq [d (:ctypes u)] (put d "\n"))
     (doseq [p (:prototypes u)] (put p "\n"))
     (put "\n")
     (doseq [f (:functions u)] (put f "\n"))))

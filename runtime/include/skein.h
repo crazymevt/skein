@@ -116,6 +116,8 @@ sk_value sk_vector_of(size_t count, const sk_value *items);
 sk_value sk_map_of(size_t count, const sk_value *keys_and_values);
 sk_value sk_set_of(size_t count, const sk_value *items);
 sk_value sk_with_meta(sk_value value, sk_value meta);
+void sk_ffi_struct_arg(sk_value v, const char *qualified, void *out);
+sk_value sk_ffi_struct_result(const void *p, size_t size);
 sk_value sk_rest_list(uint32_t argc, const sk_value *argv, uint32_t from);
 sk_value sk_closure(sk_code code, const char *name, size_t count, const sk_value *captured);
 void sk_closure_set(sk_value f, size_t i, sk_value value);

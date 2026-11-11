@@ -42,7 +42,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.10 STM | 🟨 |
 | M2.11 Standard library | 🟨 |
 | M2.12 Package management | 🟨 |
-| M2.13 FFI additions | ⬜ |
+| M2.13 FFI additions | 🟨 |
 | M2.14 UI library | ⬜ |
 | M2.15 Driftrock developed live, natively | ⬜ |
 
@@ -416,7 +416,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - What native desktop UIs need from `skein.ffi` (DESIGN §14, D-090), natively: structs and unions **by value** as arguments and results, of C functions and of callbacks; **calling a C function pointer** with a declared signature (Objective-C's `objc_msgSend` with each message's own signature, COM vtables); and **variadic** C functions, called with the types of each call. `skein bindgen` stops skipping by-value structs and variadic functions.
 - Settled (D-096): a by-value struct or union argument takes a pointer or a map of its fields, and a result is an owned pointer to a copy; `(ffi/defcfun-ptr name return [params])` calls a function pointer given as the first argument, and `defcfun` may bind one C symbol under several signatures (`objc_msgSend`); a variadic function is declared once per call shape, with `&` before the variadic parameters; native only, Phase 0 unchanged.
 - Steps, in order (D-096):
-  1. Structs and unions by value as `defcfun` arguments (a pointer or a map, nested maps for nested structs) and results (an owned pointer to a copy), in the C backend; native fixtures with a small C library, including structs C passes in registers and ones it passes in memory.
+  1. ✅ Structs and unions by value as `defcfun` arguments (a pointer or a map, nested maps for nested structs) and results (an owned pointer to a copy), in the C backend; native fixtures with a small C library, including structs C passes in registers and ones it passes in memory.
   2. By value in callbacks: `defcallback` parameters (as owned pointers) and results (a pointer or a map).
   3. `defcfun-ptr`, and one C symbol under several names with different signatures.
   4. Variadic shapes with `&`, including floats and small integers that C promotes.

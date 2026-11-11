@@ -1,0 +1,58 @@
+(ns byvalue
+  (:require [skein.ffi :as ffi]))
+
+;; Structs and unions passed and returned by value (M2.13 step 1, D-096), natively, with
+;; host/tests/fixtures/ffi/byvalue.c, which the bootstrap builds into build/examples/.
+;; Arguments are maps of the fields (nested maps for nested structs) or pointers to a
+;; struct; results are owned pointers to a copy, read with ffi/field.
+
+(ffi/deflibrary byvalue
+  {:macos "libbyvalue.dylib" :linux "libbyvalue.so" :windows "byvalue.dll"})
+
+(ffi/defcstruct vec2f (x f32) (y f32))
+(ffi/defcstruct rectd (x f64) (y f64) (w f64) (h f64))
+(ffi/defcstruct mixed (a i32) (b i64) (c u8))
+(ffi/defcstruct color (r u8) (g u8) (b u8) (a u8))
+(ffi/defcstruct frame (origin vec2f) (size vec2f))
+(ffi/defcunion num (i i32) (f f32))
+(ffi/defcstruct triple (v (array i32 3)))
+
+(ffi/defcfun vec2-add "vec2_add" vec2f [a vec2f, b vec2f])
+(ffi/defcfun vec2-dot "vec2_dot" f32 [a vec2f, b vec2f])
+(ffi/defcfun rect-grow "rect_grow" rectd [r rectd, by f64])
+(ffi/defcfun mixed-sum "mixed_sum" i64 [m mixed])
+(ffi/defcfun mixed-make "mixed_make" mixed [a i32, b i64, c u8])
+(ffi/defcfun color-invert "color_invert" color [c color])
+(ffi/defcfun frame-offset "frame_offset" frame [f frame, dx f32])
+(ffi/defcfun num-as-float "num_as_float" f32 [n num])
+(ffi/defcfun num-from-int "num_from_int" num [i i32])
+(ffi/defcfun triple-sum "triple_sum" i32 [t triple])
+
+(defn fields [p type ks] (mapv (fn [k] (ffi/field p type k)) ks))
+
+(defn -main [& args]
+  (let [v (vec2-add {:x 1.5 :y 2.0} {:x 0.25 :y -1.0})]
+    (prn :vec2-add (fields v vec2f [:x :y]))
+    (prn :vec2-dot (vec2-dot v {:x 2.0 :y 4.0}))
+    (prn :result-is-a-pointer (ffi/ptr? v)))
+  (let [r (rect-grow {:x 10.0 :y 20.0 :w 100.0 :h 50.0} 2.5)]
+    (prn :rect-grow (fields r rectd [:x :y :w :h]))
+    (prn :pointer-argument (fields (rect-grow r 1.0) rectd [:x :w])))
+  (prn :mixed-sum (mixed-sum {:a 1 :b 10000000000 :c 200}))
+  (let [m (mixed-make -5 123456789012 7)]
+    (prn :mixed-make (fields m mixed [:a :b :c]) (mixed-sum m)))
+  (prn :color-invert (fields (color-invert {:r 10 :g 20 :b 30 :a 255}) color [:r :g :b :a]))
+  (prn :missing-fields-are-zero (fields (color-invert {:a 1}) color [:r :g :b :a]))
+  (let [f (frame-offset {:origin {:x 1.0 :y 2.0} :size {:x 3.0 :y 4.0}} 10.0)]
+    (prn :frame-offset (fields (ffi/field f frame :origin) vec2f [:x :y])
+         (fields (ffi/field f frame :size) vec2f [:x :y])))
+  (prn :num-as-float (num-as-float {:f 2.5}))
+  (prn :num-from-int (ffi/field (num-from-int 42) num :i))
+  (let [t (ffi/alloc triple)]
+    (dotimes [i 3] (ffi/put! (ffi/field t triple :v) i32 (* 10 (inc i)) i))
+    (prn :triple-sum (triple-sum t))
+    (ffi/free t))
+  (prn :not-a-struct (try (vec2-add 5 {:x 1.0 :y 1.0})
+                          (catch error e (condition-message e))))
+  (prn :no-such-field (try (vec2-add {:z 1.0} {:x 1.0 :y 1.0})
+                           (catch error e (condition-message e)))))

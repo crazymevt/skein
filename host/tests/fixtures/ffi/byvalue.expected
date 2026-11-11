@@ -1,0 +1,15 @@
+:vec2-add [1.75f 1.0f]
+:vec2-dot 7.5f
+:result-is-a-pointer true
+:rect-grow [7.5 17.5 105.0 55.0]
+:pointer-argument [6.5 107.0]
+:mixed-sum 10000000201
+:mixed-make [-5 123456789012 7] 123456789014
+:color-invert [245 235 225 255]
+:missing-fields-are-zero [255 255 255 1]
+:frame-offset [11.0f 2.0f] [3.0f 4.0f]
+:num-as-float 2.5f
+:num-from-int 42
+:triple-sum 60
+:not-a-struct "byvalue/vec2f by value needs a pointer to one or a map of its fields, not 5"
+:no-such-field "byvalue/vec2f has no field :z"

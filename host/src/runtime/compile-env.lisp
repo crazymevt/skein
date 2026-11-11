@@ -168,7 +168,9 @@ received to that form's metadata (as data), for %syntax-meta.")
                ;; D-093)
                "%stat" "%delete-path" "%rename-path" "%read-bytes" "%write-bytes"
                "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes"
-               "%stream-write" "%stream-flush" "%stream-close"))
+               "%stream-write" "%stream-flush" "%stream-close"
+               ;; By-value structs (M2.13, D-096): the C backend's, which runs natively
+               "%ctype-layout"))
 
 (defcore "%epoch-millis" ()
   ;; Wall-clock time in milliseconds since 1970 (skein.log, M2.11).

@@ -371,6 +371,24 @@ test_native_only() {
     fi
     echo "skeinc: $name ok"
   done
+  # Structs and unions by value (M2.13, D-096): host/tests/fixtures/ffi/byvalue.c, built
+  # beside the program, which loads it from its own directory.
+  local bv_lib=libbyvalue.so
+  case "$host" in
+    *macos) bv_lib=libbyvalue.dylib ;;
+    *windows*) bv_lib=byvalue.dll ;;
+  esac
+  "${SKEIN_ZIG:-zig}" cc -shared -o "build/examples/$bv_lib" host/tests/fixtures/ffi/byvalue.c
+  "$skeinc" build host/tests/fixtures/ffi/byvalue.skn -o "build/examples/ffi-byvalue$exe" \
+    > /dev/null
+  if ! diff --strip-trailing-cr host/tests/fixtures/ffi/byvalue.expected \
+       <("build/examples/ffi-byvalue$exe") > /dev/null; then
+    echo "skeinc: ffi-byvalue differs from its .expected"
+    diff --strip-trailing-cr host/tests/fixtures/ffi/byvalue.expected \
+      <("build/examples/ffi-byvalue$exe") | head -20
+    exit 1
+  fi
+  echo "skeinc: ffi-byvalue ok"
 }
 
 test_ring_and_dev() {
