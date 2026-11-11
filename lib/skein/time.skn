@@ -2,4 +2,11 @@
   "Clocks (DESIGN §21). now and now-ns are built into the host:
   (now)     seconds since the program started, an f64, from a monotonic clock
   (now-ns)  the same in nanoseconds, an integer
+  (epoch-millis)  the wall-clock time: milliseconds since 1970 (UTC), an integer
 sleep is in skein.core.")
+
+(defn epoch-millis
+  "The wall-clock time: milliseconds since 1970-01-01 UTC, an integer, as io/modified-time
+gives a file's. Unlike now, it jumps when the system's clock is set."
+  []
+  (%epoch-millis))

@@ -1,11 +1,19 @@
 (ns system
   (:require [skein.test :refer [deftest is run-tests]]
-            [skein.system :as system]))
+            [skein.system :as system]
+            [skein.time :as time]))
 
-;; skein.system (D-098), natively, compared with system.expected.
+;; skein.system (D-098) and skein.time's wall clock (M2.14), natively, compared with
+;; system.expected.
 
 (deftest os
   (is (contains? #{:macos :linux :windows} (system/os)))
   (is (identical? (system/os) (system/os))))
+
+(deftest wall-clock
+  (let [t (time/epoch-millis)]
+    (is (integer? t))
+    (is (< 1700000000000 t 5000000000000))
+    (is (<= t (time/epoch-millis)))))
 
 (prn (select-keys (run-tests 'system) [:test :fail :error]))
