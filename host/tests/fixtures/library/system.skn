@@ -11,6 +11,12 @@
   (is (identical? (system/os) (system/os)))
   (is (contains? #{:aarch64 :x86_64} (system/arch))))
 
+(deftest environment
+  (is (string? (system/getenv "PATH")))
+  (is (nil? (system/getenv "SKEIN_NO_SUCH_VARIABLE_ANYWHERE")))
+  (is (string? (system/home-dir)))
+  (is (pos? (count (system/home-dir)))))
+
 (deftest wall-clock
   (let [t (time/epoch-millis)]
     (is (integer? t))

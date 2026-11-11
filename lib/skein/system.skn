@@ -1,7 +1,9 @@
 (ns skein.system
   "Facts about the system the program runs on (DESIGN §21, D-098):
   (os)    :macos, :linux or :windows
-  (arch)  :aarch64 or :x86_64, the processor's architecture")
+  (arch)  :aarch64 or :x86_64, the processor's architecture
+  (getenv name)  an environment variable's value, or nil
+  (home-dir)     the user's home directory")
 
 (defn os
   "The operating system the program runs on: :macos, :linux or :windows, the keys
@@ -20,3 +22,15 @@ them in target triples."
   []
   (let [t (%host-target)]
     (keyword (subs t 0 (count (take-while (fn [ch] (not= ch \-)) t))))))
+
+(defn getenv
+  "The value of the environment variable called name, a string, or nil if it isn't set."
+  [name]
+  (%getenv name))
+
+(defn home-dir
+  "The user's home directory: HOME, or on Windows USERPROFILE."
+  []
+  (if (= :windows (os))
+    (or (getenv "USERPROFILE") (getenv "HOME"))
+    (getenv "HOME")))
