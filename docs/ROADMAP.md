@@ -443,7 +443,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
      - ✅ E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
      - ✅ F. Images from bytes, system and glyph images, font families and font files, and icons in lists, tables and trees.
      - ✅ G. Window state: saving and restoring a window's frame.
-     - H. The web view (Jessie's: a program of Jessie's needs it): WKWebView on Cocoa, WebKitGTK 6.0 on GTK 4 (Linux only: Homebrew has no WebKitGTK), and WebView2 with the Win32 backend; loading URLs and HTML, running scripts, messages between the page and Skein, and navigation events.
+     - H. The web view (Jessie's: a program of Jessie's needs it; built, WebKitGTK's side awaiting its first Linux CI run): WKWebView on Cocoa, WebKitGTK 6.0 on GTK 4 (Linux only: Homebrew has no WebKitGTK), and WebView2 with the Win32 backend; loading URLs and HTML, running scripts, messages between the page and Skein, and navigation events.
      - I. The examples and the widget explorer, all of LGT's.
   7. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
   8. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
