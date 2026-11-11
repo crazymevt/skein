@@ -665,6 +665,8 @@ Returns 0, or 1 if an error stopped the program."
     (println (str "; skein dev: reloading changed files"
                   (if server (str "; REPL on localhost:" (%tcp-port server)) "")
                   (if swank (str "; Swank on localhost:" (%tcp-port swank)) "")))
+    ;; zig's first module is slow while its cache fills: do that before the first edit.
+    (when (module/available?) (service (module/warm-up!)))
     ;; The terminal is a console before the program starts: an error the program signals
     ;; before the console's fiber runs still opens the debugger there.
     (swap! consoles conj terminal)

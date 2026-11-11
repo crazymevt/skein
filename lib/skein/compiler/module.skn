@@ -140,6 +140,16 @@ its path."
       (fail "compiling " ns-name " failed:\n" (:out result) (:err result)))
     lib))
 
+(defn warm-up!
+  "Build a module of one line, so that zig's one-time work for modules (its cache of
+libraries for linking them, 1.7 s or more when empty) is done before the first real one:
+skein dev calls it in the background as it starts (D-101). True if it built; a failure
+is ignored, as the real build reports its own."
+  []
+  (boolean (when @build-info
+             (try (build! "warm-up" "int sk_warm_up;\n")
+                  (catch error _ nil)))))
+
 (defn load-file!
   "Compile the namespace in the source file at path, which the program has loaded, into a
 module and load it: its vars now hold compiled code. The current namespace is restored."

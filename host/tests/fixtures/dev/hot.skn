@@ -20,6 +20,7 @@ namespace to build/examples/hotlib.skn (the tests run from the checkout)."
 
 (defn -main [& args]
   (println "can compile modules:" (module/available?))
+  (println "warmed up:" (module/warm-up!))
   (%write-file path (source 1))
   (load-file path)
   (println "loaded:" (state))
