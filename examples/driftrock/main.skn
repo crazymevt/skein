@@ -47,6 +47,9 @@ budget (CI's live-edit check, host/tools/live-edit.lisp, looks for them)."
    :restart (key? keys sdl/scancode-return)
    :quit (key? keys sdl/scancode-escape)})
 
+;; How often run-loop's :paused has run (host/tools/live-debug.lisp checks it, D-101).
+(defonce paused-calls (atom 0))
+
 (defn quit-requested? [event]
   (loop [quit false]
     (if (sdl/poll-event event)
@@ -116,7 +119,9 @@ budget (CI's live-edit check, host/tools/live-edit.lisp, looks for them)."
             :update (fn [dt] (g/update! @input dt))
             ;; While a frame waits in skein dev's debugger: handle the window's events, so
             ;; the system doesn't mark it as not responding; a quit counts once resumed.
-            :paused (fn [] (when (quit-requested? event) (reset! quit true)))
+            :paused (fn []
+                      (swap! paused-calls inc)
+                      (when (quit-requested? event) (reset! quit true)))
             :render (fn [_]
                       (draw/world! renderer @g/world @fps)
                       (let [work (- (time/now) @work-start)]

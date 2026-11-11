@@ -309,6 +309,16 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a sbcl --script host/tools/live-edit.lisp
 
+      # M2.15: debug Driftrock while it plays under native skein dev: a bug saved into a job
+      # is fixed and the frame retried from the job's debugger, and the game goes on (D-101).
+      - name: Driftrock live debugging
+        if: runner.os != 'Linux'
+        run: sbcl --script host/tools/live-debug.lisp
+
+      - name: Driftrock live debugging (Linux, under Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a sbcl --script host/tools/live-debug.lisp
+
   # M1.11: each package that the Linux job made runs on its platform, which has no SBCL,
   # Zig or Skein checkout installed.
   packages:
