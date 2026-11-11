@@ -907,6 +907,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
 | `skein dev` | run with file watching, hot reload and a REPL server (§15) |
 | `skein host run\|dev\|repl ...` | the same on the Phase 0 SBCL host, as a reference (Phase 2, D-081) |
 | `skein test [path...]` | run the tests of the namespaces in the paths (default: the project's `:test-paths`, else `test/`) natively; exits with 1 if one fails (M2.11, D-093) |
+| `skein deps` | fetch the dependencies of the project in the current directory into the cache and print where each is (M2.12, D-094) |
 | `skein build [--target T] [--profile P]` | compile a native executable (Phase 1: `skein build [file.skn] [-o FILE] [--target T] [--profile dev\|release]`, by skeinc; with no file, the project in the current directory; D-069) |
 | `skein package` | create distributables |
 | `skein bindgen` | generate FFI bindings from C headers |
@@ -940,7 +941,7 @@ Dependencies (M2.12, D-094):
 ```
 
 - A library name is a symbol. A git dependency is pinned by `:tag` or `:sha`; a local one is a folder (relative to the project), whose `project.skn`, if it has one, gives its `:paths`, `:deps`, `:native` and `:assets`, and which is otherwise a source path itself.
-- Git dependencies are fetched with the `git` command into a cache shared by projects, one checkout per commit: `~/.skein/deps`, or `%LOCALAPPDATA%\skein\deps` on Windows.
+- Git dependencies are fetched with the `git` command into a cache shared by projects, one checkout per commit: `~/.skein/deps`, or `%LOCALAPPDATA%\skein\deps` on Windows (`SKEIN_DEPS_DIR` chooses another). The cache keeps a bare mirror of each repository, which answers which commit a tag or sha names, fetching only when it doesn't know.
 - `skein.lock`, beside `project.skn`, records the commit each git dependency resolved to; commit it with the project. `skein build`, `run`, `dev`, `test` and `package` fetch only what is missing, so a project whose dependencies are cached builds offline. `skein deps` fetches what the lock names; `skein deps update` (or `skein deps update lib`) resolves tags again and rewrites the lock.
 - A library's own `:deps` are followed. Two different versions of one library are an error naming both, unless the project's own `:deps` names that library, which then wins.
 - Dependencies' namespaces are found after the project's own, their `:native` libraries and `:assets` go into packages, and `skein dev` reloads the project's own files. `skein run` and `skein dev` use the project in the nearest directory at or above the file that has a `project.skn`.

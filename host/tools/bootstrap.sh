@@ -119,6 +119,51 @@ test_compiler() {
     exit 1
   fi
   echo "skeinc: dependencies ok"
+  # Git dependencies (M2.12 step 2): a repository made here, with tags v1 and v2, fetched
+  # into a cache under build/ by tag and by sha; a tag made after the first fetch is
+  # fetched; a missing one is an error.
+  local gd root
+  root=$(pwd -W 2>/dev/null || pwd)
+  gd="$root/build/examples/git-deps"
+  rm -rf "$gd"
+  mkdir -p "$gd/lib/src/gitlib" "$gd/app/src/app"
+  local g=(git -c user.email=test@example.com -c user.name=Test -c init.defaultBranch=main)
+  write_gitlib() { printf '(ns gitlib.core)\n\n(defn version [] "%s")\n' "$1" \
+                     > "$gd/lib/src/gitlib/core.skn"; }
+  (cd "$gd/lib" && "${g[@]}" init -q && printf '{:paths ["src"]}\n' > project.skn \
+     && write_gitlib v1 && "${g[@]}" add -A && "${g[@]}" commit -qm v1 && "${g[@]}" tag v1 \
+     && write_gitlib v2 && "${g[@]}" commit -qam v2 && "${g[@]}" tag v2)
+  local sha2
+  sha2=$(cd "$gd/lib" && git rev-parse HEAD)
+  printf '%s\n\n%s\n' '(ns app.main (:require [gitlib.core :as g]))' \
+    '(defn -main [& args] (println (g/version)))' > "$gd/app/src/app/main.skn"
+  app_with() {
+    printf '{:name "app" :main app.main/-main\n :deps {my/gitlib {:git "%s" %s}}}\n' \
+      "$gd/lib" "$1" > "$gd/app/project.skn"
+    (cd "$gd/app" && SKEIN_DEPS_DIR="$gd/cache" "$root/$skeinc" build -o "app$exe" > /dev/null \
+       && ./app$exe | tr -d '\r')
+  }
+  if [ "$(app_with ':tag "v1"')" != v1 ] || [ "$(app_with ":sha \"${sha2:0:7}\"")" != v2 ]; then
+    echo "skeinc: git dependencies by tag or sha didn't build"
+    exit 1
+  fi
+  (cd "$gd/lib" && write_gitlib v3 && "${g[@]}" commit -qam v3 && "${g[@]}" tag v3)
+  if [ "$(app_with ':tag "v3"')" != v3 ]; then
+    echo "skeinc: a tag made after the first fetch wasn't fetched"
+    exit 1
+  fi
+  listed=$(cd "$gd/app" && SKEIN_DEPS_DIR="$gd/cache" "$root/$skeinc" deps | tr -d '\r')
+  if [[ "$listed" != "my/gitlib $gd/lib at "* ]]; then
+    echo "skeinc: skeinc deps printed: $listed"
+    exit 1
+  fi
+  status=0
+  missing=$(app_with ':tag "v9"' 2>&1) || status=$?
+  if [ "$status" = 0 ] || [[ "$missing" != *"has no tag v9"* ]]; then
+    echo "skeinc: a missing tag wasn't an error: $missing"
+    exit 1
+  fi
+  echo "skeinc: git dependencies ok"
   # A project (M1.11): with no file, skeinc builds the project.skn in the current directory,
   # into it, beside the assets that skein.io/resource-dir finds (D-073). It runs from
   # another directory.

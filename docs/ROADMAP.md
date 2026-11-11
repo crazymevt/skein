@@ -406,7 +406,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Settled (D-094): `{:git url :tag t}`, `{:git url :sha s}` or `{:local "folder"}`, a local folder with or without its own `project.skn`; fetched with the `git` command into a user-level cache, one checkout per commit; `skein.lock` pins commits; builds fetch only what is missing and work offline from the cache; `skein deps` and `skein deps update [lib]`; transitive `:deps` followed, two versions of one library an error unless the project names it.
 - Steps, in order (D-094):
   1. ✅ Reading `:deps` and resolving local folders, transitively, with the conflict rule: the project's source paths, `:native` libraries and `:assets` grow by its dependencies' in `build`, `run`, `dev`, `test` and `package`.
-  2. Git dependencies: the cache, fetching and checking out with `git`, `:tag` and `:sha`, and `skein deps`; tests with local repositories made by `git`.
+  2. ✅ Git dependencies: the cache, fetching and checking out with `git`, `:tag` and `:sha`, and `skein deps`; tests with local repositories made by `git`.
   3. `skein.lock`: written when dependencies are first resolved, used after, and rewritten by `skein deps update [lib]`; offline builds from the cache; clear errors when git is missing or a fetch fails.
   4. Transitive git dependencies with the conflict rule, and packages carrying dependencies' native libraries and assets, on all three platforms; a dependency on a public GitHub repository in CI.
 

@@ -677,6 +677,103 @@ folder} or {:git url :tag t} or {:git url :sha s}."
                       (split-on dir \/))]
     (str (if absolute "/" "") (apply str (map (fn [p] (str p "/")) parts)))))
 
+;;; Git dependencies (step 2): fetched with the git command into a cache shared by
+;;; projects. A bare mirror of each repository (repos/<key>/) answers which commit a tag
+;;; or sha names, fetching only when it doesn't know; each commit used gets a checkout of
+;;; its own (checkouts/<key>/<sha>/), made in a temporary directory and renamed into
+;;; place, so a half-made one is never used.
+
+(defn- deps-cache
+  "The dependency cache (D-094), ending with /: SKEIN_DEPS_DIR, else
+%LOCALAPPDATA%/skein/deps on Windows, else ~/.skein/deps."
+  []
+  (let [dir (or (%getenv "SKEIN_DEPS_DIR")
+                (when (windows?) (some-> (%getenv "LOCALAPPDATA") (str "/skein/deps")))
+                (some-> (or (%getenv "HOME") (%getenv "USERPROFILE")) (str "/.skein/deps"))
+                (fail "can't find a home directory for the dependency cache; set "
+                      "SKEIN_DEPS_DIR"))
+        dir (apply str (map (fn [c] (if (= c \\) \/ c)) dir))]
+    (if (= \/ (last dir)) dir (str dir "/"))))
+
+(defn- trim-end [s]
+  (loop [n (count s)]
+    (if (and (pos? n) (contains? #{\newline \return \space \tab} (nth s (dec n))))
+      (recur (dec n))
+      (subs s 0 n))))
+
+(defn- git-run
+  "Run git with args (in dir, if given): {:exit :out :err}. Fails if git can't be run."
+  [lib args dir]
+  (try (io/run-process (vec (cons "git" args)) (if dir {:dir dir} {}))
+       (catch io/io-error e
+         (fail (pr-str lib) ": fetching a git dependency needs the git command, which "
+               "couldn't be run (" (condition-message e) ")"))))
+
+(defn- git
+  "git's output for args (in dir), trimmed; fails with git's message if it fails."
+  [lib args dir]
+  (let [r (git-run lib args dir)]
+    (when-not (zero? (:exit r))
+      (fail (pr-str lib) ": git " (first args) " failed:\n" (trim-end (str (:err r) (:out r)))))
+    (trim-end (:out r))))
+
+(defn- repo-key
+  "A directory name for the repository at url: its last part and a hash of url."
+  [url]
+  (let [base (file-name (trim-end (apply str (map (fn [c] (if (= c \\) \/ c)) url))))
+        base (if (and (> (count base) 4) (= ".git" (subs base (- (count base) 4))))
+               (subs base 0 (- (count base) 4))
+               base)
+        ok? (fn [c] (let [n (int c)]
+                      (or (<= 97 n 122) (<= 65 n 90) (<= 48 n 57) (contains? #{\- \_ \.} c))))
+        safe (apply str (map (fn [c] (if (ok? c) c \_)) base))]
+    (str safe "-" (path-hash url))))
+
+(defn- move-into-place!
+  "Rename the finished directory tmp to dir; if another skein got there first, drop tmp."
+  [tmp dir]
+  (when-not (%rename-path (subs tmp 0 (dec (count tmp))) (subs dir 0 (dec (count dir))))
+    (if (io/file-exists? dir)
+      (%delete-tree tmp)
+      (fail "cannot move " tmp " to " dir))))
+
+(defn- mirror!
+  "The cache's bare mirror of the repository at url, cloned if it's missing."
+  [lib url]
+  (let [root (str (deps-cache) "repos/")
+        dir (str root (repo-key url) "/")]
+    (when-not (io/file-exists? (str dir "HEAD"))
+      (io/make-dirs root)
+      (let [tmp (str root (repo-key url) ".tmp-" (%epoch-millis) "/")]
+        (git lib ["clone" "--quiet" "--mirror" url tmp] nil)
+        (move-into-place! tmp dir)))
+    dir))
+
+(defn- commit-of
+  "The full sha of the commit that rev names in the mirror of url, fetching from url if
+the mirror doesn't know it."
+  [lib url mirror rev what]
+  (let [find (fn []
+               (let [r (git-run lib ["rev-parse" "--verify" "--quiet" (str rev "^{commit}")]
+                                mirror)]
+                 (when (zero? (:exit r)) (trim-end (:out r)))))]
+    (or (find)
+        (do (git lib ["fetch" "--quiet" "--prune"] mirror) (find))
+        (fail (pr-str lib) ": " url " has no " what))))
+
+(defn- checkout!
+  "The cache's checkout of commit sha of the repository at url, made if it's missing."
+  [lib url mirror sha]
+  (let [root (str (deps-cache) "checkouts/" (repo-key url) "/")
+        dir (str root sha "/")]
+    (when-not (io/file-exists? dir)
+      (io/make-dirs root)
+      (let [tmp (str root sha ".tmp-" (%epoch-millis) "/")]
+        (git lib ["clone" "--quiet" "--shared" "--no-checkout" mirror tmp] nil)
+        (git lib ["checkout" "--quiet" "--detach" sha] tmp)
+        (move-into-place! tmp dir)))
+    dir))
+
 (defn- dep-source
   "Where library lib, which the project in dir names with spec, is: {:id :dir}. Two
 dependencies with the same :id are the same version."
@@ -686,7 +783,14 @@ dependencies with the same :id are the same version."
           (when-not (io/file-exists? d)
             (fail (pr-str lib) ": no folder " d " (its :local in " dir "project.skn)"))
           {:id (str "the folder " d) :dir d})
-        :else (fail (pr-str lib) ": git dependencies come later in M2.12")))
+        :else
+        (let [url (:git spec)
+              mirror (mirror! lib url)
+              sha (if (:tag spec)
+                    (commit-of lib url mirror (str "refs/tags/" (:tag spec))
+                               (str "tag " (:tag spec)))
+                    (commit-of lib url mirror (:sha spec) (str "commit " (:sha spec))))]
+          {:id (str url " at " sha) :dir (checkout! lib url mirror sha) :sha sha})))
 
 (defn- by-name [deps] (sort-by (fn [[lib _]] (str lib)) deps))
 
@@ -725,7 +829,8 @@ then wins (D-094)."
               (recur (into queue (map (fn [[l s]] [l s d (pr-str lib)])
                                       (by-name (:deps library))))
                      (assoc chosen lib {:id (:id src) :from from})
-                     (conj out {:lib lib :dir d :paths (if library (:paths library) [d])
+                     (conj out {:lib lib :source (:id src) :dir d
+                                :paths (if library (:paths library) [d])
                                 :native native :assets (if library (:assets library) [])
                                 :project (when library file)})))))))))
 
@@ -1000,6 +1105,17 @@ skein.test/run-tests, and exits with 1 if a test failed."
                                               (:paths project) (dep-paths deps) [""])))}
                  [] nil)))
 
+(defn- deps-command
+  "skein deps: fetch the dependencies of the project in the current directory into the
+cache, and print where each one is (M2.12, D-094)."
+  [args]
+  (when (seq args) (fail "skein deps: takes no arguments yet"))
+  (when-not (io/file-exists? "project.skn")
+    (fail "skein deps: expected a project.skn in the current directory"))
+  (let [project (read-project "project.skn")]
+    (doseq [d (resolve-deps "project.skn" project)]
+      (println (pr-str (:lib d)) (:source d)))))
+
 (defn- compiler-current?
   "True if build/skeinc is newer than every file it's built from (as the launcher's
 bootstrap checks: lib/'s Skein and the runtime's Zig, C and headers)."
@@ -1024,11 +1140,13 @@ bootstrap checks: lib/'s Skein and the runtime's Zig, C and headers)."
        " [args...]\n"
        "       skeinc repl\n"
        "       skeinc test [path...]\n"
+       "       skeinc deps\n"
        "       skeinc current\n"
        "With no file, build builds the project that ./project.skn describes; package puts it"
        " in dist/. run, dev and repl build the program (cached in .skein-cache/run/) and run"
        " it; test runs the tests in the paths (default: the project's :test-paths, or test/);"
-       " current exits with 0 if skeinc is newer than its sources."))
+       " deps fetches the project's dependencies; current exits with 0 if skeinc is newer than"
+       " its sources."))
 
 (defn- parse-build-args [args]
   (loop [args (seq args) opts {}]
@@ -1060,6 +1178,7 @@ current, which exits with 0 if skeinc is newer than its sources."
       "dev" (dev-command more)
       "repl" (repl-command)
       "test" (test-command more)
+      "deps" (do (deps-command more) (%exit 0))
       "current" (%exit (if (compiler-current? (find-home)) 0 1))
       nil)
     (when-not (contains? #{"build" "package"} command) (fail usage))
