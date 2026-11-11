@@ -151,17 +151,24 @@
 ;;; The fixed-timestep loop
 
 (test fixed-timestep-run-loop
+  ;; The updates keep pace with the time that actually passed (a step each 0.01 s, within
+  ;; two), however slow the machine is: :max-steps is high, so no frame is capped (the
+  ;; next test caps them), and the loop runs for at least 12 frames and 0.3 s.
   (is (string= "[true true true true]"
                (pr (ev "(ns t.loop (:require [skein.game :as game] [skein.time :as t]))
                         (let [updates (atom 0) renders (atom 0) alphas (atom []) frames (atom 0)
-                              start (t/now)]
-                          (game/run-loop {:step 0.01
+                              start (t/now) end (atom nil)]
+                          (game/run-loop {:step 0.01 :max-steps 100000
                                           :frame (fn [] (swap! frames inc) (sleep 0.004))
                                           :update (fn [dt] (swap! updates inc))
                                           :render (fn [a] (swap! renders inc) (swap! alphas conj a))
-                                          :running? (fn [] (< (- (t/now) start) 0.3))})
-                          [(<= 15 @updates 35) (= @renders @frames)
-                           (every? #(and (<= 0 %) (< % 1)) @alphas) (> @frames 10)])"
+                                          :running? (fn []
+                                                      (or (< @frames 12)
+                                                          (< (- (t/now) start) 0.3)
+                                                          (do (reset! end (t/now)) false)))})
+                          (let [expected (int (/ (- @end start) 0.01))]
+                            [(<= (- expected 2) @updates (inc expected)) (= @renders @frames)
+                             (every? #(and (<= 0 %) (< % 1)) @alphas) (>= @frames 12)]))"
                        :namespace "user"))))
   ;; A long pause (here a slow frame) runs at most :max-steps updates per frame.
   (is (string= "true"
