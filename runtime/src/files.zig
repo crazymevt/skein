@@ -162,7 +162,14 @@ const Stream = struct {
     /// A pipe (a process's stdin, stdout or stderr, D-103): read and written in sequence,
     /// with no offset.
     pipe: bool = false,
+    /// A pipe whose descriptor is closed already: at its end, or a program's stdin once
+    /// the program has ended. Reads give the end; writes fail; close frees the rest.
+    released: bool = false,
+    /// Which stream it is, as its handle (a table slot, reused once closed) can't say.
+    serial: u64 = 0,
 };
+
+var serials = std.atomic.Value(u64).init(1);
 
 var lock: platform.Mutex = .{};
 var table: std.ArrayList(?*Stream) = .empty;
@@ -205,14 +212,17 @@ fn open(path: Value, mode: Value) Value {
     return register(s);
 }
 
-/// A stream handle for a process's pipe (process.zig, D-103), which the stream now owns.
-pub fn registerPipe(file: std.Io.File) Value {
+/// A stream handle for a process's pipe (process.zig, D-103), which the stream now owns,
+/// and its serial number, for releasePipe.
+pub fn registerPipe(file: std.Io.File) struct { Value, u64 } {
     const s = alloc.create(Stream) catch rt.fatal("out of memory", .{});
     s.* = .{ .file = file, .offset = 0, .pipe = true };
-    return register(s);
+    const h = register(s);
+    return .{ h, s.serial };
 }
 
 fn register(s: *Stream) Value {
+    s.serial = serials.fetchAdd(1, .monotonic);
     lock.lock();
     defer lock.unlock();
     for (table.items, 0..) |slot, i| {
@@ -235,12 +245,43 @@ fn fillBlocking(arg: ?*anyopaque) void {
         // A pipe's end, when the program closes its side, is the end of the stream.
         if (err != error.EndOfStream) s.failed = true;
         s.eof = true;
+        releaseBlocking(s);
         return;
     };
     s.start = 0;
     s.end = n;
     s.offset += n;
-    if (n == 0) s.eof = true;
+    if (n == 0) {
+        s.eof = true;
+        releaseBlocking(s);
+    }
+}
+
+/// At a pipe's end, close its descriptor at once rather than when the stream is closed:
+/// so a program's output that is read to its end holds no descriptor.
+fn releaseBlocking(s: *Stream) void {
+    if (!s.pipe or s.released) return;
+    s.file.close(io.stdIo());
+    s.released = true;
+}
+
+/// Release the pipe stream `h` if it is still the stream `serial` (a program's stdin once
+/// the program has ended, process.zig): what it holds unwritten is dropped, and writes
+/// fail from now on. A stream closed meanwhile is left alone, whatever took its slot.
+pub fn releasePipe(h: Value, serial: u64) void {
+    lock.lock();
+    var found: ?*Stream = null;
+    if (h.isFixnum() and h.toFixnum() >= 1 and h.toFixnum() <= table.items.len)
+        found = table.items[@intCast(h.toFixnum() - 1)];
+    if (found) |s| if (s.serial != serial) {
+        found = null;
+    };
+    lock.unlock();
+    const s = found orelse return;
+    if (!s.pipe or s.released) return;
+    s.pending.clearRetainingCapacity();
+    s.eof = true;
+    releaseBlocking(s);
 }
 
 /// Refill an empty read buffer; false at the end of the file.
@@ -314,6 +355,11 @@ fn readInto(h: Value, array: Value, start: Value, n: Value) Value {
 
 fn flushBlocking(arg: ?*anyopaque) void {
     const s: *Stream = @ptrCast(@alignCast(arg));
+    if (s.released) {
+        // Its program has ended: nothing reads it.
+        s.failed = true;
+        return;
+    }
     // A pipe whose reader has gone fails (the runtime ignores SIGPIPE, process.zig).
     (if (s.pipe)
         s.file.writeStreamingAll(io.stdIo(), s.pending.items)
@@ -345,6 +391,7 @@ fn write(h: Value, data: Value, start: Value, end: Value) Value {
 
 fn closeBlocking(arg: ?*anyopaque) void {
     const s: *Stream = @ptrCast(@alignCast(arg));
+    if (s.released) return;
     if (s.pending.items.len > 0) flushBlocking(s);
     s.file.close(io.stdIo());
 }

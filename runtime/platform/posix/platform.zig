@@ -414,8 +414,41 @@ pub fn startedProcess(child: *std.process.Child) ?*anyopaque {
     return null;
 }
 
-pub fn releaseProcessJob(job: ?*anyopaque) void {
-    _ = job;
+// waitid's constants, the same values from macOS's and Linux's headers.
+const P_PID: c_int = 1;
+const WEXITED: c_int = 4;
+const WNOWAIT: c_int = if (builtin.os.tag == .macos) 0x20 else 0x01000000;
+extern "c" fn waitid(idtype: c_int, id: c_uint, info: *[256]u8, options: c_int) c_int;
+
+/// Block until the program has ended, without collecting it: its pid stays its own, so
+/// a signal sent meanwhile can't reach another program.
+pub fn awaitExit(child: *std.process.Child) void {
+    var info: [256]u8 = undefined;
+    while (true) {
+        const rc = waitid(P_PID, @intCast(child.id.?), &info, WEXITED | WNOWAIT);
+        if (rc == 0 or posix.errno(rc) != .INTR) return;
+    }
+}
+
+/// Collect the ended program: its exit status, or the number of the signal that ended it.
+pub fn collectExit(child: *std.process.Child) i64 {
+    var status: c_int = 0;
+    while (true) {
+        const rc = c.waitpid(child.id.?, &status, 0);
+        if (rc >= 0 or posix.errno(rc) != .INTR) break;
+    }
+    child.id = null;
+    const s: u32 = @bitCast(status);
+    if (posix.W.IFEXITED(s)) return posix.W.EXITSTATUS(s);
+    if (posix.W.IFSIGNALED(s)) return @intFromEnum(posix.W.TERMSIG(s));
+    return -1;
+}
+
+/// Once the program has ended: release what signaling it needed; the job object (none on
+/// Unix) that is still needed, or null.
+pub fn afterExit(handle: ?*anyopaque, job: ?*anyopaque) ?*anyopaque {
+    _ = handle;
+    return job;
 }
 
 pub fn childProcessId(child: *const std.process.Child) i64 {

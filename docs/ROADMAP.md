@@ -507,7 +507,7 @@ Steps 4 and 5 wait for their first CI runs (GitHub Actions was down when they we
   1. ✅ The runtime: starting a program with pipes on Unix and Windows (in a job object), found on the `PATH`, with its directory and environment; its pipes as `skein.io` streams; waiting for it as a blocking call that parks the fiber; its pid and whether it's alive. Native tests with a small Skein program as the child, so they need nothing installed.
   2. ✅ `skein.process`: `process` with its options and redirections, `deref` with a timeout, `alive?`, `pid`, `destroy!`; DESIGN §21 and the docstrings.
   3. ✅ Signals and trees: `signal!` by intent and `destroy-tree!` on the three platforms (descendants from the process table on Unix, the job object on Windows; `:interrupt` not yet on Windows), tested with a child that starts children of its own.
-  4. Many at once: fibers that talk to several programs while others run, a stress test, and a check that nothing leaks (pipes, handles, zombies).
+  4. ✅ Many at once: fibers that talk to several programs while others run, a stress test, and a check that nothing leaks (pipes, handles, zombies).
 
 **Exit:** native tests on the three platforms start a program, talk to it over its stdin and stdout from fibers while others run, and stop a process tree.
 
@@ -590,6 +590,7 @@ Steps 4 and 5 wait for their first CI runs (GitHub Actions was down when they we
 ## Notes for later
 Ideas and follow-ups noticed during work, kept here so they don't derail the current milestone.
 
+- `skein.process` (D-103): output a program writes that is never read holds a pipe's descriptor until its stream is closed (stdin and output read to the end are released by themselves), and the process table keeps a small entry per program. Finalizers for runtime handles would let the GC release both, as `ffi/own` pointers are.
 - Windows: `skein.process`'s `:interrupt` needs Skein's own `CreateProcessW` spawn, with `CREATE_NEW_PROCESS_GROUP`, which Zig's spawn can't do (D-103); with Windows work (M2.16).
 - Programs can't read their own standard input through a public API: the REPL reads the terminal through `%stdin` and `%read-text`. `skein.io` could give stdin, stdout and stderr as streams (`*in*`, or `(io/stdin)`), which a child program of `skein.process` would want; the names need Jessie's OK (M3.1).
 

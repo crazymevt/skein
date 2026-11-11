@@ -54,8 +54,12 @@ const Proc = struct {
     handle: ?*anyopaque = null,
     /// Unused: programs stay in this program's process group (D-103's step 3).
     own_group: bool = false,
-    /// Its stdin, stdout and stderr as stream handles, or nil.
+    /// Whether its stdin pipe has been released, once it was seen to end.
+    stdin_released: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Its stdin, stdout and stderr as stream handles, or nil, and the streams' serial
+    /// numbers (files.zig).
     streams: [3]Value = .{ Value.nil, Value.nil, Value.nil },
+    serials: [3]u64 = .{ 0, 0, 0 },
 };
 
 var lock: platform.Mutex = .{};
@@ -232,10 +236,10 @@ fn start(argv: Value, dir: Value, env: Value, in: Value, out: Value, err: Value)
     p.job = platform.startedProcess(&p.child);
     p.handle = platform.childHandle(&p.child);
     // The streams own the pipes now: wait would close what it still holds.
-    if (p.child.stdin) |f| p.streams[0] = files.registerPipe(f);
-    if (p.child.stdout) |f| p.streams[1] = files.registerPipe(f);
-    if (call.merged) |f| p.streams[1] = files.registerPipe(f);
-    if (p.child.stderr) |f| p.streams[2] = files.registerPipe(f);
+    if (p.child.stdin) |f| p.streams[0], p.serials[0] = files.registerPipe(f);
+    if (p.child.stdout) |f| p.streams[1], p.serials[1] = files.registerPipe(f);
+    if (call.merged) |f| p.streams[1], p.serials[1] = files.registerPipe(f);
+    if (p.child.stderr) |f| p.streams[2], p.serials[2] = files.registerPipe(f);
     p.child.stdin = null;
     p.child.stdout = null;
     p.child.stderr = null;
@@ -252,14 +256,17 @@ fn reapEntry(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
 }
 
 /// The reaper: wait for the program to end, record how, and wake its waiters. A thread
-/// the runtime doesn't know, which touches no heap objects.
+/// the runtime doesn't know, which touches no heap objects. It collects the program, and
+/// releases its handles, under the lock that signal takes, after recording its end: so a
+/// signal reaches the program while it runs, or nothing, never a pid or handle reused.
 fn reap(p: *Proc) void {
-    const code: i64 = if (p.child.wait(io.stdIo())) |term| switch (term) {
-        .exited => |n| n,
-        .signal, .stopped => |sig| @intFromEnum(sig),
-        .unknown => |n| n,
-    } else |_| -1;
+    platform.awaitExit(&p.child);
+    lock.lock();
+    const code = platform.collectExit(&p.child);
     p.exit.store(code, .release);
+    p.job = platform.afterExit(p.handle, p.job);
+    p.handle = null;
+    lock.unlock();
     tasks.notifyFromAnyThread(p.key);
 }
 
@@ -271,11 +278,18 @@ fn ended(arg: ?*anyopaque) bool {
     return p.exit.load(.acquire) != running;
 }
 
+/// Once the program is seen to have ended, release its stdin pipe: nothing reads it, and
+/// a program that is waited for but never closed holds no descriptor.
+fn noteEnded(p: *Proc) void {
+    if (p.streams[0] != Value.nil and !p.stdin_released.swap(true, .acq_rel)) files.releasePipe(p.streams[0], p.serials[0]);
+}
+
 /// (%process-wait h seconds): the exit status once it ends, or nil if `seconds` (nil: no
 /// limit) pass first. A fiber parks meanwhile.
 fn waitFor(h: Value, seconds: Value) Value {
     const p = procOf(h);
     if (!ended(p) and !tasks.waitForKey(p.key, ended, p, seconds)) return Value.nil;
+    noteEnded(p);
     return Value.fromFixnum(p.exit.load(.acquire));
 }
 
@@ -286,15 +300,19 @@ fn signal(h: Value, kind: Value, tree: Value) Value {
     const p = procOf(h);
     if (!kind.isFixnum() or kind.toFixnum() < 0 or kind.toFixnum() > 2)
         rt.raise(.@"error", "%process-signal needs 0, 1 or 2, not {s}", .{readable(kind)});
-    // Once it has ended its pid may be another program's: the platform signals it alone
-    // only while it runs.
+    // Under the reaper's lock: it has recorded the end before it collects the program.
+    lock.lock();
+    defer lock.unlock();
     platform.signalProcess(p.pid, p.handle, p.job, @intCast(kind.toFixnum()), tree.isTruthy(), p.own_group, ended(p));
     return Value.nil;
 }
 
 fn exitOf(h: Value) Value {
-    const code = procOf(h).exit.load(.acquire);
-    return if (code == running) Value.nil else Value.fromFixnum(code);
+    const p = procOf(h);
+    const code = p.exit.load(.acquire);
+    if (code == running) return Value.nil;
+    noteEnded(p);
+    return Value.fromFixnum(code);
 }
 
 // ---------------------------------------------------------------------------------------

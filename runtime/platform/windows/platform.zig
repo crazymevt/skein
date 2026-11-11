@@ -417,8 +417,49 @@ pub fn startedProcess(child: *std.process.Child) ?*anyopaque {
     return job;
 }
 
-pub fn releaseProcessJob(job: ?*anyopaque) void {
-    if (job) |j| _ = CloseHandle(j);
+extern "kernel32" fn WaitForSingleObject(handle: *anyopaque, milliseconds: u32) callconv(.winapi) u32;
+extern "kernel32" fn GetExitCodeProcess(process: *anyopaque, code: *u32) callconv(.winapi) i32;
+extern "kernel32" fn QueryInformationJobObject(job: *anyopaque, class: c_int, info: *anyopaque, length: u32, returned: ?*u32) callconv(.winapi) i32;
+
+/// JOBOBJECT_BASIC_ACCOUNTING_INFORMATION.
+const JobAccounting = extern struct {
+    total_user_time: i64,
+    total_kernel_time: i64,
+    this_period_user_time: i64,
+    this_period_kernel_time: i64,
+    page_faults: u32,
+    total_processes: u32,
+    active_processes: u32,
+    terminated_processes: u32,
+};
+
+/// Block until the program has ended.
+pub fn awaitExit(child: *std.process.Child) void {
+    _ = WaitForSingleObject(child.id.?, 0xFFFFFFFF); // INFINITE
+}
+
+/// Collect the ended program: its exit code; its process and thread handles are closed.
+pub fn collectExit(child: *std.process.Child) i64 {
+    var code: u32 = 0;
+    _ = GetExitCodeProcess(child.id.?, &code);
+    _ = CloseHandle(child.id.?);
+    _ = CloseHandle(child.thread_handle);
+    child.id = null;
+    return code;
+}
+
+/// Once the program has ended: close the handle that signaled it, and its job object
+/// unless programs it started still run in it (destroy-tree! can reach them then). The
+/// job still needed, or null.
+pub fn afterExit(handle: ?*anyopaque, job: ?*anyopaque) ?*anyopaque {
+    if (handle) |h| _ = CloseHandle(h);
+    const j = job orelse return null;
+    var info: JobAccounting = undefined;
+    if (QueryInformationJobObject(j, 1, &info, @sizeOf(JobAccounting), null) != 0 and info.active_processes == 0) {
+        _ = CloseHandle(j);
+        return null;
+    }
+    return j;
 }
 
 pub fn childProcessId(child: *const std.process.Child) i64 {

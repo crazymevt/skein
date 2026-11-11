@@ -11,7 +11,10 @@ or :extra-env, added to this program's; and :in, :out and :err, each :pipe (the 
 :inherit, :discard or {:file path} ({:file path :append true} for :out and :err). A
 string :in is text written to the program's stdin, which is then closed, and :err :out
 sends the error output where the output goes. Programs are found on the PATH and run
-without a shell. Native only."
+without a shell. Native only.
+A pipe holds a descriptor until it is read to its end or closed, and a program's stdin
+until the program is seen to end (@p): close the output you don't read, with with-open,
+or don't pipe it (:discard, :inherit)."
   (:require [skein.io :as io]
             [skein.system :as system]))
 

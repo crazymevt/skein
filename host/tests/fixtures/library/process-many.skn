@@ -1,0 +1,68 @@
+;; skein.process with many programs (M3.1 step 4, D-103), natively: fibers that talk to
+;; several programs at once while another runs, many programs one after another, and no
+;; descriptors left behind (a pipe read to its end is released; so is a program's stdin
+;; once it has ended).
+(ns process-many
+  (:require [skein.process :as process :refer [process]]
+            [skein.system :as system]
+            [skein.io :as io]
+            [skein.string :as string]))
+
+(defn- self [mode] [(%executable-path) mode])
+
+(defn- child [mode]
+  (case mode
+    ;; Each line back with its length.
+    "echo" (let [in (%stdin)]
+             (loop [pending ""]
+               (if-let [text (%read-text in)]
+                 (let [s (str pending text)
+                       parts (string/split s "\n" (inc (count s)))]
+                   (doseq [line (butlast parts)] (println (str line " " (count line))))
+                   (recur (last parts)))
+                 (when (seq pending) (println (str pending " " (count pending)))))))
+    "quick" nil))
+
+(defn- open-descriptors
+  "How many descriptors this program has open, or nil where that can't be seen."
+  []
+  (case (system/os)
+    :macos (count (io/list-dir "/dev/fd"))
+    :linux (count (io/list-dir "/proc/self/fd"))
+    nil))
+
+(defn- talk
+  "Start an echo program, send it lines, read them back."
+  [n]
+  (let [p (process (self "echo"))
+        lines (for [i (range 3)] (str "fiber-" n "-line-" i))]
+    (doseq [line lines] (io/write (:in p) (str line "\n")))
+    (close (:in p))
+    (let [back (vec (io/line-seq (:out p)))]
+      (io/read-text (:err p))
+      [(:exit @p) (= back (mapv (fn [l] (str l " " (count l))) lines))])))
+
+(defn- parent []
+  (let [before (open-descriptors)
+        ticks (atom 0)
+        ticking (atom true)
+        counter (future (while @ticking (swap! ticks inc) (sleep 0.005)))]
+    ;; 20 fibers, each talking to 10 programs one after another: 200 in all.
+    (let [results (mapv deref (mapv (fn [n] (future (mapv (fn [_] (talk n)) (range 10))))
+                                    (range 20)))
+          all (apply concat results)]
+      (println "programs:" (count all))
+      (println "all echoed and ended well:" (every? (fn [[exit ok]] (and (= 0 exit) ok)) all)))
+    (reset! ticking false)
+    @counter
+    (println "the counter ran meanwhile:" (pos? @ticks))
+    ;; 300 quick ones in a row, their output discarded and nothing closed by hand.
+    (println "in a row:" (count (filter (fn [_] (= 0 (:exit @(process (self "quick")
+                                                                        {:out :discard
+                                                                         :err :discard}))))
+                                        (range 300))))
+    (let [after (open-descriptors)]
+      (println "no descriptors left behind:" (or (nil? before) (<= after (+ before 1)))))))
+
+(defn -main [& args]
+  (if (seq args) (child (first args)) (parent)))
