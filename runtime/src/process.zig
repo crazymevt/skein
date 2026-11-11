@@ -236,10 +236,16 @@ fn start(argv: Value, dir: Value, env: Value, in: Value, out: Value, err: Value)
     p.child.stdin = null;
     p.child.stdout = null;
     p.child.stderr = null;
-    const reaper = std.Thread.spawn(.{ .stack_size = 256 << 10 }, reap, .{p}) catch
+    // A detached thread of the platform's (Zig's Thread.detach panics on Linux when the
+    // thread has already ended, as a reaper of a quick program can have).
+    if (!platform.spawnThread(reapEntry, p, 256 << 10))
         rt.fatal("cannot start a thread to wait for a program", .{});
-    reaper.detach();
     return register(p);
+}
+
+fn reapEntry(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
+    reap(@ptrCast(@alignCast(arg)));
+    return null;
 }
 
 /// The reaper: wait for the program to end, record how, and wake its waiters. A thread
