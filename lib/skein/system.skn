@@ -1,0 +1,14 @@
+(ns skein.system
+  "Facts about the system the program runs on (DESIGN §21, D-098):
+  (os)  :macos, :linux or :windows")
+
+(defn os
+  "The operating system the program runs on: :macos, :linux or :windows, the keys
+deflibrary takes."
+  []
+  (let [t (%host-target)
+        ends? (fn [suffix] (and (>= (count t) (count suffix))
+                                (= suffix (subs t (- (count t) (count suffix))))))]
+    (cond (ends? "-macos") :macos
+          (ends? "-windows-gnu") :windows
+          :else :linux)))

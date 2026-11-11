@@ -964,6 +964,7 @@ As built (M2.11, D-093): `(deftest name body...)` defines a function of no argum
 | `skein.io` | files, paths, streams, bytes | 0 |
 | `skein.time` | monotonic clocks, sleep, frame timers | 0 |
 | `skein.log` | leveled logging | 0 |
+| `skein.system` | the system the program runs on: `(os)` is `:macos`, `:linux` or `:windows` (D-098) | 2 (M2.14) |
 | `skein.test` | testing | 0 |
 | `skein.repl` | REPL helpers, inspector | 0 |
 | `skein.game` | game loop, fixed timestep, restarts, input mapping | 0 (demo) |
@@ -980,6 +981,7 @@ Phase 0 status (D-040):
   - `(run-process [program arg ...])` and `(run-process [program arg ...] {:dir path})` run a program directly, without a shell, wait for it, and return `{:exit code :out stdout :err stderr}`.
   - Failures signal `skein.io/io-error`, whose `path` is the file or program: a missing or unreadable file, one that can't be written, or a program that can't be started. A program that exits with a failure status is not an error.
   - `(resource-dir)` returns the directory holding the program's assets (`project.skn`'s `:assets`), ending with `/`: natively the executable's directory, or a macOS app's `Contents/Resources`; run from source, the nearest directory at or above the main file with a `project.skn`, else the main file's directory (D-073). Read an asset with `(read-file (str (resource-dir) "assets/level1.txt"))`.
+  - `(os)` returns the operating system the program runs on, `:macos`, `:linux` or `:windows`, the keys `deflibrary` takes (M2.14, for skein-ui's shortcuts).
 - **`skein.io` and `skein.log` in M2.11 (D-093):**
   - Paths are strings; the path functions take `/` and `\` as separators on every platform and join with `/`, which every OS accepts: `(path "assets" "level1.txt")`, `file-name`, `parent` (nil if there is none), `extension` (without the dot; nil for `.gitignore`), `absolute?`, `absolute-path`.
   - Files and directories: `file?`, `directory?`, `file-size`, `modified-time` (milliseconds since 1970), `list-dir` (names, sorted), `make-dirs`, `delete` (a file or an empty directory), `delete-tree`, `copy-file`, `rename`, `append-file`, and whole files as bytes, `read-bytes` (a `u8` array) and `write-bytes` (a `u8` array, a byte view or a string).

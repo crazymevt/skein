@@ -1,0 +1,11 @@
+(ns system
+  (:require [skein.test :refer [deftest is run-tests]]
+            [skein.system :as system]))
+
+;; skein.system (D-098), natively, compared with system.expected.
+
+(deftest os
+  (is (contains? #{:macos :linux :windows} (system/os)))
+  (is (identical? (system/os) (system/os))))
+
+(prn (select-keys (run-tests 'system) [:test :fail :error]))

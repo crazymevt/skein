@@ -1323,3 +1323,10 @@ Date: 2026-11-11 · Status: Accepted
   - **Windows** hold one widget, as frames do (`content`, `set-content!`); a window's `:width` and `:height` are its content area's, `nil` until `show!` fits them to the content.
   - **Backends report the user's changes** through `changed-by-user!`, `toggled-by-user!` (which turns the rest of a radio group off), `chosen-by-user!` and `resized-by-user!`: each stores the value without sending it back, then emits the event. A program's own `set-slot!` emits nothing.
   - `add!` is a generic function, so grids, frames and windows check or place a child in `:before` methods. Images are `image` objects from a file (`image-from-file`, whose size the backend reads) or RGBA bytes (`image-from-pixels`). Numbers in a range are stored as given, not converted to floats as LGT does.
+
+## D-098: `skein.system`, and the operating system a program runs on
+Date: 2026-11-11 · Status: Accepted
+- **Context:** skein-ui (M2.14, D-097) needs to know the operating system: a menu shortcut's "Primary" modifier is Command on macOS and Control elsewhere. Games need it too, for paths and key names. Skein had no public way to ask; the runtime only knew its own target triple (`%host-target`, for the native compiler).
+- **Decision** (Jessie's): a new namespace, `skein.system`, for facts about the system a program runs on. Its first function is `(system/os)`, which returns `:macos`, `:linux` or `:windows`, the keys `deflibrary` takes. It reads the target the runtime was built for, natively and on the Phase 0 host.
+- **Alternatives:** `skein.io/os` (the first draft; io is about files and streams); `skein.os` with `(os/name)`; `skein.platform`.
+- **Consequences:** `skein.system` is where environment variables, exiting, the CPU count and the home directory go when programs need them.
