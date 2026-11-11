@@ -187,7 +187,9 @@ pub const GcBits = packed struct(u8) {
 
 pub const Flags = packed struct(u8) {
     hash_cached: bool = false,
-    _: u7 = 0,
+    /// The last value slot holds a metadata map (M2.11, D-093; coll.withMeta).
+    has_meta: bool = false,
+    _: u6 = 0,
 };
 
 pub const max_len = std.math.maxInt(u24);

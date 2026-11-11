@@ -817,7 +817,7 @@ const base_table = [_]Entry{
             if (a.len == 0) return coll.empty_vector;
             var c = a[0];
             for (a[1..]) |x| c = conj1(c, x);
-            return c;
+            return coll.keepMeta(a[0], c);
         }
     }.f),
     e("assoc", 3, null, struct {
@@ -826,7 +826,7 @@ const base_table = [_]Entry{
             var c = a[0];
             var i: usize = 1;
             while (i < a.len) : (i += 2) c = assoc1(c, a[i], a[i + 1]);
-            return c;
+            return coll.keepMeta(a[0], c);
         }
     }.f),
     e("dissoc", 1, null, struct {
@@ -835,7 +835,7 @@ const base_table = [_]Entry{
             if (c == Value.nil) return c;
             if (!coll.isMap(c)) badArg("dissoc", c);
             for (a[1..]) |k| c = coll.mapDissoc(c, k);
-            return c;
+            return coll.keepMeta(a[0], c);
         }
     }.f),
     e("disj", 1, null, struct {
@@ -844,7 +844,7 @@ const base_table = [_]Entry{
             if (c == Value.nil) return c;
             if (!coll.isSet(c)) badArg("disj", c);
             for (a[1..]) |x| c = coll.setDisj(c, x);
-            return c;
+            return coll.keepMeta(a[0], c);
         }
     }.f),
     e("get", 2, 3, struct {
@@ -946,8 +946,8 @@ const base_table = [_]Entry{
     e("pop", 1, 1, struct {
         fn f(a: Args) Value {
             const c = a[0];
-            if (coll.isVector(c)) return coll.vectorPop(c);
-            if (c.isObjectOf(.list)) return coll.get(c, 1);
+            if (coll.isVector(c)) return coll.keepMeta(c, coll.vectorPop(c));
+            if (c.isObjectOf(.list)) return coll.keepMeta(c, coll.get(c, 1));
             if (c == Value.nil) return Value.nil;
             if (c.isObjectOf(.empty_list)) rt.raise(.@"error", "cannot pop an empty list", .{});
             badArg("pop", c);
@@ -1341,6 +1341,19 @@ const base_table = [_]Entry{
             return swapVals(a, "swap-vals!");
         }
     }.f),
+    // Metadata (M2.11, D-093)
+    e("meta", 1, 1, struct {
+        fn f(a: Args) Value {
+            return coll.metaOf(a[0]);
+        }
+    }.f),
+    e("with-meta", 2, 2, struct {
+        fn f(a: Args) Value {
+            if (!coll.canHaveMeta(a[0])) rt.raise(.type_error, "with-meta needs a vector, list, map, set or symbol, not {s}", .{typeName(a[0])});
+            if (a[1] != Value.nil and !coll.isMap(a[1])) rt.raise(.type_error, "metadata must be a map or nil, not {s}", .{typeName(a[1])});
+            return coll.withMeta(a[0], a[1]);
+        }
+    }.f),
     // Sorted maps and sets (M2.11, D-093; sorted.zig)
     e("sorted-map", 0, null, struct {
         fn f(a: Args) Value {
@@ -1591,6 +1604,30 @@ const base_table = [_]Entry{
         }
     }.f),
     e("condition?", 1, 1, pred(cond.isCondition)),
+    // ex-info (M2.11, D-093)
+    e("ex-info", 2, 3, struct {
+        fn f(a: Args) Value {
+            return cond.exInfo(a[0], a[1], if (a.len == 3) a[2] else Value.nil);
+        }
+    }.f),
+    e("ex-data", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!cond.isCondition(a[0]) or !cond.isA(a[0], cond.builtinType(.ex_info))) return Value.nil;
+            return cond.slotValue(a[0], "data") orelse Value.nil;
+        }
+    }.f),
+    e("ex-cause", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!cond.isCondition(a[0])) return Value.nil;
+            return cond.slotValue(a[0], "cause") orelse Value.nil;
+        }
+    }.f),
+    e("ex-message", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!cond.isCondition(a[0])) return Value.nil;
+            return cond.messageOf(a[0]);
+        }
+    }.f),
     e("error?", 1, 1, pred(struct {
         fn t(v: Value) bool {
             return cond.isCondition(v) and cond.isA(v, cond.builtinType(.@"error"));

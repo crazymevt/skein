@@ -11,7 +11,9 @@
     [:a "b" \c] (read-string " [:a \"b\" \\c]")
     {:k 'sym} (read-string "{:k sym}")
     :read-eval/here (read-string "::here")
-    42 (eval (read-string "(* 6 7)")))
+    42 (eval (read-string "(* 6 7)"))
+    {:a true} (meta (read-string "^:a [1]"))
+    {:b true} (meta (eval (read-string "'^:b [1]"))))
   (is (thrown? error (read-string "")))
   (is (thrown? error (read-string 5))))
 

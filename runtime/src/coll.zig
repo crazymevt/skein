@@ -627,6 +627,51 @@ fn nodeEach(node: Value, ctx: anytype, comptime f: fn (@TypeOf(ctx), Value, Valu
 }
 
 // ---------------------------------------------------------------------------------------
+// Metadata (M2.11, D-093): vectors, lists, maps, sets and symbols may carry a map, in a
+// slot after their own, flagged in the header. Equality and hashing never look at it.
+
+pub fn canHaveMeta(v: Value) bool {
+    if (!v.isObject()) return false;
+    return switch (v.toObject().type_id) {
+        .vector, .list, .empty_list, .array_map, .hash_map, .hash_set, .sorted_map, .sorted_set, .symbol => true,
+        else => false,
+    };
+}
+
+/// v's metadata map, or nil.
+pub fn metaOf(v: Value) Value {
+    if (!v.isObject()) return Value.nil;
+    const h = v.toObject();
+    if (!h.flags.has_meta) return Value.nil;
+    const s = h.valueSlots();
+    return s[s.len - 1];
+}
+
+/// A copy of v with the metadata m (nil: none). v must be able to carry metadata.
+pub fn withMeta(v: Value, m: Value) Value {
+    const h = v.toObject();
+    const s = h.valueSlots();
+    const base = if (h.flags.has_meta) s.len - 1 else s.len;
+    if (m == Value.nil and !h.flags.has_meta) return v;
+    const n = rt.alloc(h.type_id, base + @intFromBool(m != Value.nil));
+    @memcpy(n.valueSlots()[0..base], s[0..base]);
+    n.flags.hash_cached = h.flags.hash_cached;
+    if (m != Value.nil) {
+        n.valueSlots()[base] = m;
+        n.flags.has_meta = true;
+    }
+    return Value.fromObject(n);
+}
+
+/// `new`, made from `old` by conj, assoc and the like, with old's metadata (as Clojure's
+/// collection functions keep it).
+pub fn keepMeta(old: Value, new: Value) Value {
+    if (new == old or !old.isObject() or !old.toObject().flags.has_meta) return new;
+    if (!canHaveMeta(new) or metaOf(new) != Value.nil) return new;
+    return withMeta(new, metaOf(old));
+}
+
+// ---------------------------------------------------------------------------------------
 // Persistent maps
 
 pub fn isMap(v: Value) bool {

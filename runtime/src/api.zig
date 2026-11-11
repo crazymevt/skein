@@ -204,6 +204,11 @@ export fn sk_set_of(count: usize, items: [*]const Value) Value {
     return coll.setOf(items[0..count]);
 }
 
+/// `v` with the metadata map `m` (quoted data, M2.11, D-093).
+export fn sk_with_meta(v: Value, m: Value) Value {
+    return coll.withMeta(v, m);
+}
+
 /// The rest parameter's value: a list of the arguments from `from` on, or nil.
 export fn sk_rest_list(argc: u32, argv: [*]const Value, from: u32) Value {
     if (argc <= from) return Value.nil;

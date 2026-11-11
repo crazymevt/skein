@@ -395,7 +395,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   3. ✅ `skein.core`'s macros and seq and function helpers: `cond->` ... `with-out-str`, `partition-by` ... `distinct?`, `some-fn` ... `min-key`.
   4. ✅ Numbers and printing: parsing, predicates, `hash`, `random-uuid`, the `bit-` operations, `format`, `prn-str`, `print-str`, `read-string`, `slurp`, `spit`, and `*print-length*`.
   5. ✅ References and collections: `delay`/`force`, `promise`/`deliver`, `volatile!`, watches and validators on atoms and refs, `swap-vals!`, `reset-vals!`, and sorted maps and sets (randomized tests against a model).
-  6. Metadata on collections and symbols, and `ex-info`, `ex-data` and `ex-message`.
+  6. ✅ Metadata on collections and symbols, and `ex-info`, `ex-data` and `ex-message`.
   7. `skein.io` (directories, paths, bytes, streams) and `skein.log`.
   8. Docstrings and argument lists for the runtime's Zig functions, which `--eval` builds register for SLIME and describe.
 

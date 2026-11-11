@@ -110,10 +110,12 @@ to the result."
 
 (defn- into-coll [to from xform]
   (if (and (or (vector? to) (map? to) (set? to)) (not (sorted? to)))
-    (let [rf (fn ([] (transient to)) ([acc] acc) ([acc x] (conj! acc x)))]
-      (persistent! (if xform
-                     (transduce xform rf (transient to) from)
-                     (reduce rf (transient to) from))))
+    (let [rf (fn ([] (transient to)) ([acc] acc) ([acc x] (conj! acc x)))
+          result (persistent! (if xform
+                                (transduce xform rf (transient to) from)
+                                (reduce rf (transient to) from)))]
+      ;; Transients drop metadata; into keeps to's (M2.11).
+      (if (meta to) (with-meta result (meta to)) result))
     (let [rf (fn ([] to) ([acc] acc) ([acc x] (conj acc x)))]
       (if xform (transduce xform rf to from) (reduce rf to from)))))
 
@@ -639,12 +641,14 @@ dropped."
 (defn empty
   "An empty collection of the same kind, or nil."
   [coll]
-  (cond (vector? coll) []
-        (sorted? coll) (%sorted-empty coll)
-        (map? coll) {}
-        (set? coll) #{}
-        (seq? coll) '()
-        :else nil))
+  (let [e (cond (vector? coll) []
+                (sorted? coll) (%sorted-empty coll)
+                (map? coll) {}
+                (set? coll) #{}
+                (seq? coll) '()
+                :else nil)]
+    ;; It keeps coll's metadata (M2.11).
+    (if (and e (meta coll)) (with-meta e (meta coll)) e)))
 
 (defn not-empty "coll, or nil if it is empty." [coll] (when (seq coll) coll))
 
@@ -948,6 +952,11 @@ mutual recursion without growing the stack."
 
 ;;; ------------------------------------------------------------------------------------
 ;;; References (step 5 of M2.11, D-093)
+
+(defn vary-meta
+  "x with the metadata (apply f (meta x) args)."
+  [x f & args]
+  (with-meta x (apply f (meta x) args)))
 
 (defn- sorted-key
   "The key of an element of the seq of the sorted map or set sc."

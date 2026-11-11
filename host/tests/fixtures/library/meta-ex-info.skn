@@ -1,0 +1,79 @@
+(ns meta-ex-info
+  (:require [skein.test :refer [deftest is are testing run-tests]]))
+
+;; Metadata and ex-info of M2.11 step 6 (D-093), natively, compared with
+;; meta-ex-info.expected.
+
+(deftest metadata
+  (let [v (with-meta [1 2] {:a 1})]
+    (are [x y] (= x y)
+      {:a 1} (meta v)
+      [1 2] v
+      true (= v [1 2])
+      true (= (hash v) (hash [1 2]))
+      nil (meta [1 2])
+      {:a 1} (meta (conj v 3))
+      {:a 1} (meta (assoc v 0 :x))
+      {:a 1} (meta (pop v))
+      {:a 1} (meta (into v [3 4]))
+      {:a 1} (meta (empty v))
+      {:a 2} (meta (vary-meta v update :a inc))
+      {:a 1 :b 2} (meta (vary-meta v assoc :b 2))
+      nil (meta (with-meta v nil))
+      nil (meta (seq v))
+      "[1 2]" (pr-str v)))
+  (testing "maps, sets, lists and symbols"
+    (are [x y] (= x y)
+      {:m true} (meta (with-meta {:k 1} {:m true}))
+      {:m true} (meta (assoc (with-meta {:k 1} {:m true}) :j 2))
+      {:m true} (meta (dissoc (with-meta {:k 1 :j 2} {:m true}) :j))
+      {:s true} (meta (conj (with-meta #{1} {:s true}) 2))
+      {:s true} (meta (disj (with-meta #{1 2} {:s true}) 2))
+      {:l true} (meta (with-meta '(1 2) {:l true}))
+      {:l true} (meta (conj (with-meta '(1 2) {:l true}) 0))
+      {:l true} (meta (with-meta '() {:l true}))
+      {:sym 1} (meta (with-meta 'x {:sym 1}))
+      'x (with-meta 'x {:sym 1})
+      true (= {(with-meta 'x {:a 1}) 1} {'x 1})
+      {:o true} (meta (assoc (with-meta (sorted-map 1 2) {:o true}) 3 4))
+      true (sorted? (assoc (with-meta (sorted-map 1 2) {:o true}) 3 4))))
+  (testing "quoted data keeps the reader's metadata"
+    (are [x y] (= x y)
+      {:tag 'f64} (meta '^f64 [1.0])
+      {:private true} (meta '^:private sym)
+      {:a 1 :b true} (meta '^{:a 1} ^:b {:k :v})
+      {:inner true} (meta (first '[^:inner (1 2)]))
+      nil (meta '[1 2])))
+  (is (thrown? error (with-meta 5 {})))
+  (is (thrown? error (with-meta (fn [] 1) {})))
+  (is (thrown? error (with-meta [] 5))))
+
+(deftest ex-infos
+  (let [e (ex-info "bad input" {:field :name})]
+    (are [x y] (= x y)
+      "bad input" (ex-message e)
+      {:field :name} (ex-data e)
+      {:field :name} (:data e)
+      nil (ex-cause e)
+      true (error? e)
+      nil (ex-data (make-condition 'type-error))
+      nil (ex-data 5)
+      nil (ex-message 5)))
+  (testing "signaled and caught"
+    (is (= {:id 7}
+           (try (error (ex-info "not found" {:id 7}))
+                (catch ex-info e (ex-data e)))))
+    (is (= "not found"
+           (try (error (ex-info "not found" {:id 7}))
+                (catch error e (ex-message e)))))
+    (is (= [:handled {:n 1}]
+           (handler-case (error (ex-info "x" {:n 1}))
+             (ex-info [c] [:handled (ex-data c)])))))
+  (testing "a cause"
+    (let [cause (make-condition 'type-error)
+          e (ex-info "wrapped" {} cause)]
+      (is (identical? cause (ex-cause e)))))
+  (is (thrown-with-msg? error "map of data" (ex-info "x" 5)))
+  (is (thrown-with-msg? error "message string" (ex-info :x {}))))
+
+(prn (select-keys (run-tests 'meta-ex-info) [:test :fail :error]))

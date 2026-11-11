@@ -221,17 +221,21 @@ compile-error, or nil when error? is false."
 (def ^:private core-head?)
 
 (defn syntax-value
-  "The runtime value that syntax denotes when quoted. Metadata is dropped. (Also how the
-driver reads project.skn as data.)"
+  "The runtime value that syntax denotes when quoted, with the metadata the reader gave a
+collection or symbol (M2.11, D-093). (Also how the driver reads project.skn as data.)"
   [syntax]
   (let [d (items syntax)
-        children (fn [] (mapv syntax-value d))]
-    (case (:kind syntax)
-      :atom d
-      :list (apply list (children))
-      :vector (children)
-      :map (apply hash-map (children))
-      :set (apply hash-set (children)))))
+        children (fn [] (mapv syntax-value d))
+        value (case (:kind syntax)
+                :atom d
+                :list (apply list (children))
+                :vector (children)
+                :map (apply hash-map (children))
+                :set (apply hash-set (children)))
+        m (:meta syntax)]
+    (if (and m (or (coll? value) (symbol? value)))
+      (with-meta value (syntax-value m))
+      value)))
 
 (defn- analyze-collection
   "A vector, map or set literal: built now if every element is a constant, else a call to
@@ -874,12 +878,16 @@ has its own x# names."
 syntax; anything new gets location."
   [x location origins]
   (or (when origins (%identity-get origins x))
-      (let [children (fn [xs] (mapv (fn [y] (data-to-syntax y location origins)) xs))]
-        (cond (vector? x) {:kind :vector :datum (children x) :loc location}
-              (map? x) {:kind :map :datum (children (mapcat identity (seq x))) :loc location}
-              (set? x) {:kind :set :datum (children (seq x)) :loc location}
-              (sequential? x) {:kind :list :datum (children (seq x)) :loc location}
-              :else {:kind :atom :datum x :loc location}))))
+      (let [children (fn [xs] (mapv (fn [y] (data-to-syntax y location origins)) xs))
+            syntax (cond (vector? x) {:kind :vector :datum (children x) :loc location}
+                         (map? x) {:kind :map :datum (children (mapcat identity (seq x)))
+                                   :loc location}
+                         (set? x) {:kind :set :datum (children (seq x)) :loc location}
+                         (sequential? x) {:kind :list :datum (children (seq x)) :loc location}
+                         :else {:kind :atom :datum x :loc location})
+            m (when (or (coll? x) (symbol? x)) (meta x))]
+        ;; Metadata becomes the syntax's, as the reader's ^ gives it (M2.11, D-093).
+        (if m (assoc syntax :meta (data-to-syntax m location origins)) syntax))))
 
 (defn- env-to-data
   "&env for a macro: a map from each local's name (a symbol) to true."

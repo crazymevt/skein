@@ -246,6 +246,9 @@ pub const Builtin = enum {
     task_cancelled_error,
     // A fiber ran out of stack (M2.2, D-024).
     stack_overflow,
+    // (ex-info message data): an error carrying a map (M2.11, D-093). Its slots are data
+    // and cause.
+    ex_info,
 
     fn parent(b: Builtin) ?Builtin {
         return switch (b) {
@@ -337,7 +340,11 @@ pub fn ensureBuiltins() void {
             coll.vectorOf(&.{builtin_types[@intFromEnum(p)]})
         else
             coll.vectorOf(&.{});
-        const t = newType(Builtin.qualifiedName(b), parents, coll.vectorOf(&.{}), Value.nil, false);
+        const slots = if (b == .ex_info) coll.vectorOf(&.{
+            coll.vectorOf(&.{ names.symbol(null, "data"), Value.nil }),
+            coll.vectorOf(&.{ names.symbol(null, "cause"), Value.nil }),
+        }) else coll.vectorOf(&.{});
+        const t = newType(Builtin.qualifiedName(b), parents, slots, Value.nil, false);
         register(Builtin.qualifiedName(b), t);
         builtin_types[@intFromEnum(b)] = t;
     }
@@ -517,6 +524,15 @@ pub fn makeCondition(spec: Value, initargs: []const Value) Value {
     var ctx: Fill = .{ .initargs = initargs, .slots = coll.mapOf(&.{}) };
     eachSlot(t, &ctx, Fill.slot);
     return make(t, Value.nil, ctx.slots);
+}
+
+/// (ex-info message data cause?): an ex-info error.
+pub fn exInfo(message: Value, data: Value, cause: Value) Value {
+    if (!string.isString(message)) raise(.type_error, "ex-info needs a message string, not {s}", .{readable(message)});
+    if (!coll.isMap(data)) raise(.type_error, "ex-info needs a map of data, not {s}", .{readable(data)});
+    if (cause != Value.nil and !isCondition(cause)) raise(.type_error, "ex-info's cause must be a condition, not {s}", .{readable(cause)});
+    const slots = coll.mapOf(&.{ names.symbol(null, "data"), data, names.symbol(null, "cause"), cause });
+    return make(builtinType(.ex_info), message, slots);
 }
 
 /// The value of slot `name` of condition `c`, or null if it has none.
