@@ -43,8 +43,9 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.11 Standard library | ✅ |
 | M2.12 Package management | ✅ |
 | M2.13 FFI additions | ✅ |
-| M2.14 UI library | 🟨 |
+| M2.14 UI library | ✅ |
 | M2.15 Driftrock developed live, natively | ⬜ |
+| M2.16 skein-ui on Windows | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -272,7 +273,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Goal:** everything Phase 0 does for live development, natively: fibers on a work-stealing scheduler, a REPL and `skein dev` in the running native program, SLIME through a Swank server, supervisors, hot reload of compiled code and STM. At the end `./skein run`, `dev` and `repl` run on the native runtime, and SBCL only bootstraps the compiler (D-072).
 
-**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), the standard library (M2.11, D-089), package management (M2.12, D-085), the FFI additions and UI library that desktop apps need (M2.13–M2.14, D-090), and Driftrock developed live (M2.15).
+**Order (D-072):** the riskiest part first, as in Phase 1: fibers and the scheduler (M2.2–M2.4), on which the debugger and REPL depend. Then evaluating code in a native program and the REPL (M2.5–M2.7), supervisors (M2.8), hot reload of compiled code (M2.9), STM (M2.10), the standard library (M2.11, D-089), package management (M2.12, D-085), the FFI additions and UI library that desktop apps need (M2.13–M2.14, D-090), Driftrock developed live (M2.15), and skein-ui's Windows backend (M2.16, D-101), which waits for Jessie to work on Windows.
 
 **Rules for Phase 2**
 - Phase 1's rules still apply (Zig 0.17.1, C11 with `zig cc`, platform code only in `runtime/platform/<os>/`, the Core IR as the contract).
@@ -445,15 +446,29 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
      - ✅ G. Window state: saving and restoring a window's frame.
      - ✅ H. The web view (Jessie's: a program of Jessie's needs it): WKWebView on Cocoa, WebKitGTK 6.0 on GTK 4 (Linux only: Homebrew has no WebKitGTK), and WebView2 with the Win32 backend; loading URLs and HTML, running scripts, messages between the page and Skein, and navigation events.
      - ✅ I. The examples and the widget explorer, all of LGT's.
-  7. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
-  8. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
+  7. The Win32 backend and the demo moved to M2.16 (D-101).
 
-**Exit:** the core's tests pass on the headless backend on all three platforms, and one demo program (a window with a form, a list, a menu and a dialog) runs on Cocoa, Win32 and GTK 4 in skein-ui's CI (under Xvfb on Linux), and is changed live from SLIME.
+**Exit:** the core's tests pass on the headless backend on all three platforms, and the Cocoa and GTK 4 backends' tests and the examples' in skein-ui's CI (GTK under Xvfb on Linux). The demo on three backends moved to M2.16 with the Win32 backend (D-101).
 
 ### M2.15 Driftrock developed live, natively
 - Develop and debug Driftrock with native `skein dev` and SLIME: fix a crash in the debugger and resume, edit while playing, reload compiled code.
+- Settled (D-101): a task's debugger also offers the restarts of the fiber that spawned it, so a crash in one of Driftrock's jobs is fixed and resumed with `retry-frame` in one debugger; `run-loop` keeps the window alive while a frame waits in the debugger (`:paused`); the exit is scripted sessions in CI plus Jessie's own session with SLIME on her Mac.
+- Steps, in order (D-101):
+  1. Dependable CI for live development: an error in a task while another debug session is ending waits for the console instead of failing at once (`dev-task-errors-natively` fails now and then on Linux); why the live-edit check took 1.24 s on a macOS runner (its 1 s limit is M2.9's exit, changed only with Jessie's OK); retries for CI's apt installs.
+  2. Parent restarts: in a program with the debugger, a task of a nursery (`spawn`, `skein.jobs` graphs) offers, after its own restarts and before "Fail the task", the restarts that were active in its spawner when it was spawned, which the nursery keeps alive while the task runs, each reported with its fiber. Choosing one fails the task without a second debugger in the spawner, and the spawner invokes that restart once its nursery has ended. In the text REPL and SLDB; native dev fixtures and a Swank host test.
+  3. Paused frames: `run-loop`'s `:paused` (a function called about 60 times a second on the loop's thread while one of its calls waits in the debugger, in its own fiber or in a task it waits for); Driftrock pumps SDL's events in it and presents its last frame, dropping input. A native test, and a check by hand on macOS that the window doesn't show the spinning cursor.
+  4. The scripted session (`host/tools/live-debug.lisp`, on all three platforms in CI): Driftrock under native `skein dev` with `--autopilot`; a bug saved into one of its jobs crashes it; the debugger offers `retry-frame`; the fix is saved and runs compiled; `retry-frame` resumes the game, `:paused` having run meanwhile; the game finishes with no frame over budget after it resumed. M2.9's live edit stays as it is.
+  5. The same through SLIME in Linux CI (`editors/tests/driftrock-session.el`): SLDB for the crash, the fix with `C-c C-c`, `retry-frame`, and the game going on.
+  6. Jessie develops Driftrock live through SLIME on her Mac; what that finds is fixed here.
 
-**Exit:** Driftrock is developed live on the native runtime on all three platforms. Write `docs/PHASE2-RETRO.md` and update DESIGN.md.
+**Exit:** the scripted sessions pass in CI on all three platforms (through SLIME on Linux), and Jessie develops Driftrock live through SLIME on her Mac.
+
+### M2.16 skein-ui on Windows
+- M2.14's last steps (D-101), when Jessie works on Windows (a UTM virtual machine is set up). In skein-ui:
+  1. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs), and WebView2 for the web view.
+  2. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
+
+**Exit:** one demo program (a window with a form, a list, a menu and a dialog) runs on Cocoa, Win32 and GTK 4 in skein-ui's CI (under Xvfb on Linux), and is changed live from SLIME. Write `docs/PHASE2-RETRO.md` and update DESIGN.md.
 
 ## Phase 3: Optimization and polish (outline)
 Sealing; inlining across namespaces; escape analysis and arena inference; SIMD for `vec`/`mat`; optional LLVM backend; full hygienic macros; `skein fmt`; package registry; documentation site.
