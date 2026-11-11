@@ -567,10 +567,13 @@ function to call). Returns the executable's path."
                          :suffix (case os :macos ".dylib" :windows ".dll" ".so")}))
         c-source (translate-file path source-paths main-name (boolean (:eval opts)) module-info)
         ;; The cached C is named after the file and its path, so programs that share a file
-        ;; name (every main.skn) keep their own (D-073).
+        ;; name (every main.skn) keep their own (D-073), and after the build's target,
+        ;; profile and --eval, so builds of one file for different ones, which may run at
+        ;; once (the tests do), don't write the same file (D-101).
         c-file (if keep-c
                  (str (directory-of output) (stem output) ".c")
-                 (str home ".skein-cache/" (stem path) "-" (file-hash path) ".c"))]
+                 (str home ".skein-cache/" (stem path) "-" (file-hash path) "-"
+                      (or target "native") "-" profile (if (:eval opts) "-eval" "") ".c"))]
     (io/write-file c-file c-source)
     (let [def-file (when (and (:eval opts) (= os :windows))
                      (windows-exports! c-file (str prefix "include")))]
