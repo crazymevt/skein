@@ -535,6 +535,22 @@ the task again, at most :max-restarts times (3) within :within seconds (5), then
   [& body]
   `(%future (fn [] ~@body)))
 
+(defmacro dosync
+  "Run the body in a transaction (DESIGN §13.3, D-092) and return its value. Refs read in
+it are a consistent view, and alter, ref-set and commute change them all at once when it
+commits. A conflict with another transaction runs the body again, so it must have no side
+effects (io!). In a transaction already, the body joins it."
+  [& body]
+  `(%dosync (fn [] ~@body)))
+
+(defmacro io!
+  "Run the body, unless in a transaction (dosync), which could run it again: then signal
+an error."
+  [& body]
+  `(do (when (%in-transaction?)
+         (error "io! code can't run in a transaction (dosync): a retry would run it again"))
+       ~@body))
+
 (defmacro with-timeout
   "Run the body; if it is still running after seconds, its next cancellation point (a
 channel operation, sleep, deref, check-cancelled) signals timeout."

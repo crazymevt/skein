@@ -149,6 +149,9 @@ pub const TypeId = enum(u16) {
     /// enum), size, alignment, fields (vector of [name type offset]) or, for an enum, its
     /// values (map of keyword to integer), base type]; permanent.
     ctype = 52,
+    // M2.10's STM (D-092; stm.zig).
+    /// A ref: [value, version, lock, identity hash].
+    ref = 53,
     _,
 };
 

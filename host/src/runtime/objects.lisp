@@ -392,13 +392,17 @@ Returns the new value."
 ;;; ------------------------------------------------------------------------------------
 ;;; Classes by name, for defmethod specializers and make
 
+(defclass skein-ref () ()
+  (:documentation "The class of refs, which only native programs have (STM, D-092): methods
+can name it in Phase 0 too."))
+
 (defparameter *builtin-classes*
   '(("any" . t) ("object" . skein-object) ("nil-class" . null) ("integer" . integer)
     ("float" . float) ("f32" . single-float) ("f64" . double-float) ("number" . real)
     ("char" . character) ("string" . string) ("keyword" . kw) ("symbol" . sym)
     ("vector" . pvector) ("hash-map" . skein-map) ("hash-set" . hash-set)
     ("list" . skein-list) ("seq" . skein-seq) ("fn" . function) ("atom" . skein-atom)
-    ("condition" . condition) ("error" . error) ("warning" . warning))
+    ("ref" . skein-ref) ("condition" . condition) ("error" . error) ("warning" . warning))
   "Skein names for host classes that methods can specialize on (DESIGN §8.3).")
 
 (defun find-skein-class (x &optional (namespace-name (namespace-name *current-namespace*)))

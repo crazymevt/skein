@@ -1,0 +1,47 @@
+(ns basics)
+
+;; STM natively (M2.10 step 1, D-092), compared with basics.expected: refs, dosync, alter,
+;; ref-set, commute and ensure; what a transaction may not do; and a retry. Phase 0 has no
+;; STM, so this is native only.
+
+(defn message-of [thunk] (try (thunk) (catch error e (condition-message e))))
+
+(def a (ref 1))
+(def b (ref 10))
+(prn @a (ref? a) (ref? 1) (class-name (class-of a)) (pr-str a))
+
+;; A transaction's changes are seen inside it at once and outside it when it commits.
+(prn (dosync (alter a + 1) (ref-set b (* 2 @a)) [@a @b]) [@a @b])
+(prn (dosync (commute a inc) (commute a inc)) @a (dosync (ensure b)))
+
+;; A nested dosync joins the outer transaction.
+(prn (dosync (alter a inc) (dosync (alter a inc)) @a) @a)
+
+;; An error abandons the transaction: nothing it wrote is kept.
+(prn (message-of (fn [] (dosync (alter a + 100) (error "boom")))) @a)
+
+;; Changing a ref needs a transaction; side effects can't run in one.
+(prn (message-of (fn [] (alter a inc))))
+(prn (message-of (fn [] (ref-set a 0))))
+(prn (message-of (fn [] (dosync (io! (println "side effect"))))))
+(prn (message-of (fn [] (dosync (sleep 0.01)))))
+(prn (message-of (fn [] (let [c (chan 1)] (dosync (>! c 1))))))
+(prn (message-of (fn [] (dosync (commute a inc) (alter a inc)))))
+(io! (println "io! outside a transaction runs"))
+
+;; A conflict runs the body again: here another transaction changes what the first read
+;; before it commits.
+(let [r (ref 0)
+      s (ref 0)
+      attempts (atom 0)]
+  (dosync
+   (swap! attempts inc)
+   (let [v @r]
+     (when (= @attempts 1) @(future (dosync (alter r inc))))
+     (alter s + v)))
+  (prn @attempts @r @s))
+
+;; Methods can specialize on refs.
+(defgeneric describe [x])
+(defmethod describe [(x ref)] (str "a ref holding " @x))
+(prn (describe b))

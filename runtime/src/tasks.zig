@@ -25,6 +25,7 @@ const func = @import("func.zig");
 const num = @import("num.zig");
 const names = @import("names.zig");
 const print = @import("print.zig");
+const stm = @import("stm.zig");
 const seq = @import("seq.zig");
 const hash = @import("hash.zig");
 const sched = @import("sched.zig");
@@ -827,6 +828,7 @@ const Never = struct {
 };
 
 fn sleep(seconds: Value) void {
+    stm.forbidInTransaction("sleep");
     const ok = switch (num.kind(seconds)) {
         .other => false,
         else => (num.compare("sleep", seconds, Value.fromFixnum(0)) orelse .lt) != .lt,
@@ -846,6 +848,7 @@ fn withTimeout(seconds: Value, body: Value) Value {
 }
 
 fn onMainThread(f: Value) Value {
+    stm.forbidInTransaction("on-main-thread");
     if (!sched.inFiber()) return func.call(f, 0, &.{});
     return awaitTask(queueForMain(f), null).?;
 }
@@ -920,6 +923,7 @@ fn putNow(ch: Value, v: Value) ?usize {
 /// >!: put `v` on `ch`, waiting for buffer space (or, unbuffered, for a taker). Returns
 /// true, or false if `ch` is closed.
 fn chanPut(ch: Value, v: Value) Value {
+    stm.forbidInTransaction("a channel put (>!)");
     checkChan(ch, ">!");
     if (v == Value.nil) rt.raise(.@"error", "cannot put nil on a channel", .{});
     const Space = struct {
@@ -964,6 +968,7 @@ fn chanPut(ch: Value, v: Value) Value {
 /// <!: take a value from `ch`, waiting for one. Returns nil once `ch` is closed and
 /// empty.
 fn chanTake(ch: Value) Value {
+    stm.forbidInTransaction("a channel take (<!)");
     checkChan(ch, "<!");
     lock();
     set(ch, c_takers, fx(ux(get(ch, c_takers)) + 1));
@@ -1019,6 +1024,7 @@ const Op = struct { ch: Value, value: Value, put: bool };
 /// [channel value] to put. Returns [value channel]; for a put, the value is true, or
 /// false if the channel was closed.
 fn alts(ops_coll: Value) Value {
+    stm.forbidInTransaction("alts!");
     var ops: [max_alts]Op = undefined;
     var n: usize = 0;
     var s = seq.seq(ops_coll);

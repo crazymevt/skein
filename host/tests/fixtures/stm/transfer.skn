@@ -1,0 +1,47 @@
+(ns transfer)
+
+;; Concurrent transactions (M2.10 step 1, D-092), compared with transfer.expected: 8 tasks
+;; transfer money between 10 accounts 2,000 times each while another task keeps summing
+;; them in transactions; the total never changes and every sum sees it. Transactions are
+;; serializable, so write skew can't happen either.
+
+(def accounts (vec (repeatedly 10 (fn [] (ref 1000)))))
+(def transfers (ref 0))
+
+(defn total [] (dosync (reduce + (mapv deref accounts))))
+
+(defn transfer! []
+  (let [from (accounts (rand-int 10))
+        to (accounts (rand-int 10))
+        amount (rand-int 50)]
+    (dosync
+     (when (>= @from amount)
+       (alter from - amount)
+       (alter to + amount))
+     (commute transfers inc))))
+
+(let [inconsistent (atom 0)
+      sums (atom 0)
+      done (atom false)]
+  (with-nursery [n]
+    (spawn n (loop []
+               (when-not @done
+                 (swap! sums inc)
+                 (when-not (= 10000 (total)) (swap! inconsistent inc))
+                 (recur))))
+    (with-nursery [w] (dotimes [_ 8] (spawn w (dotimes [_ 2000] (transfer!)))))
+    (reset! done true))
+  (prn :total (total) :transfers @transfers :inconsistent-sums @inconsistent
+       :summed (pos? @sums)))
+
+;; Write skew: a and b are both 1; each of two transactions sets its own to 0 only if both
+;; together are still at least 2. Serializable, at most one of them does.
+(let [skews (atom 0)]
+  (dotimes [_ 300]
+    (let [a (ref 1) b (ref 1)
+          take! (fn [mine] (dosync (when (>= (+ @a @b) 2) (ref-set mine 0))))]
+      (with-nursery [n]
+        (spawn n (take! a))
+        (spawn n (take! b)))
+      (when (< (+ @a @b) 1) (swap! skews inc))))
+  (prn :write-skews @skews))

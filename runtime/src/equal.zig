@@ -196,6 +196,7 @@ pub fn hashOf(v: Value) u32 {
         .hash_set => cached(v, 1, setHash),
         .atom => @intCast(coll.get(v, 1).toFixnum()),
         .task, .nursery, .chan => @import("tasks.zig").hashOf(v),
+        .ref => @import("stm.zig").hashOf(v),
         .condition, .condition_type, .restart => @import("cond.zig").hashOf(v),
         // Identity: a function's code pointer, or for other objects... (permanent ones
         // never move, so their address will do).

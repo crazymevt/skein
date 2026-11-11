@@ -1,0 +1,14 @@
+1 true false ref "#<ref 1>"
+[2 4] [2 4]
+4 4 4
+6 6
+"boom" 6
+"alter needs a transaction: call it in dosync"
+"ref-set needs a transaction: call it in dosync"
+"io! code can't run in a transaction (dosync): a retry would run it again"
+"sleep can't run in a transaction (dosync): a retry would run it again"
+"a channel put (>!) can't run in a transaction (dosync): a retry would run it again"
+"alter after commute of the same ref in one transaction"
+io! outside a transaction runs
+2 1 1
+"a ref holding 4"

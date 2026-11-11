@@ -28,7 +28,7 @@ const print = @import("print.zig");
 const hash = @import("hash.zig");
 const Value = @import("value.zig").Value;
 
-pub const Kind = enum(u32) { block = 1, unwind = 2, handlers = 3, restarts = 4, scope = 5, barrier = 6, dynamic = 7 };
+pub const Kind = enum(u32) { block = 1, unwind = 2, handlers = 3, restarts = 4, scope = 5, barrier = 6, dynamic = 7, transaction = 8 };
 
 /// `sk_frame` up to its jmp_buf, which only C touches.
 pub const Frame = extern struct {

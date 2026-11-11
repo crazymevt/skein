@@ -122,7 +122,8 @@ void sk_closure_set(sk_value f, size_t i, sk_value value);
  * runtime/src/cond.zig mirrors every field before jb. */
 /* SK_FRAME_SCOPE frames hold cancellation scopes (tasks, nurseries, deadlines);
  * SK_FRAME_BARRIER frames stop non-local exits where C called Skein (D-068);
- * SK_FRAME_DYNAMIC frames hold a binding's vars (D-076). Only the runtime pushes them. */
+ * SK_FRAME_DYNAMIC frames hold a binding's vars (D-076); SK_FRAME_TRANSACTION frames the
+ * running STM transaction (D-092). Only the runtime pushes them. */
 enum {
     SK_FRAME_BLOCK = 1,
     SK_FRAME_UNWIND = 2,
@@ -130,7 +131,8 @@ enum {
     SK_FRAME_RESTARTS = 4,
     SK_FRAME_SCOPE = 5,
     SK_FRAME_BARRIER = 6,
-    SK_FRAME_DYNAMIC = 7
+    SK_FRAME_DYNAMIC = 7,
+    SK_FRAME_TRANSACTION = 8
 };
 
 typedef struct sk_frame {

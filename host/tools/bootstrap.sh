@@ -133,11 +133,12 @@ test_compiler() {
     fi
     echo "skeinc: $name ok"
   done
-  # Supervision policies (M2.8, D-088; native only, as Phase 0 has only :cancel-siblings):
-  # each prints its .expected on standard output, every ";; stderr: " line on standard
-  # error, and exits with its ";; status: " (0 if none).
-  for program in host/tests/fixtures/supervise/*.skn; do
-    name=supervise-$(basename "$program" .skn)
+  # Native-only fixtures: supervision policies (M2.8, D-088; Phase 0 has only
+  # :cancel-siblings) and STM (M2.10, D-092; Phase 0 has none). Each prints its .expected
+  # on standard output, every ";; stderr: " line on standard error, and exits with its
+  # ";; status: " (0 if none).
+  for program in host/tests/fixtures/supervise/*.skn host/tests/fixtures/stm/*.skn; do
+    name=$(basename "$(dirname "$program")")-$(basename "$program" .skn)
     "$skeinc" build "$program" -o "build/examples/$name$exe" > /dev/null
     status=0
     "build/examples/$name$exe" > "build/examples/$name.out" 2> "build/examples/$name.err" \
@@ -204,6 +205,16 @@ test_compiler() {
     name=$(basename "$expected" .expected)
     if ! SKEIN_GC_VERIFY=1 "build/examples/$name$exe" 2> "build/examples/$name.verify-err" \
          | diff --strip-trailing-cr "$expected" - > /dev/null; then
+      echo "skeinc: $name fails with SKEIN_GC_VERIFY=1"
+      head -5 "build/examples/$name.verify-err"
+      exit 1
+    fi
+  done
+  # STM keeps heap values in transactions and refs (D-092).
+  for program in host/tests/fixtures/stm/*.skn; do
+    name=stm-$(basename "$program" .skn)
+    if ! SKEIN_GC_VERIFY=1 "build/examples/$name$exe" 2> "build/examples/$name.verify-err" \
+         | diff --strip-trailing-cr "${program%.skn}.expected" - > /dev/null; then
       echo "skeinc: $name fails with SKEIN_GC_VERIFY=1"
       head -5 "build/examples/$name.verify-err"
       exit 1

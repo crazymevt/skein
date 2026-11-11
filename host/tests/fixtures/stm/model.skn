@@ -1,0 +1,64 @@
+(ns model)
+
+;; Randomized transactions against a sequential model (M2.10 step 1, D-092), compared with
+;; model.expected: each transaction is a random list of reads, alters, ref-sets and
+;; commutes on a few refs, sometimes ending in an error; what it reads, its value and the
+;; refs afterwards must be what the model says.
+
+(def n 6)
+(def refs (vec (repeatedly n (fn [] (ref 0)))))
+(def model (atom (vec (repeat n 0))))
+
+(defn random-op []
+  (let [i (rand-int n)]
+    (case (rand-int 4)
+      0 [:alter i (rand-int 10)]
+      1 [:set i (rand-int 100)]
+      2 [:commute i (rand-int 10)]
+      [:read i])))
+
+(defn run-model
+  "What the transaction does by the rules: [reads, the refs after, error message or nil]."
+  [ops fail?]
+  (loop [ops ops vals @model reads [] commuted #{} set-refs #{}]
+    (if (empty? ops)
+      (if fail? [reads @model "planned"] [reads vals nil])
+      (let [[op i x] (first ops)]
+        (case op
+          :read (recur (rest ops) vals (conj reads (vals i)) commuted set-refs)
+          :commute (recur (rest ops) (update vals i + x) reads (conj commuted i) set-refs)
+          (if (and (contains? commuted i) (not (contains? set-refs i)))
+            [reads @model "after commute"]
+            (recur (rest ops) (if (= op :alter) (update vals i + x) (assoc vals i x))
+                   reads commuted (conj set-refs i))))))))
+
+(defn run-stm [ops fail?]
+  (let [reads (atom [])]
+    (try
+      (dosync
+       (reset! reads [])
+       (doseq [[op i x] ops]
+         (case op
+           :read (swap! reads conj @(refs i))
+           :alter (alter (refs i) + x)
+           :set (ref-set (refs i) x)
+           :commute (commute (refs i) + x)))
+       (when fail? (error "planned")))
+      [@reads (mapv deref refs) nil]
+      (catch error e
+        [@reads (mapv deref refs)
+         (if (= "planned" (condition-message e)) "planned" "after commute")]))))
+
+(let [mismatches (atom 0)]
+  (dotimes [_ 3000]
+    (let [ops (vec (repeatedly (inc (rand-int 6)) random-op))
+          fail? (zero? (rand-int 5))
+          expected (run-model ops fail?)
+          actual (run-stm ops fail?)]
+      ;; Reads before an error are compared only up to the error.
+      (when-not (and (= (second expected) (second actual)) (= (nth expected 2) (nth actual 2))
+                     (= (first expected) (vec (take (count (first expected)) (first actual)))))
+        (when (zero? @mismatches) (prn :first-mismatch ops fail? :model expected :stm actual))
+        (swap! mismatches inc))
+      (reset! model (second expected))))
+  (println "3000 random transactions," @mismatches "differ from the model"))

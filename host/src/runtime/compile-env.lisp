@@ -160,7 +160,10 @@ received to that form's metadata (as data), for %syntax-meta.")
                                                      ,name))))))
   (native-only "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen"
                "%tcp-accept" "%tcp-port" "%tcp-close" "%exit" "%main-thread?"
-               "%run-attached" "%utf8-length" "%utf8-split" "%absolute-path" "%load-module"))
+               "%run-attached" "%utf8-length" "%utf8-split" "%absolute-path" "%load-module"
+               ;; STM (M2.10, D-092)
+               "ref" "ref?" "%dosync" "%in-transaction?" "ref-set" "alter" "commute"
+               "ensure"))
 
 (defcore "%evaluated?" (f)
   ;; Phase 0 compiles everything it evaluates (D-091).

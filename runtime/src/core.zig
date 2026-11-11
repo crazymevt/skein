@@ -1090,7 +1090,8 @@ const base_table = [_]Entry{
             // Atoms give their value; tasks (futures, spawned tasks) wait for theirs. With
             // a timeout in seconds, a task that is not done by then gives the timeout value.
             if (tasks.isTask(a[0])) return tasks.deref(a);
-            if (!a[0].isObjectOf(.atom)) rt.raise(.type_error, "deref (@) needs an atom or a task, not {s}", .{typeName(a[0])});
+            if (a[0].isObjectOf(.ref)) return @import("stm.zig").deref(a[0]);
+            if (!a[0].isObjectOf(.atom)) rt.raise(.type_error, "deref (@) needs an atom, a ref or a task, not {s}", .{typeName(a[0])});
             return coll.atomGet(a[0]);
         }
     }.f),
@@ -1336,7 +1337,8 @@ const base_table = [_]Entry{
 /// and its relatives (evaluate.zig), and what the REPL and skein dev need (devio.zig).
 const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(io.entries) ++
     entriesOf(compiler.entries) ++ entriesOf(ffi.entries) ++ entriesOf(mathtime.entries) ++
-    entriesOf(evaluate.entries) ++ entriesOf(devio.entries);
+    entriesOf(evaluate.entries) ++ entriesOf(devio.entries) ++
+    entriesOf(@import("stm.zig").entries);
 
 fn entriesOf(comptime from: anytype) [from.len]Entry {
     var t: [from.len]Entry = undefined;

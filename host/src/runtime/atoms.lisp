@@ -27,7 +27,7 @@ Returns the new value."
         ((task-p x)
          (let ((v (await-task x :deadline (and timeout-p (seconds-from-now timeout)))))
            (if (eq v :timeout) timeout-value v)))
-        (t (unsupported "deref (@) needs an atom or a task, not ~A" (readable-string x)))))
+        (t (unsupported "deref (@) needs an atom, a ref or a task, not ~A" (readable-string x)))))
 (defcore "reset!" (a value) (check-atom a "reset!") (setf (skein-atom-value a) value))
 (defcore "swap!" (a f &rest args) (check-atom a "swap!") (atom-swap a f args))
 (defcore "compare-and-set!" (a old new)
