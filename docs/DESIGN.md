@@ -968,6 +968,7 @@ Phase 3's main project (D-102) is an IDE for Skein written in Skein, Skein Studi
 | `skein.io` | files, paths, streams, bytes | 0 |
 | `skein.time` | monotonic clocks, the wall clock (`epoch-millis`, M2.14), calendar times (`local-time`, `utc-time`, `utc-offset`, D-100), sleep, frame timers | 0 |
 | `skein.log` | leveled logging | 0 |
+| `skein.process` | programs run in the background, in babashka.process's style: `process`, streams for `:in`, `:out` and `:err`, `@p` for the exit, `signal!` by intent, `destroy-tree!` (D-103) | 3 (M3.1) |
 | `skein.system` | the system the program runs on: `(os)` is `:macos`, `:linux` or `:windows`, `(arch)` `:aarch64` or `:x86_64`, `(getenv name)` and `(home-dir)` (D-098) | 2 (M2.14) |
 | `skein.test` | testing | 0 |
 | `skein.repl` | REPL helpers, inspector | 0 |

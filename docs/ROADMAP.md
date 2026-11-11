@@ -44,7 +44,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.12 Package management | ✅ |
 | M2.13 FFI additions | ✅ |
 | M2.14 UI library | ✅ |
-| M2.15 Driftrock developed live, natively | ⬜ |
+| M2.15 Driftrock developed live, natively | 🟨 |
 | M2.16 skein-ui on Windows | ⬜ |
 | M3.1 Processes | ⬜ |
 | M3.2 Data formats and bytes | ⬜ |
@@ -478,6 +478,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 **Exit:** the scripted sessions pass in CI on all three platforms (through SLIME on Linux), and Jessie develops Driftrock live through SLIME on her Mac.
 
+Steps 4 and 5 wait for their first CI runs (GitHub Actions was down when they were pushed); Jessie finishes Phase 2 with them and M2.16 later, and Phase 3 goes ahead meanwhile.
+
 ### M2.16 skein-ui on Windows
 - M2.14's last steps (D-101), when Jessie works on Windows (a UTM virtual machine is set up); Phase 3 goes ahead meanwhile (D-102). In skein-ui:
   1. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs), and WebView2 for the web view.
@@ -499,6 +501,13 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M3.1 Processes
 - `skein.io` starts programs without waiting for them: stdin, stdout and stderr as streams that a fiber reads and writes without blocking a worker, line by line or in bytes; the environment and working directory; the pid, the exit status, waiting with a timeout; signals, and stopping a process and what it started (a process group, or the job object on Windows). Programs are found on the `PATH` and started without a shell. What the IDE needs for its inferior programs, the agents' CLIs and git.
+
+- Settled (D-103): a new namespace, `skein.process`, in babashka.process's style: `(process [program arg...] opts)` returns a process whose `:in`, `:out` and `:err` are `skein.io` streams, `@p` waits and gives `{:exit n}`, with `alive?`, `pid`, `destroy!`, `destroy-tree!` and `(signal! p :interrupt|:terminate|:kill)`; options `:dir`, `:env`, `:extra-env`, and `:in`/`:out`/`:err` as `:pipe`, `:inherit`, `:discard` or a file, with `:err :out`. Native only. `skein.io/run-process` stays.
+- Steps, in order (D-103):
+  1. The runtime: starting a program with pipes on Unix (in a process group of its own) and Windows (in a job object), found on the `PATH`, with its directory and environment; its pipes as `skein.io` streams; waiting for it as a blocking call that parks the fiber; its pid and whether it's alive. Native tests with a small Skein program as the child, so they need nothing installed.
+  2. `skein.process`: `process` with its options and redirections, `deref` with a timeout, `alive?`, `pid`, `destroy!`; DESIGN §21 and the docstrings.
+  3. Signals and trees: `signal!` by intent and `destroy-tree!` on the three platforms, tested with a child that starts children of its own.
+  4. Many at once: fibers that talk to several programs while others run, a stress test, and a check that nothing leaks (pipes, handles, zombies).
 
 **Exit:** native tests on the three platforms start a program, talk to it over its stdin and stdout from fibers while others run, and stop a process tree.
 
