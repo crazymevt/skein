@@ -1,0 +1,4 @@
+{:name "conflict"
+ :main conflict.main/-main
+ :deps {my/a {:local "../a"}
+        my/b {:local "../b"}}}

@@ -1,0 +1,10 @@
+(ns app.main
+  (:require [util.core :as util]
+            [plain.thing :as thing]))
+
+;; A project with local dependencies (M2.12 step 1, D-094): util, a folder with its own
+;; project.skn that needs plain too, and plain, a folder without one.
+
+(defn -main [& args]
+  (println (util/greet "deps"))
+  (println (thing/describe)))

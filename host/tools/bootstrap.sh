@@ -75,6 +75,50 @@ test_compiler() {
     exit 1
   fi
   echo "skeinc: skein test ok"
+  # Dependencies (M2.12, D-094): app needs util (a folder with a project.skn, which needs
+  # plain too) and plain (a folder without one). It builds, runs from its file, and
+  # packages with util's native library and assets; two versions of one library are an
+  # error unless the project names it.
+  local deps=host/tests/fixtures/deps
+  (cd $deps/app && "$OLDPWD/$skeinc" build -o "$OLDPWD/build/examples/deps-app$exe" > /dev/null)
+  if ! diff --strip-trailing-cr $deps/app/expected.txt <(build/examples/deps-app$exe) \
+       > /dev/null; then
+    echo "skeinc: the deps app printed something else"
+    exit 1
+  fi
+  if ! diff --strip-trailing-cr $deps/app/expected.txt \
+       <("$skeinc" run $deps/app/src/app/main.skn) > /dev/null; then
+    echo "skeinc: skeinc run of the deps app printed something else"
+    exit 1
+  fi
+  (cd $deps/app && "$OLDPWD/$skeinc" package > /dev/null)
+  local top="$deps/app/dist/$host/app/" lib="libutil.so" lib_dir="" asset_dir=""
+  case "$host" in
+    aarch64-macos) top="$deps/app/dist/$host/app.app/Contents/"; lib="libutil.dylib"
+                   lib_dir="Frameworks/"; asset_dir="Resources/" ;;
+    *windows*) lib="util.dll" ;;
+  esac
+  for f in "$lib_dir$lib" "${asset_dir}assets/readme.txt" "${asset_dir}data/table.txt"; do
+    if [ ! -f "$top$f" ]; then
+      echo "skeinc: the deps app's package has no $f"
+      exit 1
+    fi
+  done
+  rm -rf $deps/app/dist
+  status=0
+  conflict=$(cd $deps/versions/conflict && "$OLDPWD/$skeinc" build -o "$OLDPWD/build/x" 2>&1) \
+    || status=$?
+  if [ "$status" = 0 ] || [[ "$conflict" != *"two versions of my/c"* ]]; then
+    echo "skeinc: two versions of my/c weren't an error: $conflict"
+    exit 1
+  fi
+  (cd $deps/versions/pinned \
+     && "$OLDPWD/$skeinc" build -o "$OLDPWD/build/examples/deps-pinned$exe" > /dev/null)
+  if [ "$(build/examples/deps-pinned$exe | tr -d '\r')" != $'a sees c2\nb sees c2' ]; then
+    echo "skeinc: the project's own my/c didn't win"
+    exit 1
+  fi
+  echo "skeinc: dependencies ok"
   # A project (M1.11): with no file, skeinc builds the project.skn in the current directory,
   # into it, beside the assets that skein.io/resource-dir finds (D-073). It runs from
   # another directory.

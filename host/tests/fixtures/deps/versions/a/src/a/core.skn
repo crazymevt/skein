@@ -1,0 +1,3 @@
+(ns a.core (:require [c.version :as c]))
+
+(defn which [] (str "a sees " (c/version)))

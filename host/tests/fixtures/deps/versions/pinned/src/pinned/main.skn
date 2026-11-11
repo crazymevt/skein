@@ -1,0 +1,9 @@
+(ns pinned.main
+  (:require [a.core :as a]
+            [b.core :as b]))
+
+;; Two libraries that need different versions of my/c (M2.12, D-094).
+
+(defn -main [& args]
+  (println (a/which))
+  (println (b/which)))

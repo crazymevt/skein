@@ -1,0 +1,3 @@
+(ns plain.thing)
+
+(defn describe [] "a plain folder")

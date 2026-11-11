@@ -1,0 +1,5 @@
+{:name "pinned"
+ :main pinned.main/-main
+ :deps {my/a {:local "../a"}
+        my/b {:local "../b"}
+        my/c {:local "../c2"}}}

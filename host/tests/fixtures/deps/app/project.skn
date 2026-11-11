@@ -1,0 +1,5 @@
+{:name "app"
+ :main app.main/-main
+ :assets ["assets"]
+ :deps {my/util {:local "../util"}
+        my/plain {:local "../plain"}}}

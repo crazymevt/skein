@@ -1,0 +1,5 @@
+{:assets ["data"]
+ :native {:libs {:macos ["vendor/libutil.dylib"]
+                 :windows ["vendor/util.dll"]
+                 :linux ["vendor/libutil.so"]}}
+ :deps {my/plain {:local "../plain"}}}

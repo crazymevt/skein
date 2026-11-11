@@ -597,13 +597,11 @@ function to call). Returns the executable's path."
   (let [dir (apply str (map (fn [c] (if (= c \\) \/ c)) dir))]
     (str project-dir dir (if (or (empty? dir) (= (last dir) \/)) "" "/"))))
 
-(defn read-project
-  "The project that the project.skn file at path describes, read as data (nothing in it
-runs). Returns its map, with :paths (default [\"src\"]), :test-paths (default
-[\"test\"], what `skein test` runs) and :assets as directories of the project ending
-with /. The keys builds use are checked: :name, :main (a qualified symbol,
-like game.main/-main), :paths and :assets."
-  [path]
+(def ^:private check-deps!)
+
+(defn- parse-project
+  "read-project's work; a library's project.skn (library? true) needs no :name or :main."
+  [path library?]
   (let [bad (fn [& parts] (fail path ": " (apply str parts)))
         r (reader/make-reader (io/read-file path) {:file path :namespace "user"
                                                    :resolve-alias (fn [_] nil)})
@@ -618,10 +616,13 @@ like game.main/-main), :paths and :assets."
       (bad "expected a map, like {:name \"game\" :main game.main/-main}"))
     (when-not (= ::eof (reader/read-form r false ::eof))
       (bad "expected one map, with nothing after it"))
-    (when-not (and (string? (:name project)) (seq (:name project)))
+    (when-not (or (and library? (nil? (:name project)))
+                  (and (string? (:name project)) (seq (:name project))))
       (bad ":name must be a string, like \"game\""))
-    (when-not (and (symbol? (:main project)) (namespace (:main project)))
+    (when-not (or (and library? (nil? (:main project)))
+                  (and (symbol? (:main project)) (namespace (:main project))))
       (bad ":main must be a qualified symbol, like game.main/-main"))
+    (check-deps! bad (:deps project))
     (let [native (:native project)
           libs (:libs native)]
       (when-not (and (or (nil? native) (map? native)) (or (nil? libs) (map? libs))
@@ -634,12 +635,125 @@ like game.main/-main), :paths and :assets."
     (assoc project :paths (dirs :paths ["src"]) :test-paths (dirs :test-paths ["test"])
            :assets (dirs :assets []))))
 
+(defn read-project
+  "The project that the project.skn file at path describes, read as data (nothing in it
+runs). Returns its map, with :paths (default [\"src\"]), :test-paths (default
+[\"test\"], what `skein test` runs) and :assets as directories of the project ending
+with /. The keys builds use are checked: :name, :main (a qualified symbol,
+like game.main/-main), :paths, :assets, :native and :deps."
+  [path]
+  (parse-project path false))
+
+;;; ------------------------------------------------------------------------------------
+;;; Dependencies (DESIGN §20.2, M2.12, D-094): a project's :deps, followed through their
+;;; own. A dependency is a folder: with a project.skn, its :paths, :deps, :native and
+;;; :assets count; without one, the folder is a source path.
+
+(defn- check-deps!
+  "Fail (with bad) unless deps is nil or a map of library names (symbols) to {:local
+folder} or {:git url :tag t} or {:git url :sha s}."
+  [bad deps]
+  (let [shape (str ":deps must map library names to {:local \"../folder\"}, "
+                   "{:git url :tag \"v1.0\"} or {:git url :sha \"3f2a9c1\"}")]
+    (when-not (or (nil? deps) (map? deps)) (bad shape))
+    (doseq [[lib spec] deps]
+      (when-not (and (symbol? lib) (map? spec)
+                     (or (and (string? (:local spec)) (= #{:local} (set (keys spec))))
+                         (and (string? (:git spec))
+                              (or (and (string? (:tag spec)) (= #{:git :tag} (set (keys spec))))
+                                  (and (string? (:sha spec))
+                                       (= #{:git :sha} (set (keys spec))))))))
+        (bad shape "; not " (pr-str lib) " " (pr-str spec))))))
+
+(defn- normalize-dir
+  "The directory dir (ending with /) without . and .. parts."
+  [dir]
+  (let [absolute (= \/ (first dir))
+        parts (reduce (fn [acc part]
+                        (cond (or (= part "") (= part ".")) acc
+                              (and (= part "..") (seq acc) (not= ".." (peek acc))) (pop acc)
+                              :else (conj acc part)))
+                      []
+                      (split-on dir \/))]
+    (str (if absolute "/" "") (apply str (map (fn [p] (str p "/")) parts)))))
+
+(defn- dep-source
+  "Where library lib, which the project in dir names with spec, is: {:id :dir}. Two
+dependencies with the same :id are the same version."
+  [lib spec dir]
+  (cond (:local spec)
+        (let [d (normalize-dir (directory-path dir (:local spec)))]
+          (when-not (io/file-exists? d)
+            (fail (pr-str lib) ": no folder " d " (its :local in " dir "project.skn)"))
+          {:id (str "the folder " d) :dir d})
+        :else (fail (pr-str lib) ": git dependencies come later in M2.12")))
+
+(defn- by-name [deps] (sort-by (fn [[lib _]] (str lib)) deps))
+
+(defn resolve-deps
+  "The dependencies of project, read from the project.skn at path, followed through their
+own :deps: a vector of {:lib :dir :paths :native :assets}, the project's own first.
+Two versions of one library are an error unless the project names that library, which
+then wins (D-094)."
+  [path project]
+  (let [root (directory-of path)
+        pinned (set (keys (:deps project)))]
+    (loop [queue (mapv (fn [[lib spec]] [lib spec root nil]) (by-name (:deps project)))
+           chosen {}
+           out []]
+      (if (empty? queue)
+        out
+        (let [[lib spec dir from] (first queue)
+              queue (vec (rest queue))
+              src (dep-source lib spec dir)
+              prev (get chosen lib)]
+          (cond
+            (and prev (or (= (:id prev) (:id src)) (and from (contains? pinned lib))))
+            (recur queue chosen out)
+
+            prev
+            (fail "two versions of " (pr-str lib) ": " (:id prev) " (named by "
+                  (or (:from prev) "the project") ") and " (:id src) " (named by " from
+                  "); name " (pr-str lib) " in project.skn's :deps to choose one")
+
+            :else
+            (let [d (:dir src)
+                  file (str d "project.skn")
+                  library (when (io/file-exists? file) (parse-project file true))
+                  native (into {} (map (fn [[os libs]] [os (mapv (fn [l] (str d l)) libs)])
+                                       (:libs (:native library))))]
+              (recur (into queue (map (fn [[l s]] [l s d (pr-str lib)])
+                                      (by-name (:deps library))))
+                     (assoc chosen lib {:id (:id src) :from from})
+                     (conj out {:lib lib :dir d :paths (if library (:paths library) [d])
+                                :native native :assets (if library (:assets library) [])
+                                :project (when library file)})))))))))
+
+(defn- dep-paths
+  "The source paths of the dependencies deps."
+  [deps]
+  (vec (mapcat :paths deps)))
+
+(defn- project-of
+  "The project.skn in the nearest directory at or above the file at path that has one,
+as an absolute path, or nil (as resource-dir finds the project, D-073)."
+  [path]
+  (when-let [abs (%absolute-path (let [d (directory-of path)] (if (= d "") "." d)))]
+    (loop [dir (normalize-dir (str (directory-of (str abs "/x"))))]
+      (let [f (str dir "project.skn")
+            parts (split-on dir \/)
+            top? (<= (count (remove #{""} parts)) (if (= \: (nth dir 1 nil)) 1 0))]
+        (cond (io/file-exists? f) f
+              top? nil
+              :else (recur (normalize-dir (str dir "../"))))))))
+
 (defn build-project
   "Compile the project whose project.skn is at path: its :main namespace, found in its
 :paths, to an executable named after it. opts are build-program's; :output defaults to
 the project's :name, in the current directory."
   [path opts]
   (let [project (read-project path)
+        deps (resolve-deps path project)
         main (:main project)
         file (or (some (fn [dir]
                          (let [f (str dir (namespace-file-name (namespace main)))]
@@ -647,7 +761,8 @@ the project's :name, in the current directory."
                        (:paths project))
                  (fail path ": cannot find namespace " (namespace main) " in :paths "
                        (pr-str (:paths project))))]
-    (build-program file (assoc opts :name (:name project) :source-paths (:paths project)
+    (build-program file (assoc opts :name (:name project)
+                               :source-paths (vec (concat (:paths project) (dep-paths deps)))
                                :main-name (name main)))))
 
 ;;; ------------------------------------------------------------------------------------
@@ -697,6 +812,7 @@ dist/<target>/<name>.app (Contents/MacOS, Frameworks, Resources and Info.plist).
 earlier package there is replaced. Returns the package's path."
   [path {:keys [target profile] :as opts}]
   (let [project (read-project path)
+        deps (resolve-deps path project)
         target (or target (%host-target))
         os (target-os target)
         nm (:name project)
@@ -712,11 +828,20 @@ earlier package there is replaced. Returns the package's path."
                                :output (str exe-dir exe)))
     ;; zig writes Windows debug information beside the executable; a package leaves it out.
     (when (= os :windows) (%delete-tree (str exe-dir nm ".pdb")))
-    (doseq [lib (get (:libs (:native project)) os)]
+    ;; The project's :native libraries and :assets, then its dependencies' (M2.12).
+    (doseq [lib (concat (map (fn [l] (str (directory-of path) l))
+                             (get (:libs (:native project)) os))
+                        (mapcat (fn [d] (get (:native d) os)) deps))]
       (make-directories! lib-dir)
-      (copy-file! (str (directory-of path) lib) (str lib-dir (file-name lib))))
-    (doseq [dir (:assets project)]
-      (copy-tree! dir (str asset-dir (file-name (subs dir 0 (dec (count dir)))) "/")))
+      (copy-file! lib (str lib-dir (file-name lib))))
+    (let [dirs (concat (:assets project) (mapcat :assets deps))
+          named (map (fn [dir] [dir (file-name (subs dir 0 (dec (count dir))))]) dirs)]
+      (doseq [[nm group] (group-by second named)]
+        (when (> (count group) 1)
+          (fail "two :assets directories are both named " nm ": "
+                (apply str (interpose ", " (map first group))))))
+      (doseq [[dir nm] named]
+        (copy-tree! dir (str asset-dir nm "/"))))
     (when (= os :macos)
       (io/write-file (str top "Contents/Info.plist") (info-plist project exe)))
     top))
@@ -750,8 +875,9 @@ skeinc's."
                       lines)))))
 
 (defn- cached-program
-  "The executable for the program at path built with opts (:profile, :eval): from
-.skein-cache/run/ if nothing it was built from has changed since, else built now."
+  "The executable for the program at path built with opts (:profile, :eval, and
+:project-files, project.skn files it depends on too): from .skein-cache/run/ if nothing
+it was built from has changed since, else built now."
   [home path opts]
   (let [kind (if (:eval opts) "dev" (:profile opts))
         exe (str home ".skein-cache/run/" (stem path) "-" (path-hash path) "-" kind (exe-suffix))
@@ -760,15 +886,29 @@ skeinc's."
     (when-not (built-from-current? exe manifest skeinc-date)
       (make-directories! (directory-of exe))
       (build-program path (assoc opts :output exe))
-      (io/write-file manifest (manifest-text skeinc-date @files-read)))
+      (io/write-file manifest (manifest-text skeinc-date
+                                             (concat @files-read (:project-files opts)))))
     exe))
+
+(defn- project-options
+  "For a file in a project (the nearest project.skn above it): the source paths of the
+file, the project and its dependencies (M2.12), and the project files read; else {}."
+  [path]
+  (if-let [file (project-of path)]
+    (let [project (read-project file)
+          deps (resolve-deps file project)]
+      {:source-paths (vec (distinct (concat (remove nil? [(namespace-root path)
+                                                          (directory-of path) ""])
+                                            (:paths project) (dep-paths deps))))
+       :project-files (vec (cons file (keep :project deps)))})
+    {}))
 
 (defn- run-program
   "Build (or reuse) the program at path with opts, run it with args and the environment
 variables in env, and exit with its status."
   [path opts args env]
   (when-not (io/file-exists? path) (fail "skein: file not found: " path))
-  (let [exe (cached-program (find-home) path opts)]
+  (let [exe (cached-program (find-home) path (merge (project-options path) opts))]
     (%exit (or (%run-attached (vec (cons exe args)) env)
                (fail "skein: cannot start " exe)))))
 
@@ -830,6 +970,7 @@ project's :test-paths, or test/. It builds a runner that requires them and calls
 skein.test/run-tests, and exits with 1 if a test failed."
   [args]
   (let [project (when (io/file-exists? "project.skn") (read-project "project.skn"))
+        deps (when project (resolve-deps "project.skn" project))
         paths (or (seq args) (:test-paths project) ["test/"])
         files (vec (distinct
                     (mapcat (fn [p]
@@ -856,7 +997,7 @@ skein.test/run-tests, and exits with 1 if a test failed."
                  {:profile "dev"
                   :source-paths (vec (distinct
                                       (concat (keep namespace-root files) (map directory-of files)
-                                              (:paths project) [""])))}
+                                              (:paths project) (dep-paths deps) [""])))}
                  [] nil)))
 
 (defn- compiler-current?

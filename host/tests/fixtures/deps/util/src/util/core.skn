@@ -1,0 +1,4 @@
+(ns util.core
+  (:require [plain.thing :as thing]))
+
+(defn greet [who] (str "hello, " who ", from util and " (thing/describe)))
