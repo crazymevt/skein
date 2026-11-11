@@ -1228,3 +1228,17 @@ Date: 2026-11-10 · Status: Accepted
 - **Step 3, as built:** on an M-series Mac, saving one of Driftrock's files runs it as compiled code about 0.4 s later: the watcher now checks every 0.1 s (it checked every 0.25 s), the evaluated reload and translation take about 0.1 s, `zig cc` about 0.2 s for a 2,000-line module (`-O0` is no faster), and loading a few milliseconds. Loading a library is a blocking call (`%load-module`), as file and socket calls are: `dlopen` can take tens of milliseconds (macOS checks a new library's signature), and a collection that began meanwhile would otherwise wait for it, stalling every thread for a frame or four. `host/tools/live-edit.lisp` is the exit's check, which CI runs on all three platforms: it edits a constant of `driftrock.game` while Driftrock plays (`--autopilot --check-60fps --slow-frames`, the last a new option that prints frames over budget), requires the compiled change within a second, asks the REPL that the new value is in force in compiled code, and fails on a frame over budget from the save until half a second after the swap.
 - **Consequences:** `--eval` builds grow by the C backend and need Zig where they run (which `skein dev` has). Old modules stay mapped until the program exits.
 
+## D-092: STM natively
+Date: 2026-11-10 · Status: Accepted
+- **Context:** M2.10 (DESIGN §13.3, D-015 deferred it): refs with `dosync`, `alter`, `commute` and `ensure`, and `:cell :ref` slots, on the fiber runtime.
+- **Decision** (Jessie chose the first three):
+  - **Serializable transactions,** as a global version clock and validated reads give (TL2-style): no write skew, so `ensure` is seldom needed. Reads need no history; a long read-only transaction may retry while others keep writing.
+  - **`retry-transaction`:** `dosync` establishes a restart that runs the body again from the start; in `skein dev` the debugger offers it beside `abort`, so a transaction can be fixed and retried. A transaction's writes are invisible until it commits.
+  - **Side effects:** `io!` signals an error inside a transaction, as do channel operations, `sleep` and `on-main-thread`, which a retry would repeat.
+  - **Retries:** a conflict yields the fiber with backoff and retries, at most 10,000 times (as Clojure), then signals an error. A nested `dosync` joins the outer transaction; an error abandons it.
+  - **`:cell :ref` slots** read their ref (a transaction's view inside one); `set-slot!` and `update-slot!` are `ref-set` and `alter` inside `dosync`, and an error outside one; `(cell obj :k)` gives the ref.
+  - **Phase 0** gets no STM (D-072): the tests are native, against a sequential model and expected output.
+  - **Steps:** refs and transactions; `:cell :ref` slots; `retry-transaction` and the docs.
+- **Alternatives:** Clojure's multi-version refs with history (snapshot isolation); no restart; `io!` only, or nothing checked.
+- **Consequences:** Watches and validators on refs come with the standard library's for atoms (M2.11).
+

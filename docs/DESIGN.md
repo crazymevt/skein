@@ -217,7 +217,7 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 | Type | Purpose |
 |---|---|
 | `atom` | a single value updated by compare-and-swap: `swap!`, `reset!`, `compare-and-set!`; read with `@a` |
-| `ref` | an STM-managed cell **(Deferred; name reserved)** |
+| `ref` | an STM-managed cell, changed in `dosync` transactions (§13.3, M2.10) |
 | `volatile` | an unsynchronized fast box for single-fiber use |
 | `array` | a mutable, fixed-length, typed array (§9) |
 | `chan` | a channel (§13) |
@@ -265,7 +265,7 @@ Slot options:
 | `:type` | declared type; checked in safe mode and used by the optimizer |
 | `:init` | default value expression, evaluated per instance |
 | `:reader` | defines a reader function (a generic function) |
-| `:cell` | makes the slot mutable. Value: `:atom`, `:ref` (deferred), or `:unsynchronized` |
+| `:cell` | makes the slot mutable. Value: `:atom`, `:ref` (changed in transactions, §13.3, M2.10), or `:unsynchronized` |
 | `:doc` | documentation string |
 
 **Class precedence list:** C3 linearization, as in Dylan and Python. It is more predictable than the CLOS algorithm in edge cases.
@@ -584,8 +584,8 @@ Native details (Phase 1, D-057; fibers since M2.3, D-075): the runtime has Phase
 
 Supervisors natively (M2.8, D-088): a task's failure is handled by its nursery's policy where the task ends (§10). In a program with the debugger (`skein dev`, `skein repl`) an error that no handler in the task handles first opens the debugger in the task's fiber, through a task runner the runtime calls every task's function with; its `abort` restart, "Fail the task", hands the failure to the policy. The REPL's and Swank's own fibers aren't wrapped.
 
-### 13.3 STM (Deferred)
-Clojure-style refs with `dosync`/`alter`/`commute` are planned once the native runtime exists. The `:cell :ref` slot kind and the `ref` name are reserved.
+### 13.3 STM (M2.10, D-092)
+Clojure-style refs, natively: `(ref x)`, `@r`, and inside `(dosync ...)` `alter`, `ref-set`, `commute` and `ensure`. Transactions are **serializable**: each runs as if alone, so write skew can't happen (Clojure gives snapshot isolation). A conflict retries the body, so it must have no side effects: `io!` marks code that mustn't run in a transaction, and channel operations, `sleep` and `on-main-thread` signal an error inside one. `dosync` establishes a `retry-transaction` restart, which the debugger offers. `:cell :ref` slots hold refs. Phase 0 has no STM.
 
 ### 13.4 Memory model
 - Writes to an atom or a channel *happen-before* subsequent reads that observe them.
