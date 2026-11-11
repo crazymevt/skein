@@ -427,15 +427,15 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ### M2.14 UI library
 - `skein.ui`: native desktop user interfaces from Skein objects and events (D-090), in its own repository, `skein-ui`, which programs use with `:deps` (D-097). Widgets are classes backed by the platform's own controls, so programs look and behave as their users expect (native controls, dark mode, accessibility, standard menus and dialogs). Properties are cell slots, read with keywords and changed with `set-slot!` and `update-slot!`; events are objects that handlers connected with `on` and methods on `handle-event` receive, some of them vetoable (a window close); layout is boxes and grids with expansion, alignment and margins; menus with shortcuts, the platform's alerts and file choosers, timers and the clipboard. Calls from any fiber are handed to the UI thread, so a window can be built and changed from the REPL or SLIME while the program runs.
 - Backends: Cocoa on macOS (AppKit through the Objective-C runtime), Win32 and Common Controls on Windows, GTK 4 on Linux, and a headless one for tests. Namespaces `skein.ui` (objects, events, layout, the backend protocol), `skein.ui.headless`, `skein.ui.cocoa`, `skein.ui.win32` and `skein.ui.gtk`.
-- It is a port of the design of Jessie's Common Lisp toolkit (LGT), written for Skein rather than translated line by line, with LGT's whole widget set except the web view (D-097).
+- It is a port of the design of Jessie's Common Lisp toolkit (LGT), written for Skein rather than translated line by line, with LGT's whole widget set, the web view included (D-097).
 - Settled (D-097): its own repository; LGT's widgets but the web view; properties as cell slots; `on` handlers and `handle-event` methods; skein-ui's CI checks out Skein's main branch and bootstraps it; headless first, then one backend at a time.
 - Steps, in order (D-097), in skein-ui:
   1. ✅ The repository: a library `project.skn`, CI on the three platforms that checks out Skein's main and runs `skein test`; the core: the widget class, properties as cell slots with `property-changed`, events (`on`, `off`, `handle-event`, vetoes), the backend protocol, the headless backend, and `ui` to build trees of widgets.
   2. ✅ Layout (boxes and grids: expansion, alignment, margins, spacing) and the simple controls (labels, buttons, toggles and checks, radio buttons, entries, sliders, spin buttons, progress bars and spinners, combo boxes, images, frames), on the headless backend.
   3. ✅ The rest of the widgets on the headless backend: the text view, list boxes, sortable tables, trees, color and date pickers, tabs, split panes, scrolled windows, the canvas and drawing; menus, alerts, file choosers, timers and the clipboard.
   4. ✅ The Cocoa backend (AppKit through the Objective-C runtime, with M2.13's by-value structs and `objc_msgSend` shapes), and calls from any fiber handed to the main thread.
-  5. The GTK 4 backend, in Linux CI under Xvfb (before Win32, since GTK 4 also runs on macOS, where it is developed; D-097).
-  6. The rest of LGT, the web view included, on the headless, Cocoa and GTK 4 backends, then LGT's examples and widget explorer, ported to skein-ui's `examples/` with a launcher, each built by a test on the headless backend (Jessie's: the missing parts first, so the examples are faithful). In parts:
+  5. ✅ The GTK 4 backend, in Linux CI under Xvfb (before Win32, since GTK 4 also runs on macOS, where it is developed; D-097).
+  6. ✅ The rest of LGT, the web view included, on the headless, Cocoa and GTK 4 backends, then LGT's examples and widget explorer, ported to skein-ui's `examples/` with a launcher, each built by a test on the headless backend (Jessie's: the missing parts first, so the examples are faithful). In parts:
      - ✅ A. Every widget's font, context menu, focus and input events (keys, text input, mouse), labels' text and background colors, user data; windows' position, size limits, resizability, `:closed`, hiding, centering, modal runs and snapshots; the application's name, version, icon, menu bar and quitting when the last window closes; blocking handlers.
      - ✅ B. Appearance (light, dark, inherited), color palettes, control sizes and surface roles.
      - ✅ C. Stacks (with a page list or sidebar) and tabbed panes (closable, reorderable and draggable tabs, accessories).
@@ -443,8 +443,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
      - ✅ E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
      - ✅ F. Images from bytes, system and glyph images, font families and font files, and icons in lists, tables and trees.
      - ✅ G. Window state: saving and restoring a window's frame.
-     - H. The web view (Jessie's: a program of Jessie's needs it; built, WebKitGTK's side awaiting its first Linux CI run): WKWebView on Cocoa, WebKitGTK 6.0 on GTK 4 (Linux only: Homebrew has no WebKitGTK), and WebView2 with the Win32 backend; loading URLs and HTML, running scripts, messages between the page and Skein, and navigation events.
-     - I. The examples and the widget explorer, all of LGT's.
+     - ✅ H. The web view (Jessie's: a program of Jessie's needs it): WKWebView on Cocoa, WebKitGTK 6.0 on GTK 4 (Linux only: Homebrew has no WebKitGTK), and WebView2 with the Win32 backend; loading URLs and HTML, running scripts, messages between the page and Skein, and navigation events.
+     - ✅ I. The examples and the widget explorer, all of LGT's.
   7. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
   8. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
 
