@@ -1,6 +1,7 @@
 (ns skein.system
   "Facts about the system the program runs on (DESIGN §21, D-098):
-  (os)  :macos, :linux or :windows")
+  (os)    :macos, :linux or :windows
+  (arch)  :aarch64 or :x86_64, the processor's architecture")
 
 (defn os
   "The operating system the program runs on: :macos, :linux or :windows, the keys
@@ -12,3 +13,10 @@ deflibrary takes."
     (cond (ends? "-macos") :macos
           (ends? "-windows-gnu") :windows
           :else :linux)))
+
+(defn arch
+  "The processor architecture the program runs on: :aarch64 or :x86_64, as Zig names
+them in target triples."
+  []
+  (let [t (%host-target)]
+    (keyword (subs t 0 (count (take-while (fn [ch] (not= ch \-)) t))))))

@@ -1337,6 +1337,7 @@ Date: 2026-11-11 · Status: Accepted
 - **Context:** skein-ui (M2.14, D-097) needs to know the operating system: a menu shortcut's "Primary" modifier is Command on macOS and Control elsewhere. Games need it too, for paths and key names. Skein had no public way to ask; the runtime only knew its own target triple (`%host-target`, for the native compiler).
 - **Decision** (Jessie's): a new namespace, `skein.system`, for facts about the system a program runs on. Its first function is `(system/os)`, which returns `:macos`, `:linux` or `:windows`, the keys `deflibrary` takes. It reads the target the runtime was built for, natively and on the Phase 0 host.
 - **Alternatives:** `skein.io/os` (the first draft; io is about files and streams); `skein.os` with `(os/name)`; `skein.platform`.
+- **Later (M2.14 step 4):** `(system/arch)` returns the processor architecture, `:aarch64` or `:x86_64`, as Zig's target triples name it; the Cocoa backend needs it, since AppKit numbers text alignments differently on the two.
 - **Consequences:** `skein.system` is where environment variables, exiting, the CPU count and the home directory go when programs need them.
 
 ## D-099: `index-of` in `skein.core`

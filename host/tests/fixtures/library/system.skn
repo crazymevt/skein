@@ -8,7 +8,8 @@
 
 (deftest os
   (is (contains? #{:macos :linux :windows} (system/os)))
-  (is (identical? (system/os) (system/os))))
+  (is (identical? (system/os) (system/os)))
+  (is (contains? #{:aarch64 :x86_64} (system/arch))))
 
 (deftest wall-clock
   (let [t (time/epoch-millis)]
