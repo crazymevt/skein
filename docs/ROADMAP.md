@@ -46,6 +46,21 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.14 UI library | ✅ |
 | M2.15 Driftrock developed live, natively | ⬜ |
 | M2.16 skein-ui on Windows | ⬜ |
+| M3.1 Processes | ⬜ |
+| M3.2 Data formats and bytes | ⬜ |
+| M3.3 Regular expressions | ⬜ |
+| M3.4 Networking and the Swank client | ⬜ |
+| M3.5 Files and the system | ⬜ |
+| M3.6 skein-ui for the IDE | ⬜ |
+| M3.7 Skein Studio's core | ⬜ |
+| M3.8 Agents | ⬜ |
+| M3.9 Source control | ⬜ |
+| M3.10 C sources in projects | ⬜ |
+| M3.11 SQLite and the Databases view | ⬜ |
+| M3.12 The terminal | ⬜ |
+| M3.13 Markdown and documentation | ⬜ |
+| M3.14 HTTP and the API workbench | ⬜ |
+| M3.15 Shipping Skein Studio | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -464,14 +479,102 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 **Exit:** the scripted sessions pass in CI on all three platforms (through SLIME on Linux), and Jessie develops Driftrock live through SLIME on her Mac.
 
 ### M2.16 skein-ui on Windows
-- M2.14's last steps (D-101), when Jessie works on Windows (a UTM virtual machine is set up). In skein-ui:
+- M2.14's last steps (D-101), when Jessie works on Windows (a UTM virtual machine is set up); Phase 3 goes ahead meanwhile (D-102). In skein-ui:
   1. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs), and WebView2 for the web view.
   2. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
 
 **Exit:** one demo program (a window with a form, a list, a menu and a dialog) runs on Cocoa, Win32 and GTK 4 in skein-ui's CI (under Xvfb on Linux), and is changed live from SLIME. Write `docs/PHASE2-RETRO.md` and update DESIGN.md.
 
-## Phase 3: Optimization and polish (outline)
-Sealing; inlining across namespaces; escape analysis and arena inference; SIMD for `vec`/`mat`; optional LLVM backend; full hygienic macros; `skein fmt`; package registry; documentation site.
+## Phase 3: Skein Studio
+
+**Goal:** Skein Studio, an IDE for Skein written in Skein (D-102): Lisp Studio's design on skein-ui, editing Skein with Skein's own reader and driving programs through `skein dev`'s Swank, with AI agents, source control, a terminal, databases, Markdown and offline docs; and the libraries it needs, the general ones in Skein's standard library and the specialized ones in repositories of their own. Then the optimization and polish of the earlier outline.
+
+**Order (D-102):** the libraries first, in the order the IDE needs them (M3.1–M3.6); then the IDE's core (M3.7), and its features one milestone each (M3.8–M3.14), each with the library it needs; then shipping it (M3.15). The optimization and polish milestones follow, or come forward when the IDE needs one.
+
+**Rules for Phase 3**
+- Phase 2's rules still apply.
+- Skein Studio is in its own repository, `skein-studio`, which uses Skein, skein-ui and the new libraries through `:deps`; its CI checks out Skein's main branch, as skein-ui's does. This repository's ROADMAP tracks its milestones.
+- A library that isn't general goes into a repository of its own (as skein-sdl3), not into `lib/`.
+- Syntax and names visible in the language (a regex literal, a namespace's name) are settled with Jessie when a milestone is prepared.
+
+### M3.1 Processes
+- `skein.io` starts programs without waiting for them: stdin, stdout and stderr as streams that a fiber reads and writes without blocking a worker, line by line or in bytes; the environment and working directory; the pid, the exit status, waiting with a timeout; signals, and stopping a process and what it started (a process group, or the job object on Windows). Programs are found on the `PATH` and started without a shell. What the IDE needs for its inferior programs, the agents' CLIs and git.
+
+**Exit:** native tests on the three platforms start a program, talk to it over its stdin and stdout from fibers while others run, and stop a process tree.
+
+### M3.2 Data formats and bytes
+- `skein.json` (reading and writing, keyword keys, pretty printing that keeps key order, one value per line for streams), an EDN reader in every build (`skein.edn`; today `read-string` needs `--eval`), and bytes: base64, hex, UTF-8 encoding of byte arrays, and SHA-1, SHA-256 and MD5.
+
+**Exit:** native tests round-trip JSON and EDN against a reference model, read JSON a line at a time from a process, and check the hashes against published test vectors.
+
+### M3.3 Regular expressions
+- A regex engine of Skein's own, compiled natively (D-102): Java's common syntax (classes, groups, named groups, alternation, greedy and lazy quantifiers, anchors, `(?i)` and other flags), and Clojure's functions (`re-pattern`, `re-find`, `re-seq`, `re-matches`, `re-groups`) with `skein.string/replace` and `split` taking a pattern. To settle when preparing: a literal syntax (Clojure's `#"..."`) and where the functions live.
+
+**Exit:** native tests against a reference model of the syntax, randomized, and a benchmark of searching a large file.
+
+### M3.4 Networking and the Swank client
+- `skein.net`: TCP client sockets (connect, read and write as streams, timeouts) beside the server sockets the REPL uses, now public. A Swank client library (`skein.swank.client`), with the reader and printer of Common Lisp data that `skein.swank` already has: connecting, evaluating, completion, argument lists, the debugger's and inspector's requests, and the events the server sends.
+
+**Exit:** a native test drives `skein dev` through the Swank client: evaluates, completes, gets SLDB's events for an error and invokes a restart.
+
+### M3.5 Files and the system
+- Walking a directory tree with ignore rules (`.gitignore`'s), noticing files changed on disk (the platforms' watchers, or polling), temporary files and directories, owner-only permissions; `skein.system`'s per-application data directory (Application Support, AppData, XDG) and opening a file or URL with its default application; ISO-8601 text for `skein.time`'s calendar times, both ways.
+
+**Exit:** native tests on the three platforms.
+
+### M3.6 skein-ui for the IDE
+- In skein-ui: a rich text widget for chat and Markdown, built on code-view's styled runs (paragraphs, headings, inline code, links, lists, code blocks, simple tables; D-102); the row of a list, tree or table at a point (`item-at-point`); a text buffer's revision count, for unsaved changes; window snapshots; editing a table's cells; code-view fast enough to highlight a large file as it's edited.
+
+**Exit:** skein-ui's tests for each on the headless, Cocoa and GTK backends.
+
+### M3.7 Skein Studio's core
+- The repository, its CI and a launcher; Lisp Studio's workbench on skein-ui: the editor (Skein's reader for highlighting, brackets by depth, indentation by Skein's forms, completion and argument hints), tabs and split editors, the explorer, the command palette, settings and themes, find and find in files; the REPL, debugger, inspector and problems through `skein dev`'s Swank (M3.4), with evaluating and compiling forms and files, and going to definitions. Languages are registered, as Lisp Studio's are.
+
+**Exit:** Skein Studio opens a Skein project, runs it under `skein dev`, and edits, evaluates and debugs it, on macOS and Linux; a scripted session checks it in CI.
+
+### M3.8 Agents
+- Claude Code (stream-json) and Codex (app-server, JSON-RPC over stdio) through their CLIs, with the IDE's tools (evaluate in the program, describe, the problems, the open file), approvals and questions, models and effort, as Lisp Studio has.
+
+**Exit:** a scripted session with a stand-in CLI that speaks each protocol; the real CLIs tried by Jessie.
+
+### M3.9 Source control
+- git through its CLI: the changes and their diffs, staging, committing, branches, pull and push, and the explorer's status colors.
+
+**Exit:** tests against a scratch repository.
+
+### M3.10 C sources in projects
+- `skeinc` compiles the C sources a project lists, with `zig cc`, for each target, so a library can ship SQLite's amalgamation or libvterm rather than prebuilt libraries.
+
+**Exit:** a library with C sources builds and packages on the three platforms.
+
+### M3.11 SQLite and the Databases view
+- `skein-sqlite` in its own repository (bindings and an idiomatic layer, with SQLite's amalgamation as its C source); the Databases view: connections, the schema, a query editor and a results grid, editing rows, export.
+
+**Exit:** the library's tests on the three platforms, and the view's in Skein Studio.
+
+### M3.12 The terminal
+- `skein-term` in its own repository: a pseudo-terminal (forkpty, ConPTY) and libvterm's emulator, and a skein-ui widget that draws it; the IDE's terminal panel.
+
+**Exit:** a shell runs in the panel on macOS and Linux, with its tests in CI.
+
+### M3.13 Markdown and documentation
+- `skein-markdown` (CommonMark and GFM's tables into a tree) shown in the rich text widget (M3.6), with the editor's Source, Split and Preview; `skein-docset` for Dash docsets, searched and shown in the IDE.
+- A docset for Skein, built from Skein's own sources rather than downloaded (Jessie's): every public var of the standard library with its argument lists, docstring and source location, from the compiler's model of the namespaces (as Swank's documentation and `M-.` use it), and the language reference from DESIGN.md; generated by a tool in this repository and rebuilt with each release, so it matches the Skein it documents. It is a Dash docset (the SQLite index and HTML pages, so Dash and Zeal open it too), with each entry also kept as data beside the pages (name, argument lists, docstring as Markdown, source location), which Skein Studio shows natively. Libraries (skein-ui and the others) can build theirs the same way.
+
+**Exit:** the CommonMark spec's examples pass; Skein's docset is generated from the checkout and covers every public var; docs open from the editor.
+
+### M3.14 HTTP and the API workbench
+- `skein-curl` in its own repository (libcurl: HTTPS, redirects, proxies, streaming bodies); Xeon Studio's API workbench (`.http` collections, environments with secrets, the response view).
+
+**Exit:** tests against a local server on the three platforms.
+
+### M3.15 Shipping Skein Studio
+- Packages for macOS, Linux and Windows (once skein-ui has its Win32 backend, M2.16), with code signing and notarization on macOS (D-069's open question); Xeon Studio's further features (docks, inline results, team chat) as far as Jessie wants them.
+
+**Exit:** Skein Studio installs and runs from its package on each platform, and Jessie uses it to work on Skein.
+
+### Later in Phase 3
+- The optimization and polish of the earlier outline, in an order to settle then: sealing; inlining across namespaces; escape analysis and arena inference; SIMD for `vec`/`mat`; an optional LLVM backend; full hygienic macros; `skein fmt` (sooner, if the IDE's Format Document needs it); a package registry; a documentation site.
 
 ---
 

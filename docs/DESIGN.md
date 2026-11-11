@@ -951,6 +951,10 @@ Dependencies (M2.12, D-094):
 
 As built (M2.11, D-093): `(deftest name body...)` defines a function of no arguments and registers it with its namespace; `run-tests` takes namespace names, runs their tests in the order they were defined inside the namespaces' fixtures (`(use-fixtures :each f ...)`, `(use-fixtures :once f ...)`), prints a report and returns `{:test :pass :fail :error}`, which `successful?` checks. `(is form message?)` counts an assertion: for a call of a function a failure shows `expected: (= 5 (+ 2 2))` and `actual: (not (= 5 4))`; `(is (thrown? type body...))` and `(is (thrown-with-msg? type text body...))` check for a condition (its message containing `text`, as Skein has no regular expressions); an error inside `is` or a test is reported as an error. `testing` adds context and `are` repeats an `is` over groups of values. `skein test` writes a runner that requires the test namespaces and calls `run-tests`, and builds and runs it natively.
 
+### 20.4 Skein Studio
+
+Phase 3's main project (D-102) is an IDE for Skein written in Skein, Skein Studio, in its own repository, `skein-studio`: Lisp Studio's design on skein-ui, reading Skein with Skein's own reader and driving programs through `skein dev`'s Swank (§15) for the REPL, debugger, inspector and completion, with AI agents, source control, a terminal, databases, Markdown and offline docs. Its general libraries join the standard library (§21); the specialized ones (SQLite, the terminal, Markdown, HTTP, docsets) are libraries of their own.
+
 ## 21. Standard library outline
 
 | Namespace | Contents | Phase |
@@ -969,8 +973,8 @@ As built (M2.11, D-093): `(deftest name body...)` defines a function of no argum
 | `skein.repl` | REPL helpers, inspector | 0 |
 | `skein.game` | game loop, fixed timestep, restarts, input mapping | 0 (demo) |
 | `skein.ecs` | entity–component–system on `defsoa` | 1+ |
-| `skein.json`, `skein.edn` | data formats | 1+ |
-| `skein.net` | sockets, HTTP client | Deferred |
+| `skein.json`, `skein.edn` | data formats: JSON, and an EDN reader in every build; with bytes (base64, hex, hashes) | 3 (M3.2, D-102) |
+| `skein.net` | TCP sockets, client and server (M3.4); HTTP through libcurl in its own library, `skein-curl` (M3.14) | 3 (D-102) |
 | `skein.ui` | native desktop UIs: widgets backed by Cocoa, Win32 and GTK 4 controls, events, layout, menus and dialogs; a headless backend for tests. In its own repository, `skein-ui`, used with `:deps` | 2 (M2.14, D-090, D-097) |
 
 Phase 0 status (D-040):
