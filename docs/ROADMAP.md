@@ -435,7 +435,16 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   3. ✅ The rest of the widgets on the headless backend: the text view, list boxes, sortable tables, trees, color and date pickers, tabs, split panes, scrolled windows, the canvas and drawing; menus, alerts, file choosers, timers and the clipboard.
   4. ✅ The Cocoa backend (AppKit through the Objective-C runtime, with M2.13's by-value structs and `objc_msgSend` shapes), and calls from any fiber handed to the main thread.
   5. The GTK 4 backend, in Linux CI under Xvfb (before Win32, since GTK 4 also runs on macOS, where it is developed; D-097).
-  6. LGT's examples and its widget explorer, ported to skein-ui's `examples/` (all but the web view and the code editor, whose widgets skein-ui doesn't have): a launcher runs them on Cocoa or GTK 4, and a test builds each on the headless backend.
+  6. The rest of LGT, the web view included, on the headless, Cocoa and GTK 4 backends, then LGT's examples and widget explorer, ported to skein-ui's `examples/` with a launcher, each built by a test on the headless backend (Jessie's: the missing parts first, so the examples are faithful). In parts:
+     - A. Every widget's font, context menu, focus and input events (keys, text input, mouse), labels' text and background colors, user data; windows' position, size limits, resizability, `:closed`, hiding, centering, modal runs and snapshots; the application's name, version, icon, menu bar and quitting when the last window closes; blocking handlers.
+     - B. Appearance (light, dark, inherited), color palettes, control sizes and surface roles.
+     - C. Stacks (with a page list or sidebar) and tabbed panes (closable, reorderable and draggable tabs, accessories).
+     - D. Surfaces: popovers, completion popups and custom dialogs (`run-dialog`, `respond`).
+     - E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
+     - F. Images from bytes, system and glyph images, font families and font files, and icons in lists, tables and trees.
+     - G. Window state: saving and restoring a window's frame.
+     - H. The web view (Jessie's: a program of Jessie's needs it): WKWebView on Cocoa, WebKitGTK 6.0 on GTK 4 (Linux only: Homebrew has no WebKitGTK), and WebView2 with the Win32 backend; loading URLs and HTML, running scripts, messages between the page and Skein, and navigation events.
+     - I. The examples and the widget explorer, all of LGT's.
   7. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
   8. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
 

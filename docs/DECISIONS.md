@@ -1339,6 +1339,7 @@ Date: 2026-11-11 · Status: Accepted
   - Not yet: row icons in lists, tables and trees (`:icon-fn`), and choosing a file in a test (the tests only cancel the chooser).
   - **Order:** GTK 4 comes before Win32 (Jessie's): GTK 4 runs on macOS too (Homebrew's), so it is developed and tested on the Mac that builds skein-ui, while Win32 can only be tested on CI's Windows runner.
   - **Examples** (Jessie's): LGT's examples and widget explorer are ported as a step of their own, after GTK 4, so they run on two backends.
+  - **The rest of LGT, and the web view** (Jessie's): before the examples are ported, skein-ui gets every part of LGT the examples use that it lacked (appearance and palettes, stacks and tabbed panes, popovers and custom dialogs, text buffers and code views, more images and fonts, window state), and the web view, which this decision first left out: a program of Jessie's needs it.
   - Skein gained `skein.system/arch` (AppKit numbers text alignments differently on Apple silicon), and an absolute `:local` dependency path is now taken as it is.
 - **As built (step 5, GTK 4):**
   - `skein.ui.gtk.lib` binds by hand the GTK 4, GObject, GLib, Cairo and Pango functions the backend calls; GTK loads when a GTK backend is made (`gtk/available?` says whether it can open a display), so the tests run where it can: on macOS with Homebrew's GTK, and in Linux CI under Xvfb, which installs it.
