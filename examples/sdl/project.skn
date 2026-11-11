@@ -1,0 +1,4 @@
+;; The SDL examples (M0.10, M1.10) as a project, for their dependency on the SDL3
+;; bindings, which live in their own repository (M2.12, D-095). `skein run window.skn`
+;; or `skein run bounce.skn` here fetches them.
+{:deps {skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.1.0"}}}

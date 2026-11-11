@@ -391,10 +391,18 @@ were."
           (skein.runtime::remove-namespace (skein.runtime:namespace-name ns)))))
     (values (reverse *mismatches*) count)))
 
+(defun needs-a-dependency-p (path)
+  "True for the files that require the SDL3 bindings, which are a git dependency (M2.12,
+D-095) that Phase 0 can't fetch: the SDL examples and Driftrock's main and draw."
+  (let ((s (namestring path)))
+    (or (search "/examples/sdl/" s)
+        (search "/examples/driftrock/main.skn" s)
+        (search "/examples/driftrock/draw.skn" s))))
+
 (test expander-in-skein-matches-phase-0-on-every-file
   ;; The exit criterion of M1.7: the same Core IR as Phase 0 for every .skn file.
   (let ((total 0))
-    (dolist (path (repository-skn-files))
+    (dolist (path (remove-if #'needs-a-dependency-p (repository-skn-files)))
       ;; A file whose foreign library is missing (SDL3, say) can't load its requires.
       (handler-case
           (multiple-value-bind (mismatches count) (compare-expanders-on-file path)

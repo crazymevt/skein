@@ -188,6 +188,56 @@ test_compiler() {
     exit 1
   fi
   echo "skeinc: git dependencies ok"
+  # Transitive git dependencies (step 4): a needs b at v1 and c needs b at v2. A project
+  # with a gets b too, in its skein.lock; with a and c it's an error, unless the project
+  # names b itself.
+  local r
+  for r in a b c; do mkdir -p "$gd/$r/src/git$r"; done
+  version_of() { printf '(ns gitb.core)\n\n(defn version [] "%s")\n' "$1" \
+                   > "$gd/b/src/gitb/core.skn"; }
+  (cd "$gd/b" && "${g[@]}" init -q && printf '{:paths ["src"]}\n' > project.skn \
+     && version_of b1 && "${g[@]}" add -A && "${g[@]}" commit -qm b1 && "${g[@]}" tag v1 \
+     && version_of b2 && "${g[@]}" commit -qam b2 && "${g[@]}" tag v2)
+  for r in a c; do
+    local wants=v1
+    if [ "$r" = c ]; then wants=v2; fi
+    printf '{:deps {my/b {:git "%s" :tag "%s"}}}\n' "$gd/b" "$wants" > "$gd/$r/project.skn"
+    printf '%s\n\n%s\n' "(ns git$r.core (:require [gitb.core :as b]))" \
+      "(defn which [] (str \"$r uses \" (b/version)))" > "$gd/$r/src/git$r/core.skn"
+    (cd "$gd/$r" && "${g[@]}" init -q && "${g[@]}" add -A && "${g[@]}" commit -qm "$r" \
+       && "${g[@]}" tag v1)
+  done
+  mkdir -p "$gd/app2/src/app"
+  multi() {
+    local uses="$1" deps="$2"
+    printf '{:name "app" :main app.main/-main\n :deps {%s}}\n' "$deps" > "$gd/app2/project.skn"
+    printf '%s\n\n%s\n' "(ns app.main (:require $uses))" \
+      "(defn -main [& args] (println (a/which)))" \
+      > "$gd/app2/src/app/main.skn"
+    (cd "$gd/app2" && SKEIN_DEPS_DIR="$gd/cache" "$root/$skeinc" build -o "app$exe" \
+       > /dev/null && ./app$exe | tr -d '\r')
+  }
+  local dep_a dep_b dep_c
+  dep_a="my/a {:git \"$gd/a\" :tag \"v1\"}"
+  dep_c="my/c {:git \"$gd/c\" :tag \"v1\"}"
+  dep_b="my/b {:git \"$gd/b\" :tag \"v2\"}"
+  if [ "$(multi '[gita.core :as a]' "$dep_a")" != "a uses b1" ] \
+       || ! grep -q '^ my/b ' "$gd/app2/skein.lock"; then
+    echo "skeinc: a's dependency on b wasn't followed and locked"
+    exit 1
+  fi
+  status=0
+  conflict=$(multi '[gita.core :as a] [gitc.core :as c]' "$dep_a $dep_c" 2>&1) || status=$?
+  if [ "$status" = 0 ] || [[ "$conflict" != *"two versions of my/b"* ]]; then
+    echo "skeinc: b at v1 and v2 weren't an error: $conflict"
+    exit 1
+  fi
+  if [ "$(multi '[gita.core :as a] [gitc.core :as c]' "$dep_a $dep_c $dep_b")" != "a uses b2" ]
+  then
+    echo "skeinc: the project's own my/b didn't win"
+    exit 1
+  fi
+  echo "skeinc: transitive git dependencies ok"
   # A project (M1.11): with no file, skeinc builds the project.skn in the current directory,
   # into it, beside the assets that skein.io/resource-dir finds (D-073). It runs from
   # another directory.

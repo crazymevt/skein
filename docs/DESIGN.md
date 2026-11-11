@@ -670,7 +670,7 @@ Further rules:
 ### 14.4 Binding generator
 
 ```sh
-skein bindgen /path/to/SDL3/SDL.h --prefix SDL_ --ns sdl3.raw --out lib/sdl3/raw.skn
+skein bindgen /path/to/SDL3/SDL.h --prefix SDL_ --ns sdl3.raw --out src/sdl3/raw.skn
 ```
 
 - The generator reads C headers via libclang and emits `deflibrary`/`defcstruct`/`defcenum`/`defcfun` forms. Its output is plain Skein source, meant to be committed and hand-wrapped in an idiomatic layer (`sdl3` on top of `sdl3.raw`).
@@ -682,11 +682,11 @@ Phase 0 details (D-038):
 ```sh
 skein bindgen SDL_video.h SDL_render.h ... -I /opt/homebrew/include --prefix SDL_ --ns sdl3.raw \
   --library sdl3 --lib macos=libSDL3.dylib --lib linux=libSDL3.so.0 --lib windows=SDL3.dll \
-  --blocking SDL_WaitEvent --out lib/sdl3/raw.skn
+  --blocking SDL_WaitEvent --out src/sdl3/raw.skn
 ```
 
 - The front end is `clang` itself (its JSON AST dump and `-E -dD` output), so generating needs clang on the `PATH` (or `SKEIN_CLANG`); using the output does not.
-- Only declarations from the headers named on the command line, whose names start with the prefix, are emitted; structs they hold by value come along. `make sdl3-bindings` regenerates `lib/sdl3/raw.skn`.
+- Only declarations from the headers named on the command line, whose names start with the prefix, are emitted; structs they hold by value come along. The SDL3 bindings live in their own repository, [crazymevt/skein-sdl3](https://github.com/crazymevt/skein-sdl3), whose `make bindings` regenerates `src/sdl3/raw.skn` (M2.12, D-095).
 - Naming: types keep the prefix (`SDL_FRect` → `sdl-frect`); functions and constants drop it (`SDL_CreateWindow` → `create-window`, `SDL_INIT_VIDEO` → `init-video`). If that name is taken, the prefixed name is used.
 - Each enum becomes a `defcenum` (keys without the common prefix, e.g. `:quit`) and also one integer constant per enumerator (`event-quit`), for struct fields that hold enum values as integers. Constant `#define`s become `def`s.
 - Variadic and inline functions, by-value structs, bit fields and anonymous members are skipped with a `;; skipped` comment.
@@ -996,7 +996,7 @@ Phase 0 status (D-040):
 
 - **`skein.core`'s numbers and printing (M2.11, D-093):** as Clojure's, natively. `int?` is an integer that fits in 64 bits; `random-uuid` returns the UUID as a string (Skein has no UUID type); the `bit-` operations take fixnums. `format` writes Java's common directives: `%s` (as `print`), `%S`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%f`, `%e`, `%%` and `%n`, with the flags `- + space 0 ,`, a width and a precision. `read-string` reads the first form of a string as data, in programs built with `--eval` (the reader comes with the evaluator). `spit` takes `:append true`. When `*print-length*` is bound to n, collections print their first n elements and then `...`; Phase 0 ignores it.
 
-Bindings shipped as separate libraries: `sdl3` (windowing, input, the 2D renderer and the GPU API; D-020), `miniaudio`, `cimgui`, `box2d`, `stb`.
+Bindings shipped as separate libraries: `sdl3` (windowing, input, the 2D renderer and the GPU API; D-020), `miniaudio`, `cimgui`, `box2d`, `stb`. The first, the SDL3 bindings (`sdl3.raw`), moved out of this repository to [crazymevt/skein-sdl3](https://github.com/crazymevt/skein-sdl3) in M2.12 (D-095); projects depend on it with `:deps {skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.1.0"}}`.
 
 ## 22. Open questions
 

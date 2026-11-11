@@ -1,11 +1,13 @@
 ;; Driftrock as a project (M1.12): `skein package` here makes a package with SDL3 in it.
 ;; Its namespaces (driftrock.*) are under examples/, so :paths is the parent directory.
-;; Put SDL3 for each platform in vendor/ first (CI copies the installed one there).
+;; Put SDL3 for each platform in vendor/ first (CI copies the installed one there). The
+;; SDL3 bindings are a dependency, in their own repository (M2.12, D-095).
 {:name "driftrock"
  :version "0.1.0"
  :main driftrock.main/-main
  :paths [".."]
  :bundle-id "org.skein-lang.driftrock"
+ :deps {skein/sdl3 {:git "https://github.com/crazymevt/skein-sdl3" :tag "v0.1.0"}}
  :native {:libs {:macos ["vendor/macos/libSDL3.dylib"]
                  :linux ["vendor/linux/libSDL3.so.0"]
                  :windows ["vendor/windows/SDL3.dll"]}}}

@@ -408,7 +408,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   1. ✅ Reading `:deps` and resolving local folders, transitively, with the conflict rule: the project's source paths, `:native` libraries and `:assets` grow by its dependencies' in `build`, `run`, `dev`, `test` and `package`.
   2. ✅ Git dependencies: the cache, fetching and checking out with `git`, `:tag` and `:sha`, and `skein deps`; tests with local repositories made by `git`.
   3. ✅ `skein.lock`: written when dependencies are first resolved, used after, and rewritten by `skein deps update [lib]`; offline builds from the cache; clear errors when git is missing or a fetch fails.
-  4. Transitive git dependencies with the conflict rule, and packages carrying dependencies' native libraries and assets, on all three platforms; a dependency on a public GitHub repository in CI.
+  4. ✅ Transitive git dependencies with the conflict rule, and packages carrying dependencies' native libraries and assets, on all three platforms; a dependency on a public GitHub repository in CI: the SDL3 bindings, moved to crazymevt/skein-sdl3 (D-095), which the SDL examples and Driftrock depend on.
 
 **Exit:** a project that depends on a library in a git repository (a local repository in the tests, and one on GitHub in CI) and on a local folder builds, runs with `skein run` and `skein dev`, and packages with its dependencies' native libraries and assets, on all three platforms.
 
@@ -416,7 +416,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - What native desktop UIs need from `skein.ffi` (DESIGN §14, D-090), natively: structs and unions **by value** as arguments and results, of C functions and of callbacks; **calling a C function pointer** with a declared signature (Objective-C's `objc_msgSend` with each message's own signature, COM vtables); and **variadic** C functions, called with the types of each call. `skein bindgen` stops skipping by-value structs and variadic functions.
 - To settle when preparing it: the syntax for calls through pointers and for variadic calls; whether Phase 0 gets any of it (its CFFI would need `cffi-libffi`, which isn't an allowed dependency); the order of the steps.
 
-**Exit:** native tests pass structs by value to and from C functions and callbacks, call through function pointers and call variadic functions, on all three platforms, and `lib/sdl3/raw.skn` is regenerated with the declarations that were skipped.
+**Exit:** native tests pass structs by value to and from C functions and callbacks, call through function pointers and call variadic functions, on all three platforms, and the SDL3 bindings (crazymevt/skein-sdl3, D-095) are regenerated with the declarations that were skipped.
 
 ### M2.14 UI library
 - `skein.ui`: native desktop user interfaces from Skein objects and events (D-090). Widgets are classes backed by the platform's own controls, so programs look and behave as their users expect (native controls, dark mode, accessibility, standard menus and dialogs). Properties are slots and generic functions; events are objects that handlers and methods receive, some of them vetoable (a window close); layout is boxes and grids with expansion, alignment and margins; menus with shortcuts, the platform's alerts and file choosers, timers and the clipboard. Calls from any fiber are handed to the UI thread, so a window can be built and changed from the REPL or SLIME while the program runs.

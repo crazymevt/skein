@@ -1091,10 +1091,11 @@ it was built from has changed since, else built now."
 
 (defn- project-options
   "For a file in a project (the nearest project.skn above it): the source paths of the
-file, the project and its dependencies (M2.12), and the project files read; else {}."
+file, the project and its dependencies (M2.12), and the project files read; else {}. The
+project needs no :name or :main, as run and dev take the file."
   [path]
   (if-let [file (project-of path)]
-    (let [project (read-project file)
+    (let [project (parse-project file true)
           deps (resolve-deps file project)]
       {:source-paths (vec (distinct (concat (remove nil? [(namespace-root path)
                                                           (directory-of path) ""])
@@ -1168,7 +1169,8 @@ the .skn files at the paths (directories are searched), natively: by default the
 project's :test-paths, or test/. It builds a runner that requires them and calls
 skein.test/run-tests, and exits with 1 if a test failed."
   [args]
-  (let [project (when (io/file-exists? "project.skn") (read-project "project.skn"))
+  ;; A library's project.skn, with no :name or :main, has tests too.
+  (let [project (when (io/file-exists? "project.skn") (parse-project "project.skn" true))
         deps (when project (resolve-deps "project.skn" project))
         paths (or (seq args) (:test-paths project) ["test/"])
         files (vec (distinct
@@ -1209,7 +1211,7 @@ those libraries (all, with none named) again from a fresh fetch, and rewrite ske
     (fail "skein deps: expected nothing, or update and library names"))
   (when-not (io/file-exists? "project.skn")
     (fail "skein deps: expected a project.skn in the current directory"))
-  (let [project (read-project "project.skn")
+  (let [project (parse-project "project.skn" true)
         named (map symbol (rest args))
         update (cond (empty? args) #{} (empty? named) :all :else (set named))
         deps (resolve-deps "project.skn" project {:update update})

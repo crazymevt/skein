@@ -106,7 +106,7 @@ make test            # run the full test suite (make test-host, test-runtime, te
 ./skein run examples/hello.skn
 ```
 
-The demo game, Driftrock, needs [SDL3](https://libsdl.org/) (on macOS: `brew install sdl3`):
+The demo game, Driftrock, needs [SDL3](https://libsdl.org/) (on macOS: `brew install sdl3`) and git: its SDL3 bindings are a dependency, [skein-sdl3](https://github.com/crazymevt/skein-sdl3), fetched on the first run.
 
 ```sh
 ./skein run examples/driftrock/main.skn   # arrows steer and thrust, Space fires
