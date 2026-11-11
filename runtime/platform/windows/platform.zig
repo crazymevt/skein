@@ -424,3 +424,57 @@ pub fn releaseProcessJob(job: ?*anyopaque) void {
 pub fn childProcessId(child: *const std.process.Child) i64 {
     return GetProcessId(child.id.?);
 }
+
+extern "kernel32" fn TerminateProcess(process: *anyopaque, code: u32) callconv(.winapi) i32;
+extern "kernel32" fn TerminateJobObject(job: *anyopaque, code: u32) callconv(.winapi) i32;
+extern "kernel32" fn GenerateConsoleCtrlEvent(event: u32, group: u32) callconv(.winapi) i32;
+extern "kernel32" fn DuplicateHandle(source_process: *anyopaque, source: *anyopaque, target_process: *anyopaque, target: *?*anyopaque, access: u32, inherit: i32, options: u32) callconv(.winapi) i32;
+
+/// The program's handle for signaling it: a copy of its process handle, which stays valid
+/// after the reaper's wait closes the original.
+pub fn childHandle(child: *const std.process.Child) ?*anyopaque {
+    var copy: ?*anyopaque = null;
+    const me = GetCurrentProcess();
+    if (DuplicateHandle(me, child.id.?, me, &copy, 0, 0, 2) == 0) return null; // DUPLICATE_SAME_ACCESS
+    return copy;
+}
+
+/// Signal a program by intent: 0 interrupt (a Ctrl-Break event, which reaches it only if
+/// it leads a console process group), 1 terminate and 2 kill (TerminateProcess); with
+/// `tree`, its job object, which holds what it started.
+pub fn signalProcess(pid: i64, handle: ?*anyopaque, job: ?*anyopaque, kind: u8, tree: bool) void {
+    if (kind == 0) {
+        _ = GenerateConsoleCtrlEvent(1, @intCast(pid)); // CTRL_BREAK_EVENT
+        return;
+    }
+    if (tree) if (job) |j| {
+        _ = TerminateJobObject(j, 1);
+        return;
+    };
+    if (handle) |h| _ = TerminateProcess(h, 1);
+}
+
+const SECURITY_ATTRIBUTES = extern struct { length: u32, descriptor: ?*anyopaque, inherit: i32 };
+extern "kernel32" fn CreatePipe(read: *?*anyopaque, write: *?*anyopaque, attributes: ?*const SECURITY_ATTRIBUTES, size: u32) callconv(.winapi) i32;
+extern "kernel32" fn SetHandleInformation(handle: *anyopaque, mask: u32, flags: u32) callconv(.winapi) i32;
+
+/// A pipe, [read end, write end], whose write end a program can inherit and whose read
+/// end stays here (a program's stderr merged into its stdout), or null.
+pub fn makePipe() ?[2]std.Io.File {
+    var r: ?*anyopaque = null;
+    var w: ?*anyopaque = null;
+    const sa: SECURITY_ATTRIBUTES = .{ .length = @sizeOf(SECURITY_ATTRIBUTES), .descriptor = null, .inherit = 1 };
+    if (CreatePipe(&r, &w, &sa, 0) == 0) return null;
+    _ = SetHandleInformation(r.?, 1, 0); // HANDLE_FLAG_INHERIT off
+    return .{
+        .{ .handle = r.?, .flags = .{ .nonblocking = false } },
+        .{ .handle = w.?, .flags = .{ .nonblocking = false } },
+    };
+}
+
+extern "kernel32" fn SetFilePointerEx(file: *anyopaque, distance: i64, new_position: ?*i64, method: u32) callconv(.winapi) i32;
+
+/// Move an open file's position to its end (a program's output appended to a file).
+pub fn seekToEnd(handle: *anyopaque) void {
+    _ = SetFilePointerEx(handle, 0, null, 2); // FILE_END
+}

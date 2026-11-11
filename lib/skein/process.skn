@@ -1,0 +1,121 @@
+(ns skein.process
+  "Programs run in the background (M3.1, D-103), in the style of Clojure's babashka.process:
+  (process [\"git\" \"status\"] {:dir d})  start a program and return at once
+  (:in p) (:out p) (:err p)  its stdin, a skein.io writer, and its stdout and stderr,
+                             readers; nil for those that aren't piped
+  @p, (deref p seconds timeout-value)  wait for it to end: the process, whose :exit is
+                             then its exit status (or the signal's number that ended it)
+  (alive? p)  (pid p)  (destroy! p)  (destroy-tree! p)  (signal! p :interrupt)
+Options: :dir, the directory to run it in; :env, its whole environment (a map of strings),
+or :extra-env, added to this program's; and :in, :out and :err, each :pipe (the default),
+:inherit, :discard or {:file path} ({:file path :append true} for :out and :err). A
+string :in is text written to the program's stdin, which is then closed, and :err :out
+sends the error output where the output goes. Programs are found on the PATH and run
+without a shell. Native only."
+  (:require [skein.io :as io]))
+
+(defclass subprocess []
+  "A program that process started (D-103): its :cmd, :pid and streams, and its :exit
+once it has ended and been waited for."
+  (handle)
+  (cmd)
+  (pid)
+  (in)
+  (out)
+  (err)
+  (exit :cell :atom))
+
+(defn process?
+  "True if x is a process that process started."
+  [x]
+  (instance? subprocess x))
+
+(defn- check [p what]
+  (when-not (process? p)
+    (error (str what " needs a process, not " (pr-str p))))
+  (:handle p))
+
+(defn- redirect
+  "What the runtime takes for the option v of stream which."
+  [v which]
+  (cond (nil? v) :pipe
+        (contains? #{:pipe :inherit :discard} v) v
+        (and (= which :err) (= v :out)) :out
+        (and (map? v) (string? (:file v)))
+        (if (:append v)
+          (if (= which :in)
+            (error ":in's file can't be appended to")
+            [(:file v) true])
+          (:file v))
+        :else (error (str which " must be :pipe, :inherit, :discard or {:file path}"
+                          (when (= which :err) ", or :out")
+                          ", not " (pr-str v)))))
+
+(defn process
+  "Start the program cmd (a vector: the program and its arguments, as strings) without
+waiting for it, and return it as a process (see the namespace's doc for opts). Signals
+skein.io/io-error if it can't be started."
+  ([cmd] (process cmd {}))
+  ([cmd opts]
+   (let [cmd (vec cmd)
+         _ (when (empty? cmd) (error "process needs a program to run"))
+         {:keys [dir env extra-env in out err]} opts
+         env (cond env env
+                   extra-env (merge (%environment) extra-env))
+         text (when (string? in) in)
+         h (%process-start cmd dir env (if text :pipe (redirect in :in))
+                           (redirect out :out) (redirect err :err))
+         _ (when-not h
+             (error io/io-error :message (str "cannot run " (first cmd)) :path (first cmd)))
+         stream (fn [i kind what]
+                  (when-let [s (%process-stream h i)]
+                    (make io/stream :handle s :kind kind :path (str (first cmd) "'s " what))))
+         p (make subprocess :handle h :cmd cmd :pid (%process-pid h)
+                 :in (stream 0 :writer "stdin") :out (stream 1 :reader "stdout")
+                 :err (stream 2 :reader "stderr"))]
+     (when text
+       (io/write (:in p) text)
+       (close (:in p)))
+     p)))
+
+(defmethod deref-object [(p subprocess) timeout timeout-value]
+  ;; @p: wait for it, parking a fiber; the process, with its :exit.
+  (if-let [code (%process-wait (:handle p) timeout)]
+    (do (set-slot! p :exit code) p)
+    timeout-value))
+
+(defn alive?
+  "True if the program is still running."
+  [p]
+  (nil? (%process-exit (check p "alive?"))))
+
+(defn pid
+  "The program's process id."
+  [p]
+  (check p "pid")
+  (:pid p))
+
+(def ^:private signals {:interrupt 0 :terminate 1 :kill 2})
+
+(defn signal!
+  "Signal the program by intent: :interrupt (SIGINT; Ctrl-Break on Windows), :terminate
+(SIGTERM) or :kill (SIGKILL; on Windows both end it). Does nothing once it has ended.
+Returns p."
+  [p kind]
+  (let [k (or (get signals kind)
+              (error (str "signal! needs :interrupt, :terminate or :kill, not " (pr-str kind))))]
+    (%process-signal (check p "signal!") k false)
+    p))
+
+(defn destroy!
+  "End the program (:terminate). Returns p."
+  [p]
+  (%process-signal (check p "destroy!") 1 false)
+  p)
+
+(defn destroy-tree!
+  "End the program and the programs it started: its process group on Unix, its job
+object on Windows. Returns p."
+  [p]
+  (%process-signal (check p "destroy-tree!") 1 true)
+  p)

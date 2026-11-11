@@ -1312,6 +1312,10 @@ const base_table = [_]Entry{
             if (tasks.isPromiseLike(a[0])) return tasks.derefPromise(a);
             if (a[0].isObjectOf(.ref)) return @import("stm.zig").deref(a[0]);
             if (a[0].isObjectOf(.@"volatile")) return coll.get(a[0], 0);
+            // An instance: its class's deref-object method (D-103), as Clojure's IDeref.
+            if (objs.isObjectInstance(a[0])) return func.call(objs.coreGeneric("deref-object").?, 3, &.{
+                a[0], if (a.len >= 2) a[1] else Value.nil, if (a.len >= 3) a[2] else Value.nil,
+            });
             if (!a[0].isObjectOf(.atom)) rt.raise(.type_error, "deref (@) needs an atom, a ref, a volatile, a promise, a delay or a task, not {s}", .{typeName(a[0])});
             return coll.atomGet(a[0]);
         }

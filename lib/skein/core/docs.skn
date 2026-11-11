@@ -391,6 +391,10 @@ more."]
 names, and the old values."]
    ["close" "([x])"
     "Close x: a generic function, which skein.io's streams specialize, and with-open calls."]
+   ["deref-object" "([x timeout timeout-value])"
+    "What deref (@) gives for an instance: a generic function that classes specialize to join
+@, as Clojure's IDeref; timeout and timeout-value are nil when deref had none
+(skein.process's processes, D-103)."]
    ["error" "([x & args])"
     "Signal an error: a condition, a condition type with keyword initargs, or a message string
 joined from args as println does; unhandled, it enters the debugger or ends the fiber."]

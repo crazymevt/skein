@@ -1191,7 +1191,7 @@ pub fn genericMethods(f: Value) Value {
 
 // The generic functions of skein.core.
 
-pub const CoreGeneric = enum { equiv, @"hash-of", initialize, @"update-instance-for-redefined-class", close };
+pub const CoreGeneric = enum { equiv, @"hash-of", initialize, @"update-instance-for-redefined-class", close, @"deref-object" };
 
 pub var core_generics: [std.enums.values(CoreGeneric).len]Value = @splat(Value.nil);
 
@@ -1228,6 +1228,15 @@ fn closeDefault(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value
     rt.raise(.unsupported_operation_error, "close has no method for {s}", .{out.items});
 }
 
+/// deref-object's default (D-103): deref (@) of an instance whose class has no method.
+fn derefDefault(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
+    _ = self;
+    _ = argc;
+    var out: std.ArrayList(u8) = .empty;
+    @import("print.zig").write(argv[2], &out, true);
+    rt.raise(.type_error, "deref (@) needs an atom, a ref, a volatile, a promise, a delay, a task or an instance with a deref-object method, not {s}", .{out.items});
+}
+
 fn nothing(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
     _ = self;
     _ = argc;
@@ -1242,6 +1251,7 @@ fn makeCoreGenerics() void {
         .{ .initialize, 1, nothing },
         .{ .@"update-instance-for-redefined-class", 4, nothing },
         .{ .close, 1, closeDefault },
+        .{ .@"deref-object", 3, derefDefault },
     };
     for (defs) |d| {
         var buf: [64]u8 = undefined;

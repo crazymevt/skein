@@ -210,6 +210,10 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore h i))
   (error "skein.process is native only (D-103)"))
 
+(defcore "%process-signal" (h kind tree)
+  (declare (ignore h kind tree))
+  (error "skein.process is native only (D-103)"))
+
 (defcore "%process-pid" (h)
   (declare (ignore h))
   (error "skein.process is native only (D-103)"))

@@ -48,8 +48,9 @@ const Proc = struct {
     exit: std.atomic.Value(i64) = std.atomic.Value(i64).init(running),
     /// The wait queue key (tasks.zig) of the fibers waiting for it to end.
     key: u64,
-    /// The job object it runs in, on Windows.
+    /// The job object it runs in, and a handle to signal it with, on Windows.
     job: ?*anyopaque = null,
+    handle: ?*anyopaque = null,
     /// Its stdin, stdout and stderr as stream handles, or nil.
     streams: [3]Value = .{ Value.nil, Value.nil, Value.nil },
 };
@@ -80,16 +81,21 @@ fn register(p: *Proc) Value {
 // Starting a program
 
 /// How one of the program's standard streams is connected: a pipe, the parent's, nothing,
-/// or a file.
-const Redirect = union(enum) { pipe, inherit, discard, file: []u8 };
+/// or a file, written from its start or appended to.
+const Redirect = union(enum) { pipe, inherit, discard, file: []u8, append: []u8, merge };
 
 fn redirectOf(v: Value, comptime which: []const u8) Redirect {
     if (string.isString(v)) return .{ .file = copyString(v, which ++ " must be a keyword or a file's path") };
+    // [path true]: appended to.
+    if (coll.isVector(v) and coll.vectorCount(v) == 2 and coll.vectorNth(v, 1).? == Value.true)
+        return .{ .append = copyString(coll.vectorNth(v, 0).?, which ++ "'s file must be a path") };
     if (names.isKeyword(v) and names.nsOf(v) == null) {
         const n = names.nameOf(v);
         if (std.mem.eql(u8, n, "pipe")) return .pipe;
         if (std.mem.eql(u8, n, "inherit")) return .inherit;
         if (std.mem.eql(u8, n, "discard")) return .discard;
+        // :err :out, the error output where the output goes.
+        if (std.mem.eql(u8, which, ":err") and std.mem.eql(u8, n, "out")) return .merge;
     }
     rt.raise(.@"error", which ++ " must be :pipe, :inherit, :discard or a file's path, not {s}", .{readable(v)});
 }
@@ -102,6 +108,8 @@ const StartCall = struct {
     child: ?std.process.Child = null,
     /// Files opened for redirections, closed once the program has them.
     opened: [3]?std.Io.File = .{ null, null, null },
+    /// With :err :out and a piped stdout: the read end of the pipe both go to.
+    merged: ?std.Io.File = null,
 };
 
 fn startBlocking(arg: ?*anyopaque) void {
@@ -122,7 +130,26 @@ fn startBlocking(arg: ?*anyopaque) void {
                 c.opened[i] = f;
                 break :file .{ .file = f };
             },
+            .append => |path| file: {
+                const f = cwd.createFile(sio, path, .{ .truncate = false }) catch return closeOpened(c);
+                // The program inherits the position, at the end.
+                platform.seekToEnd(f.handle);
+                c.opened[i] = f;
+                break :file .{ .file = f };
+            },
+            // Settled below, once stdout's is.
+            .merge => .inherit,
         };
+    }
+    if (c.redirects[2] == .merge) {
+        if (c.redirects[1] == .pipe) {
+            // One pipe for both, which Zig's spawn can't make.
+            const p = platform.makePipe() orelse return closeOpened(c);
+            c.merged = p[0];
+            c.opened[1] = p[1];
+            stdio[1] = .{ .file = p[1] };
+        }
+        stdio[2] = stdio[1];
     }
     var options: std.process.SpawnOptions = .{
         .argv = c.argv,
@@ -135,6 +162,10 @@ fn startBlocking(arg: ?*anyopaque) void {
     platform.processGroupOptions(&options, c.redirects[0] != .inherit);
     c.child = std.process.spawn(sio, options) catch null;
     closeOpened(c);
+    if (c.child == null) if (c.merged) |m| {
+        m.close(sio);
+        c.merged = null;
+    };
 }
 
 fn closeOpened(c: *StartCall) void {
@@ -187,7 +218,7 @@ fn start(argv: Value, dir: Value, env: Value, in: Value, out: Value, err: Value)
         .redirects = .{ redirectOf(in, ":in"), redirectOf(out, ":out"), redirectOf(err, ":err") },
     };
     defer for (call.redirects) |r| switch (r) {
-        .file => |path| alloc.free(path),
+        .file, .append => |path| alloc.free(path),
         else => {},
     };
     platform.prepareForProcesses();
@@ -196,9 +227,11 @@ fn start(argv: Value, dir: Value, env: Value, in: Value, out: Value, err: Value)
     const p = alloc.create(Proc) catch rt.fatal("out of memory", .{});
     p.* = .{ .child = child, .pid = platform.childProcessId(&child), .key = (6 << 40) | serial.fetchAdd(1, .monotonic) };
     p.job = platform.startedProcess(&p.child);
+    p.handle = platform.childHandle(&p.child);
     // The streams own the pipes now: wait would close what it still holds.
     if (p.child.stdin) |f| p.streams[0] = files.registerPipe(f);
     if (p.child.stdout) |f| p.streams[1] = files.registerPipe(f);
+    if (call.merged) |f| p.streams[1] = files.registerPipe(f);
     if (p.child.stderr) |f| p.streams[2] = files.registerPipe(f);
     p.child.stdin = null;
     p.child.stdout = null;
@@ -237,6 +270,17 @@ fn waitFor(h: Value, seconds: Value) Value {
     const p = procOf(h);
     if (!ended(p) and !tasks.waitForKey(p.key, ended, p, seconds)) return Value.nil;
     return Value.fromFixnum(p.exit.load(.acquire));
+}
+
+/// (%process-signal h kind tree): signal the program, if it's still running, by intent
+/// (0 interrupt, 1 terminate, 2 kill), with `tree` what it started too. Returns nil.
+fn signal(h: Value, kind: Value, tree: Value) Value {
+    const p = procOf(h);
+    if (!kind.isFixnum() or kind.toFixnum() < 0 or kind.toFixnum() > 2)
+        rt.raise(.@"error", "%process-signal needs 0, 1 or 2, not {s}", .{readable(kind)});
+    // Once it has ended its pid may be another program's.
+    if (!ended(p)) platform.signalProcess(p.pid, p.handle, p.job, @intCast(kind.toFixnum()), tree.isTruthy());
+    return Value.nil;
 }
 
 fn exitOf(h: Value) Value {
@@ -290,6 +334,11 @@ pub const entries = [_]io.Entry{
             if (!a[1].isFixnum() or a[1].toFixnum() < 0 or a[1].toFixnum() > 2)
                 rt.raise(.@"error", "%process-stream needs 0, 1 or 2, not {s}", .{readable(a[1])});
             return p.streams[@intCast(a[1].toFixnum())];
+        }
+    }.f },
+    .{ .name = "%process-signal", .min = 3, .max = 3, .impl = struct {
+        fn f(a: Args) Value {
+            return signal(a[0], a[1], a[2]);
         }
     }.f },
     .{ .name = "%process-pid", .min = 1, .max = 1, .impl = struct {

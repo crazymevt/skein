@@ -1,0 +1,14 @@
+echoed: [got a got b]
+a process: true true
+exit: 0 alive: false
+from text: [got x got y] 0
+exit status: 7
+within 0.1 s: :still-running true
+destroyed: true false
+extra-env: extra
+merged: (to stderr to stdout) true
+appended: "a line\na line\n"
+discarded: true 0
+missing: skein-no-such-program
+deref-object: [1 nil nil] [2 5 :late]
+no method: :refused

@@ -63,6 +63,8 @@ Returns the old and new values."
         ((skein-promise-p x)
          (deref-promise x (and timeout-p (seconds-from-now timeout)) timeout-value))
         ((skein-volatile-p x) (skein-volatile-value x))
+        ;; An instance: its class's deref-object method (D-103), as Clojure's IDeref.
+        ((instance-p x) (funcall (core-fn "deref-object") x timeout timeout-value))
         (t (unsupported "deref (@) needs an atom, a ref, a volatile, a promise, a delay or ~
                          a task, not ~A"
                         (readable-string x)))))

@@ -596,6 +596,12 @@ default one applies to ARGS (whose first element is an instance)."
 (define-core-generic "close" 1 '(lambda (x)
                                  (skein-error 'unsupported-operation-error nil
                                               "close has no method for ~A" (readable-string x))))
+;; deref's (D-103): classes specialize it to join @, as Clojure's IDeref.
+(define-core-generic "deref-object" 3 '(lambda (x timeout timeout-value)
+                                        (declare (ignore timeout timeout-value))
+                                        (skein-error 'unsupported-operation-error nil
+                                                     "deref (@) needs an atom, a ref, a volatile, a promise, a delay, a task or an instance with a deref-object method, not ~A"
+                                                     (readable-string x))))
 (let ((gf (make-skein-generic "skein.core/update-instance-for-redefined-class" 4 nil)))
   (def-var (intern-var +core+ "update-instance-for-redefined-class") gf)
   (c2mop:ensure-method gf '(lambda (obj added discarded old)

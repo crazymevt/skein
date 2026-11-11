@@ -1,0 +1,84 @@
+;; skein.process (M3.1 step 2, D-103), natively: this program starts itself as a child
+;; (its first argument says what the child does) through process, its streams, @p, its
+;; options and redirections; and deref-object, which lets @ work on a class's instances.
+;; stderr: to stderr
+(ns process-api
+  (:require [skein.process :as process :refer [process]]
+            [skein.system :as system]
+            [skein.io :as io]
+            [skein.string :as string]))
+
+;;; The child
+
+(defn- stdin-lines []
+  (let [in (%stdin)]
+    (loop [pending "" lines []]
+      (if-let [text (%read-text in)]
+        (let [s (str pending text)
+              parts (string/split s "\n" (inc (count s)))]
+          (recur (last parts) (into lines (butlast parts))))
+        (if (empty? pending) lines (conj lines pending))))))
+
+(defn- child [mode]
+  (case mode
+    "echo" (doseq [line (stdin-lines)] (println (str "got " line)))
+    "env" (println (system/getenv "SKEIN_PROCESS_API"))
+    "both" (do (println "to stdout") (%write-stderr "to stderr\n"))
+    "line" (println "a line")
+    "exit" (%exit 7)
+    "sleep" (sleep 30)))
+
+;;; The parent
+
+(defn- self [mode] [(%executable-path) mode])
+
+(defclass box []
+  (value))
+
+(defclass plain [])
+
+(defmethod deref-object [(b box) timeout timeout-value]
+  [(:value b) timeout timeout-value])
+
+(defn- parent []
+  ;; Streams from fibers: one writes, one reads.
+  (let [p (process (self "echo"))
+        writer (future (doseq [x ["a" "b"]] (io/write (:in p) (str x "\n")) (io/flush (:in p)))
+                       (close (:in p)))
+        lines (future (vec (io/line-seq (:out p))))]
+    @writer
+    (println "echoed:" @lines)
+    (println "a process:" (process/process? p) (pos? (process/pid p)))
+    (println "exit:" (:exit @p) "alive:" (process/alive? p)))
+  ;; Text for stdin.
+  (let [p (process (self "echo") {:in "x\ny\n"})]
+    (println "from text:" (vec (io/line-seq (:out p))) (:exit @p)))
+  ;; The exit status, and waiting with a time limit.
+  (println "exit status:" (:exit @(process (self "exit"))))
+  (let [p (process (self "sleep"))]
+    (println "within 0.1 s:" (deref p 0.1 :still-running) (process/alive? p))
+    (process/destroy! p)
+    (println "destroyed:" (pos? (:exit @p)) (process/alive? p)))
+  ;; The environment.
+  (let [p (process (self "env") {:extra-env {"SKEIN_PROCESS_API" "extra"}})]
+    (println "extra-env:" (io/read-line (:out p)))
+    @p)
+  ;; :err :out, and redirections to files.
+  (let [p (process (self "both") {:err :out})]
+    (println "merged:" (sort (io/line-seq (:out p))) (nil? (:err p)))
+    @p)
+  (let [file "build/examples/process-api-out.txt"]
+    @(process (self "line") {:out {:file file}})
+    @(process (self "line") {:out {:file file :append true}})
+    (println "appended:" (pr-str (io/read-file file))))
+  (let [p (process (self "both") {:out :discard :err :inherit})]
+    (println "discarded:" (nil? (:out p)) (:exit @p)))
+  ;; A program that isn't there.
+  (println "missing:" (try (process ["skein-no-such-program"])
+                           (catch io/io-error e (io/io-error-path e))))
+  ;; deref-object.
+  (println "deref-object:" @(make box :value 1) (deref (make box :value 2) 5 :late))
+  (println "no method:" (try @(make plain) (catch error e :refused))))
+
+(defn -main [& args]
+  (if (seq args) (child (first args)) (parent)))

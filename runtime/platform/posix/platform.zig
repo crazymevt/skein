@@ -419,3 +419,47 @@ pub fn releaseProcessJob(job: ?*anyopaque) void {
 pub fn childProcessId(child: *const std.process.Child) i64 {
     return child.id.?;
 }
+
+/// The program's handle for signaling it (Windows's process handle; nothing on Unix).
+pub fn childHandle(child: *const std.process.Child) ?*anyopaque {
+    _ = child;
+    return null;
+}
+
+extern "c" fn getpgid(pid: c.pid_t) c.pid_t;
+
+/// Signal a program by intent: 0 interrupt (SIGINT), 1 terminate (SIGTERM), 2 kill
+/// (SIGKILL); with `tree`, its process group too when it has its own.
+pub fn signalProcess(pid: i64, handle: ?*anyopaque, job: ?*anyopaque, kind: u8, tree: bool) void {
+    _ = handle;
+    _ = job;
+    const sig: posix.SIG = switch (kind) {
+        0 => .INT,
+        1 => .TERM,
+        else => .KILL,
+    };
+    const target: c_int = @intCast(pid);
+    // -pid is its group, if it leads one; else the program alone.
+    if (tree and getpgid(target) == target) {
+        _ = std.c.kill(-target, sig);
+    } else {
+        _ = std.c.kill(target, sig);
+    }
+}
+
+/// A pipe, [read end, write end], which programs started later don't inherit (a
+/// program's stderr merged into its stdout), or null.
+pub fn makePipe() ?[2]std.Io.File {
+    var fds: [2]c_int = undefined;
+    if (std.c.pipe(&fds) != 0) return null;
+    for (fds) |fd| _ = std.c.fcntl(fd, std.c.F.SETFD, @as(c_int, std.c.FD_CLOEXEC));
+    return .{
+        .{ .handle = fds[0], .flags = .{ .nonblocking = false } },
+        .{ .handle = fds[1], .flags = .{ .nonblocking = false } },
+    };
+}
+
+/// Move an open file's position to its end (a program's output appended to a file).
+pub fn seekToEnd(handle: std.posix.fd_t) void {
+    _ = std.c.lseek(handle, 0, std.c.SEEK.END);
+}
