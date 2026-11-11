@@ -462,6 +462,53 @@ install prefix, relative to the current directory."
             ["libskein_runtime.a" "skein_runtime.lib"])
       (fail "the runtime library is missing from " prefix "lib/")))
 
+(defn- split-on
+  "The non-empty parts of the string s between the characters ch."
+  [s ch]
+  (loop [i 0 start 0 out []]
+    (cond (= i (count s)) (if (< start i) (conj out (subs s start i)) out)
+          (= (nth s i) ch) (recur (inc i) (inc i) (if (< start i) (conj out (subs s start i)) out))
+          :else (recur (inc i) start out))))
+
+(defn- runtime-exports
+  "The functions the runtime's header (skein.h in include-dir) declares, which a Windows
+executable built with --eval exports for modules (D-091): the name before the first ( of
+each line that starts a declaration."
+  [include-dir]
+  (let [ident? (fn [c] (or (<= 97 (int c) 122) (<= 48 (int c) 57) (= c \_)))]
+    (vec (keep (fn [line]
+                 (let [open (count (take-while (fn [c] (not= c \()) line))]
+                   (when (and (< open (count line)) (pos? (count line))
+                              (not (contains? #{\# \space \tab \/ \* \}} (first line)))
+                              (not (some (fn [w] (and (>= (count line) (count w))
+                                                      (= w (subs line 0 (count w)))))
+                                         ["static" "typedef"])))
+                     (let [before (subs line 0 open)
+                           nm (apply str (reverse (take-while ident? (reverse before))))]
+                       (when (and (> (count nm) 3) (= "sk_" (subs nm 0 3))) nm)))))
+               (split-on (io/read-file (str include-dir "/skein.h")) \newline)))))
+
+(defn- windows-exports!
+  "For a Windows executable built with --eval: write the .def file that makes it export
+the runtime's functions (and sk_gc_pending), which zig links in, and return its path;
+after the link, make-implib! makes the import library that modules link against."
+  [c-file include-dir]
+  (let [def-file (str c-file ".def")]
+    (io/write-file def-file
+                   (apply str "EXPORTS\n  sk_gc_pending DATA\n"
+                          (map (fn [nm] (str "  " nm "\n")) (runtime-exports include-dir))))
+    def-file))
+
+(defn- make-implib!
+  "The import library of the Windows executable output, from the exports in def-file."
+  [output def-file implib target]
+  (let [lib-def (str def-file ".lib.def")
+        arch (subs target 0 (count (take-while (fn [c] (not= c \-)) target)))]
+    (io/write-file lib-def (str "LIBRARY " (file-name output) "\n" (io/read-file def-file)))
+    (run-tool [(zig) "dlltool" "-d" lib-def "-l" implib
+               "-m" (if (= arch "aarch64") "arm64" "i386:x86-64")]
+              nil)))
+
 (defn build-program
   "Compile the Skein program at path to an executable at output (default: :name, else the
 file's name, in the current directory). Options: :output; :target, a triple of `targets`
@@ -502,7 +549,8 @@ function to call). Returns the executable's path."
                                         "/" (stem output) ".lib")]
                         {:zig (zig)
                          :include (abs (str prefix "include"))
-                         :flags (if (= os :linux) (conj c-flags "-fPIC") c-flags)
+                         :flags (vec (concat c-flags ["-DSK_MODULE"]
+                                             (when (= os :linux) ["-fPIC"])))
                          :link (case os
                                  :macos ["-Wl,-undefined,dynamic_lookup"]
                                  :windows [implib]
@@ -517,21 +565,27 @@ function to call). Returns the executable's path."
                  (str (directory-of output) (stem output) ".c")
                  (str home ".skein-cache/" (stem path) "-" (path-hash path) ".c"))]
     (io/write-file c-file c-source)
-    ;; No fused multiply-adds: floating-point results must be exactly Phase 0's.
-    (run-tool (vec (concat [(zig) "cc"] c-flags
-                           ["-I" (str prefix "include") c-file]
-                           (if (:eval opts)
-                             (case os
-                               :macos [(str "-Wl,-force_load," library) "-rdynamic"]
-                               :windows ["-Wl,--whole-archive" library "-Wl,--no-whole-archive"
-                                         "-Wl,--export-all-symbols"
-                                         (str "-Wl,--out-implib," (:implib module-info))]
-                               ["-Wl,--whole-archive" library "-Wl,--no-whole-archive"
-                                "-rdynamic"])
-                             [library])
-                           ["-o" output]
-                           (when-not windows ["-lm"])))
-              nil)
+    (let [def-file (when (and (:eval opts) (= os :windows))
+                     (windows-exports! c-file (str prefix "include")))]
+      ;; No fused multiply-adds: floating-point results must be exactly Phase 0's.
+      (run-tool (vec (concat [(zig) "cc"] c-flags
+                             ["-I" (str prefix "include") c-file]
+                             (if (:eval opts)
+                               (case os
+                                 :macos [(str "-Wl,-force_load," library) "-rdynamic"]
+                                 :windows ["-Wl,--whole-archive" library "-Wl,--no-whole-archive"
+                                           def-file]
+                                 ["-Wl,--whole-archive" library "-Wl,--no-whole-archive"
+                                  "-rdynamic"])
+                               [library])
+                             ["-o" output]
+                             (when-not windows ["-lm"])))
+                nil)
+      (when def-file
+        (make-implib! output def-file (:implib module-info) (or target (%host-target)))
+        ;; zig also writes an import library of its own, named after the C file, in the
+        ;; current directory.
+        (%delete-tree (str (stem c-file) ".lib"))))
     output))
 
 ;;; ------------------------------------------------------------------------------------
@@ -673,14 +727,6 @@ earlier package there is replaced. Returns the package's path."
 (defn- exe-suffix [] (if (windows?) ".exe" ""))
 
 (defn- skeinc-path [home] (str home "build/skeinc" (exe-suffix)))
-
-(defn- split-on
-  "The non-empty parts of the string s between the characters ch."
-  [s ch]
-  (loop [i 0 start 0 out []]
-    (cond (= i (count s)) (if (< start i) (conj out (subs s start i)) out)
-          (= (nth s i) ch) (recur (inc i) (inc i) (if (< start i) (conj out (subs s start i)) out))
-          :else (recur (inc i) start out))))
 
 (defn- manifest-text
   "skeinc's date, then each file's date and path, a line each."

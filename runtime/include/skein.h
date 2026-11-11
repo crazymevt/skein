@@ -32,7 +32,12 @@ _Noreturn void sk_exit(int status);
 /* Garbage collection (D-045). A program registers its globals as roots; compiled code
  * polls sk_gc_pending at function entry and loop back-edges so other threads' collections
  * can stop it. */
+/* A module (hot reload, D-091) built for Windows imports it from the program's executable. */
+#if defined(_WIN32) && defined(SK_MODULE)
+extern __declspec(dllimport) unsigned char sk_gc_pending;
+#else
 extern unsigned char sk_gc_pending;
+#endif
 void sk_register_roots(sk_value *slots, size_t count);
 void sk_safepoint(void);
 void sk_collect(_Bool major);

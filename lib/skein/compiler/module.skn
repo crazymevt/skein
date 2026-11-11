@@ -132,7 +132,8 @@ its path."
         lib (str stem suffix)
         _ (io/write-file c-file text)
         argv (vec (concat [zig "cc"] flags ["-I" include "-shared" c-file "-o" lib] link))
-        result (try (io/run-process argv {})
+        ;; In the cache: on Windows zig writes the module's import library where it runs.
+        result (try (io/run-process argv {:dir cache})
                     (catch io/io-error e
                       (fail "cannot run " zig ": " (condition-message e))))]
     (when-not (zero? (:exit result))
