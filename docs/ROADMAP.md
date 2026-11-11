@@ -38,7 +38,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.6 Native REPL and `skein dev` | ✅ |
 | M2.7 Swank server | ✅ |
 | M2.8 Supervisors | ✅ |
-| M2.9 Hot reload of compiled code | ⬜ |
+| M2.9 Hot reload of compiled code | ✅ |
 | M2.10 STM | 🟨 |
 | M2.11 Standard library | 🟨 |
 | M2.12 Package management | 🟨 |
