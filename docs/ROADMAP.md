@@ -43,7 +43,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.11 Standard library | 🟨 |
 | M2.12 Package management | 🟨 |
 | M2.13 FFI additions | 🟨 |
-| M2.14 UI library | ⬜ |
+| M2.14 UI library | 🟨 |
 | M2.15 Driftrock developed live, natively | ⬜ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
@@ -425,12 +425,20 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 **Exit:** native tests pass structs by value to and from C functions and callbacks, call through function pointers and call variadic functions, on all three platforms, and the SDL3 bindings (crazymevt/skein-sdl3, D-095) are regenerated with the declarations that were skipped.
 
 ### M2.14 UI library
-- `skein.ui`: native desktop user interfaces from Skein objects and events (D-090). Widgets are classes backed by the platform's own controls, so programs look and behave as their users expect (native controls, dark mode, accessibility, standard menus and dialogs). Properties are slots and generic functions; events are objects that handlers and methods receive, some of them vetoable (a window close); layout is boxes and grids with expansion, alignment and margins; menus with shortcuts, the platform's alerts and file choosers, timers and the clipboard. Calls from any fiber are handed to the UI thread, so a window can be built and changed from the REPL or SLIME while the program runs.
+- `skein.ui`: native desktop user interfaces from Skein objects and events (D-090), in its own repository, `skein-ui`, which programs use with `:deps` (D-097). Widgets are classes backed by the platform's own controls, so programs look and behave as their users expect (native controls, dark mode, accessibility, standard menus and dialogs). Properties are cell slots, read with keywords and changed with `set-slot!` and `update-slot!`; events are objects that handlers connected with `on` and methods on `handle-event` receive, some of them vetoable (a window close); layout is boxes and grids with expansion, alignment and margins; menus with shortcuts, the platform's alerts and file choosers, timers and the clipboard. Calls from any fiber are handed to the UI thread, so a window can be built and changed from the REPL or SLIME while the program runs.
 - Backends: Cocoa on macOS (AppKit through the Objective-C runtime), Win32 and Common Controls on Windows, GTK 4 on Linux, and a headless one for tests. Namespaces `skein.ui` (objects, events, layout, the backend protocol), `skein.ui.headless`, `skein.ui.cocoa`, `skein.ui.win32` and `skein.ui.gtk`.
-- It is a port of the design of Jessie's Common Lisp toolkit, written for Skein rather than translated line by line.
-- To settle when preparing it: the widgets of the first version (labels, buttons, toggles and checks, radio buttons, entries, a text view, sliders, spin buttons, progress bars, combo boxes, lists, tables, trees, images, frames, tabs, split panes, scrolled windows, a canvas, and later a web view); the event API (handlers connected with `on`, methods on `handle-event`); setting properties without `setf` (`set-*!` generics or cell slots); GTK 4 in Linux CI; the steps (the core on the headless backend first, then one backend at a time).
+- It is a port of the design of Jessie's Common Lisp toolkit (LGT), written for Skein rather than translated line by line, with LGT's whole widget set except the web view (D-097).
+- Settled (D-097): its own repository; LGT's widgets but the web view; properties as cell slots; `on` handlers and `handle-event` methods; skein-ui's CI checks out Skein's main branch and bootstraps it; headless first, then one backend at a time.
+- Steps, in order (D-097), in skein-ui:
+  1. The repository: a library `project.skn`, CI on the three platforms that checks out Skein's main and runs `skein test`; the core: the widget class, properties as cell slots with `property-changed`, events (`on`, `off`, `handle-event`, vetoes), the backend protocol, the headless backend, and `ui` to build trees of widgets.
+  2. Layout (boxes and grids: expansion, alignment, margins, spacing) and the simple controls (labels, buttons, toggles and checks, radio buttons, entries, sliders, spin buttons, progress bars and spinners, combo boxes, images, frames), on the headless backend.
+  3. The rest of the widgets on the headless backend: the text view, list boxes, sortable tables, trees, color and date pickers, tabs, split panes, scrolled windows, the canvas and drawing; menus, alerts, file choosers, timers and the clipboard.
+  4. The Cocoa backend (AppKit through the Objective-C runtime, with M2.13's by-value structs and `objc_msgSend` shapes), and calls from any fiber handed to the main thread.
+  5. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
+  6. The GTK 4 backend, in Linux CI under Xvfb.
+  7. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
 
-**Exit:** the core's tests pass on the headless backend on all three platforms, and one demo program (a window with a form, a list, a menu and a dialog) runs on Cocoa, Win32 and GTK 4 in CI (under Xvfb on Linux), and is changed live from SLIME.
+**Exit:** the core's tests pass on the headless backend on all three platforms, and one demo program (a window with a form, a list, a menu and a dialog) runs on Cocoa, Win32 and GTK 4 in skein-ui's CI (under Xvfb on Linux), and is changed live from SLIME.
 
 ### M2.15 Driftrock developed live, natively
 - Develop and debug Driftrock with native `skein dev` and SLIME: fix a crash in the debugger and resume, edit while playing, reload compiled code.

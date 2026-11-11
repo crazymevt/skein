@@ -970,7 +970,7 @@ As built (M2.11, D-093): `(deftest name body...)` defines a function of no argum
 | `skein.ecs` | entity–component–system on `defsoa` | 1+ |
 | `skein.json`, `skein.edn` | data formats | 1+ |
 | `skein.net` | sockets, HTTP client | Deferred |
-| `skein.ui` | native desktop UIs: widgets backed by Cocoa, Win32 and GTK 4 controls, events, layout, menus and dialogs; a headless backend for tests | 2 (M2.14, D-090) |
+| `skein.ui` | native desktop UIs: widgets backed by Cocoa, Win32 and GTK 4 controls, events, layout, menus and dialogs; a headless backend for tests. In its own repository, `skein-ui`, used with `:deps` | 2 (M2.14, D-090, D-097) |
 
 Phase 0 status (D-040):
 - **Done:** `skein.core`, `skein.ffi`, `skein.jobs` (job graphs; the rest of `skein.conc` is in `skein.core`) and `skein.math`. `skein.time` has `now` and `now-ns`, with `sleep` in `skein.core`. `skein.game` has `run-loop` and the frame restarts, but no input mapping yet.
