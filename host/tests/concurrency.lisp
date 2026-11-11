@@ -91,7 +91,7 @@
   (evp-is "(let [f (future (sleep 10))] [(cancel! f) (try @f (catch task-cancelled-error e :c))])"
           "[true :c]")
   (evp-is "(task? (future 1))" "true")
-  (fails "@5" "deref (@) needs an atom, a ref or a task"))
+  (fails "@5" "deref (@) needs an atom, a ref, a volatile, a promise, a delay or a task"))
 
 ;;; Cancellation points and timeouts
 

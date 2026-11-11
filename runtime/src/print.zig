@@ -79,7 +79,7 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
             put(out, string.bytes(coll.get(v, 0)));
             put(out, ">");
         },
-        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq, .eduction, .arrseq => writeSequential(v, out, readably, "(", ")"),
+        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq, .eduction, .arrseq, .tseq => writeSequential(v, out, readably, "(", ")"),
         .@"struct" => @import("structs.zig").writeStruct(v, out, readably),
         .prim_array, .any_array, .struct_array, .array_view, .byte_view => @import("structs.zig").writeArray(v, out, readably),
         .struct_def => {
@@ -93,13 +93,13 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
             put(out, ">");
         },
         .vector => writeSequential(v, out, readably, "[", "]"),
-        .array_map, .hash_map => {
+        .array_map, .hash_map, .sorted_map => {
             put(out, "{");
             var ctx: Entries = .{ .out = out, .readably = readably, .limit = printLength() };
             coll.mapEach(v, &ctx, Entries.mapEntry);
             put(out, "}");
         },
-        .hash_set => {
+        .hash_set, .sorted_set => {
             put(out, "#{");
             var ctx: Entries = .{ .out = out, .readably = readably, .limit = printLength() };
             coll.mapEach(coll.get(v, 0), &ctx, Entries.setElement);
@@ -116,6 +116,12 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
         .condition, .condition_type, .restart => @import("cond.zig").write(v, out),
         .task, .nursery, .chan => @import("tasks.zig").write(v, out),
         .ref => @import("stm.zig").write(v, out),
+        .promise, .delay => @import("tasks.zig").writePromise(v, out),
+        .@"volatile" => {
+            put(out, "#<volatile ");
+            write(coll.get(v, 0), out, true);
+            put(out, ">");
+        },
         .foreign_ptr, .owned_ptr, .ctype => @import("ffi.zig").write(v, out),
         else => put(out, "#<object>"),
     }

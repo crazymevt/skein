@@ -206,8 +206,11 @@ walked, or NIL when INDEX is at a key/value pair."
 ;;; Atoms (DESIGN §6.3; functions in atoms.lisp)
 
 (defstruct (skein-atom (:constructor make-skein-atom (value)) (:copier nil))
-  "A Skein atom: a box whose value changes only by compare-and-swap."
-  (value nil))
+  "A Skein atom: a box whose value changes only by compare-and-swap. WATCHES is an alist
+of key and function, VALIDATOR a function or nil (M2.11)."
+  (value nil)
+  (watches '())
+  (validator nil))
 
 (setf (documentation 'skein-atom-p 'function) "Return true if the argument is an atom."
       (documentation 'skein-atom-value 'function) "Return the current value of an atom.")

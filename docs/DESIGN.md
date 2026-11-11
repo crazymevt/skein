@@ -203,10 +203,11 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 | vector | 32-way trie with tail (Clojure `PersistentVector`) | O(log₃₂ n) access, update and append |
 | hash-map | HAMT (hash array mapped trie) | O(log₃₂ n) |
 | hash-set | HAMT | O(log₃₂ n) |
-| sorted-map / sorted-set | persistent red-black tree **(Deferred)** | O(log n) |
+| sorted-map / sorted-set | persistent balanced (AVL) tree, natively (M2.11, D-093) | O(log n) |
 | queue | persistent queue **(Deferred)** | amortized O(1) |
 
 - Small maps of up to 8 entries use an **array map** representation for speed.
+- Sorted maps and sets (`sorted-map`, `sorted-map-by`, `sorted-set`, `sorted-set-by`) are ordered by `compare`, or by a comparator that returns a number or, like `>`, a boolean. They are maps and sets to every function, equal to hash maps and sets with the same entries; `rseq`, `subseq` and `rsubseq` walk them from either end or from a key. They have no transients. Phase 0 has none (D-093).
 - **Transients** (`transient`, `conj!`, `assoc!`, `persistent!`) provide fast batch construction. A transient is owned by the fiber that created it; using it from another fiber is an error in safe mode.
 - Maps and sets keep no insertion order. (Array maps happen to iterate in insertion order; programs must not rely on it.)
 - Collections carry no runtime metadata in v1; metadata is a property of syntax (§3) (D-032). From M2.11 (D-093) collections and symbols carry a metadata map: `meta`, `with-meta`, `vary-meta`; equality and hashing ignore it, and quoted data keeps its metadata.
@@ -218,7 +219,11 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 |---|---|
 | `atom` | a single value updated by compare-and-swap: `swap!`, `reset!`, `compare-and-set!`; read with `@a` |
 | `ref` | an STM-managed cell, changed in `dosync` transactions (§13.3, M2.10) |
-| `volatile` | an unsynchronized fast box for single-fiber use |
+| `volatile` | an unsynchronized fast box for single-fiber use: `volatile!`, `vreset!`, `vswap!`, `@v` |
+| `promise` | a value delivered once (`deliver`); `@p` waits for it, with an optional timeout as for futures (M2.11) |
+| `delay` | `(delay body...)` runs the body at the first `@d` or `force` and keeps its value or its error; other fibers that deref it meanwhile wait (M2.11) |
+
+Atoms and refs take a validator (`(atom x :validator f)`, `set-validator!`), which can reject a new value with an error, and watches (`add-watch`, `remove-watch`), called after each change as `(f key reference old new)`; a ref's validator runs at commit and its watches after it. `swap-vals!` and `reset-vals!` return `[old new]` (M2.11, D-093).
 | `array` | a mutable, fixed-length, typed array (§9) |
 | `chan` | a channel (§13) |
 

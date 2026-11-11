@@ -264,7 +264,7 @@ pub fn classOf(v: Value) Value {
         .array_map, .hash_map => builtin(.hash_map),
         .hash_set => builtin(.hash_set),
         .list, .empty_list => builtin(.list),
-        .cons, .lazy_seq, .vseq, .sseq => builtin(.seq),
+        .cons, .lazy_seq, .vseq, .sseq, .tseq => builtin(.seq),
         .function => builtin(.@"fn"),
         .atom => builtin(.atom),
         .ref => builtin(.ref),

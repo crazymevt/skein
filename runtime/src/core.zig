@@ -19,6 +19,8 @@ const seqs = @import("seq.zig");
 const objs = @import("objects.zig");
 const structs = @import("structs.zig");
 const tasks = @import("tasks.zig");
+const watch = @import("watch.zig");
+const sorted = @import("sorted.zig");
 const io = @import("io.zig");
 const compiler = @import("compiler.zig");
 const ffi = @import("ffi.zig");
@@ -106,15 +108,15 @@ pub fn count(v: Value) usize {
         .empty_list => 0,
         .list => coll.ux(coll.get(v, 2)),
         .vector => coll.vectorCount(v),
-        .array_map, .hash_map => coll.mapCount(v),
-        .hash_set => coll.setCount(v),
+        .array_map, .hash_map, .sorted_map => coll.mapCount(v),
+        .hash_set, .sorted_set => coll.setCount(v),
         .transient_vector, .transient_map => coll.ux(coll.get(v, 0)),
         .transient_set => coll.ux(coll.get(coll.get(v, 0), 0)),
         .vseq => coll.vectorCount(coll.get(v, 0)) - coll.ux(coll.get(v, 1)),
         .prim_array, .any_array, .struct_array, .array_view, .byte_view => structs.count(v),
         .arrseq => structs.count(coll.get(v, 0)) - coll.ux(coll.get(v, 1)),
         .sseq => string.count(coll.get(v, 0)) - coll.ux(coll.get(v, 1)),
-        .cons, .lazy_seq, .eduction => seqs.countSeq(v),
+        .cons, .lazy_seq, .eduction, .tseq => seqs.countSeq(v),
         else => badArg("count", v),
     };
 }
@@ -496,18 +498,84 @@ fn keysOrVals(comptime keys: bool) fn (Args) Value {
     }.f;
 }
 
-fn swapFn(a: Args) Value {
+fn comparatorArg(f: Value, comptime what: []const u8) Value {
+    if (!f.isObjectOf(.function)) rt.raise(.type_error, what ++ " needs a comparator function, not {s}", .{typeName(f)});
+    return f;
+}
+
+fn sortedMapOf(comparator: Value, kvs: Args, comptime what: []const u8) Value {
+    if (kvs.len % 2 != 0) rt.raise(.@"error", what ++ " needs keys and values in pairs", .{});
+    var m = sorted.makeMap(comparator);
+    var i: usize = 0;
+    while (i < kvs.len) : (i += 2) m = sorted.assoc(m, kvs[i], kvs[i + 1]);
+    return m;
+}
+
+fn sortedSetOf(comparator: Value, xs: Args) Value {
+    var s = sorted.makeSet(comparator);
+    for (xs) |x| s = sorted.setConj(s, x);
+    return s;
+}
+
+var volatile_counter = std.atomic.Value(u32).init(0);
+
+fn volatileCount() u32 {
+    return volatile_counter.fetchAdd(1, .monotonic);
+}
+
+/// swap! and swap-vals!: [old new].
+fn swapVals(a: Args, comptime name: []const u8) Value {
     const at = a[0];
-    if (!at.isObjectOf(.atom)) badArg("swap!", at);
+    if (!at.isObjectOf(.atom)) badArg(name, at);
     var buf: [16]Value = undefined;
-    if (a.len - 1 > buf.len) rt.raise(.unsupported_operation_error, "swap! with that many arguments is not supported natively yet", .{});
+    if (a.len - 1 > buf.len) rt.raise(.unsupported_operation_error, name ++ " with that many arguments is not supported natively yet", .{});
     while (true) {
         const old = coll.atomGet(at);
         buf[0] = old;
         @memcpy(buf[1 .. a.len - 1], a[2..]);
         const new = func.call(a[1], @intCast(a.len - 1), &buf);
-        if (coll.atomCompareAndSet(at, old, new)) return new;
+        watch.validate(at, new);
+        if (coll.atomCompareAndSet(at, old, new)) {
+            watch.notify(at, old, new);
+            return coll.vectorOf(&.{ old, new });
+        }
     }
+}
+
+fn resetVals(at: Value, new: Value) Value {
+    watch.validate(at, new);
+    while (true) {
+        const old = coll.atomGet(at);
+        if (coll.atomCompareAndSet(at, old, new)) {
+            watch.notify(at, old, new);
+            return coll.vectorOf(&.{ old, new });
+        }
+    }
+}
+
+/// The validator of (atom x opts...) or (ref x opts...), or null: the options are
+/// :validator f (and :meta, which step 6 of M2.11 gives a meaning).
+pub fn referenceOptions(opts: Args, comptime what: []const u8) ?Value {
+    if (opts.len % 2 != 0) rt.raise(.@"error", what ++ " takes options in pairs: :validator f", .{});
+    var validator: ?Value = null;
+    var i: usize = 0;
+    while (i < opts.len) : (i += 2) {
+        if (opts[i] == names.keyword(null, "validator")) {
+            if (opts[i + 1] != Value.nil) validator = opts[i + 1];
+        } else {
+            var out: std.ArrayList(u8) = .empty;
+            print.write(opts[i], &out, true);
+            rt.raise(.@"error", what ++ " has no option {s} (it takes :validator)", .{out.items});
+        }
+    }
+    return validator;
+}
+
+/// An error unless the validator f accepts x.
+pub fn validatorCheck(f: Value, x: Value) void {
+    if (!f.isObjectOf(.function)) rt.raise(.type_error, "a validator must be a function", .{});
+    const ok = func.call(f, 1, &.{x});
+    if (ok == Value.nil or ok == Value.false) rt.raise(.@"error", "the validator rejects the initial value", .{});
 }
 
 fn constantlyCode(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
@@ -838,7 +906,12 @@ const base_table = [_]Entry{
             return seqs.lazySeq(a[0]);
         }
     }.f),
-    e("realized?", 1, 1, pred(seqs.isRealized)),
+    e("realized?", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (tasks.isPromiseLike(a[0])) return Value.fromBool(tasks.promiseRealized(a[0]));
+            return Value.fromBool(seqs.isRealized(a[0]));
+        }
+    }.f),
     e("sequential?", 1, 1, pred(seqs.isSequential)),
     e("reduced", 1, 1, struct {
         fn f(a: Args) Value {
@@ -1046,6 +1119,7 @@ const base_table = [_]Entry{
             if (!v.isObject()) return false;
             return switch (v.toObject().type_id) {
                 .list, .empty_list, .vector, .array_map, .hash_map, .hash_set, .vseq,
+                .sorted_map, .sorted_set,
                 .transient_vector, .transient_map, .transient_set => true,
                 else => false,
             };
@@ -1219,9 +1293,15 @@ const base_table = [_]Entry{
         }
     }.f),
     // Atoms
-    e("atom", 1, 1, struct {
+    // (atom x) or (atom x :validator f)
+    e("atom", 1, null, struct {
         fn f(a: Args) Value {
-            return coll.makeAtom(a[0]);
+            const at = coll.makeAtom(a[0]);
+            if (referenceOptions(a[1..], "atom")) |v| {
+                validatorCheck(v, a[0]);
+                coll.set(at, 3, v);
+            }
+            return at;
         }
     }.f),
     e("deref", 1, 3, struct {
@@ -1229,22 +1309,129 @@ const base_table = [_]Entry{
             // Atoms give their value; tasks (futures, spawned tasks) wait for theirs. With
             // a timeout in seconds, a task that is not done by then gives the timeout value.
             if (tasks.isTask(a[0])) return tasks.deref(a);
+            if (tasks.isPromiseLike(a[0])) return tasks.derefPromise(a);
             if (a[0].isObjectOf(.ref)) return @import("stm.zig").deref(a[0]);
-            if (!a[0].isObjectOf(.atom)) rt.raise(.type_error, "deref (@) needs an atom, a ref or a task, not {s}", .{typeName(a[0])});
+            if (a[0].isObjectOf(.@"volatile")) return coll.get(a[0], 0);
+            if (!a[0].isObjectOf(.atom)) rt.raise(.type_error, "deref (@) needs an atom, a ref, a volatile, a promise, a delay or a task, not {s}", .{typeName(a[0])});
             return coll.atomGet(a[0]);
         }
     }.f),
     e("reset!", 2, 2, struct {
         fn f(a: Args) Value {
             if (!a[0].isObjectOf(.atom)) badArg("reset!", a[0]);
-            return coll.atomReset(a[0], a[1]);
+            if (!watch.watched(a[0])) return coll.atomReset(a[0], a[1]);
+            return coll.vectorNth(resetVals(a[0], a[1]), 1).?;
         }
     }.f),
-    e("swap!", 2, null, swapFn),
+    // (reset-vals! a x): [old new].
+    e("reset-vals!", 2, 2, struct {
+        fn f(a: Args) Value {
+            if (!a[0].isObjectOf(.atom)) badArg("reset-vals!", a[0]);
+            return resetVals(a[0], a[1]);
+        }
+    }.f),
+    e("swap!", 2, null, struct {
+        fn f(a: Args) Value {
+            return coll.vectorNth(swapVals(a, "swap!"), 1).?;
+        }
+    }.f),
+    // (swap-vals! a f args...): [old new].
+    e("swap-vals!", 2, null, struct {
+        fn f(a: Args) Value {
+            return swapVals(a, "swap-vals!");
+        }
+    }.f),
+    // Sorted maps and sets (M2.11, D-093; sorted.zig)
+    e("sorted-map", 0, null, struct {
+        fn f(a: Args) Value {
+            return sortedMapOf(Value.nil, a, "sorted-map");
+        }
+    }.f),
+    e("sorted-map-by", 1, null, struct {
+        fn f(a: Args) Value {
+            return sortedMapOf(comparatorArg(a[0], "sorted-map-by"), a[1..], "sorted-map-by");
+        }
+    }.f),
+    e("sorted-set", 0, null, struct {
+        fn f(a: Args) Value {
+            return sortedSetOf(Value.nil, a);
+        }
+    }.f),
+    e("sorted-set-by", 1, null, struct {
+        fn f(a: Args) Value {
+            return sortedSetOf(comparatorArg(a[0], "sorted-set-by"), a[1..]);
+        }
+    }.f),
+    e("sorted?", 1, 1, struct {
+        fn f(a: Args) Value {
+            return Value.fromBool(sorted.isSorted(a[0]));
+        }
+    }.f),
+    // (%sorted-seq coll descending?) and (%sorted-seq-from coll key descending?): rseq,
+    // subseq and rsubseq.
+    e("%sorted-seq", 2, 2, struct {
+        fn f(a: Args) Value {
+            if (!sorted.isSorted(a[0])) badArg("rseq", a[0]);
+            return sorted.seq(a[0], a[1] != Value.nil and a[1] != Value.false);
+        }
+    }.f),
+    e("%sorted-seq-from", 3, 3, struct {
+        fn f(a: Args) Value {
+            if (!sorted.isSorted(a[0])) badArg("subseq", a[0]);
+            return sorted.seqFrom(a[0], a[1], a[2] != Value.nil and a[2] != Value.false);
+        }
+    }.f),
+    // (%sorted-compare coll a b): -1, 0 or 1, as coll's comparator orders a and b.
+    e("%sorted-compare", 3, 3, struct {
+        fn f(a: Args) Value {
+            if (!sorted.isSorted(a[0])) badArg("subseq", a[0]);
+            return Value.fromFixnum(sorted.compareWith(sorted.comparatorOf(a[0]), a[1], a[2]));
+        }
+    }.f),
+    // (%sorted-empty coll): an empty sorted map or set with coll's comparator.
+    e("%sorted-empty", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!sorted.isSorted(a[0])) badArg("empty", a[0]);
+            return sorted.empty(a[0]);
+        }
+    }.f),
+    // Volatiles (M2.11, D-093): a box with no synchronization, for one fiber.
+    e("volatile!", 1, 1, struct {
+        fn f(a: Args) Value {
+            return coll.make(.@"volatile", &.{ a[0], Value.fromFixnum(@import("hash.zig").mix32(volatileCount() +% 1)) });
+        }
+    }.f),
+    e("volatile?", 1, 1, struct {
+        fn f(a: Args) Value {
+            return Value.fromBool(a[0].isObjectOf(.@"volatile"));
+        }
+    }.f),
+    e("vreset!", 2, 2, struct {
+        fn f(a: Args) Value {
+            if (!a[0].isObjectOf(.@"volatile")) badArg("vreset!", a[0]);
+            coll.set(a[0], 0, a[1]);
+            return a[1];
+        }
+    }.f),
+    e("vswap!", 2, null, struct {
+        fn f(a: Args) Value {
+            if (!a[0].isObjectOf(.@"volatile")) badArg("vswap!", a[0]);
+            var buf: [16]Value = undefined;
+            if (a.len - 1 > buf.len) rt.raise(.unsupported_operation_error, "vswap! with that many arguments is not supported natively yet", .{});
+            buf[0] = coll.get(a[0], 0);
+            @memcpy(buf[1 .. a.len - 1], a[2..]);
+            const new = func.call(a[1], @intCast(a.len - 1), &buf);
+            coll.set(a[0], 0, new);
+            return new;
+        }
+    }.f),
     e("compare-and-set!", 3, 3, struct {
         fn f(a: Args) Value {
             if (!a[0].isObjectOf(.atom)) badArg("compare-and-set!", a[0]);
-            return Value.fromBool(coll.atomCompareAndSet(a[0], a[1], a[2]));
+            watch.validate(a[0], a[2]);
+            if (!coll.atomCompareAndSet(a[0], a[1], a[2])) return Value.false;
+            watch.notify(a[0], a[1], a[2]);
+            return Value.true;
         }
     }.f),
     // Transients
@@ -1474,7 +1661,7 @@ const base_table = [_]Entry{
 /// skein.ffi's functions (ffi.zig, named skein.ffi/<name>), and skein.math's and
 /// skein.time's (mathtime.zig, named skein.math/<name> and skein.time/<name>), and eval
 /// and its relatives (evaluate.zig), and what the REPL and skein dev need (devio.zig).
-const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(io.entries) ++
+const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(watch.entries) ++ entriesOf(io.entries) ++
     entriesOf(compiler.entries) ++ entriesOf(ffi.entries) ++ entriesOf(mathtime.entries) ++
     entriesOf(evaluate.entries) ++ entriesOf(devio.entries) ++
     entriesOf(@import("stm.zig").entries) ++ entriesOf(string.entries);

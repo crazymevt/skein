@@ -109,7 +109,7 @@ to the result."
         :else (error (str "reduce-kv needs a map or vector, not " (pr-str coll)))))
 
 (defn- into-coll [to from xform]
-  (if (or (vector? to) (map? to) (set? to))
+  (if (and (or (vector? to) (map? to) (set? to)) (not (sorted? to)))
     (let [rf (fn ([] (transient to)) ([acc] acc) ([acc x] (conj! acc x)))]
       (persistent! (if xform
                      (transduce xform rf (transient to) from)
@@ -640,6 +640,7 @@ dropped."
   "An empty collection of the same kind, or nil."
   [coll]
   (cond (vector? coll) []
+        (sorted? coll) (%sorted-empty coll)
         (map? coll) {}
         (set? coll) #{}
         (seq? coll) '()
@@ -881,9 +882,10 @@ children, which (children node) gives."
    (subvec* v start end)))
 
 (defn rseq
-  "The elements of a vector in reverse order, or nil if it is empty."
+  "The elements of a vector, or of a sorted map or set, in reverse order, or nil if it is
+empty."
   [v]
-  (seq (reverse v)))
+  (if (sorted? v) (%sorted-seq v true) (seq (reverse v))))
 
 (defn update-vals
   "m with f applied to each value."
@@ -943,6 +945,53 @@ mutual recursion without growing the stack."
   "The x for which (k x) is least (the last of several)."
   [k x & more]
   (reduce (fn [a b] (if (<= (k b) (k a)) b a)) x more))
+
+;;; ------------------------------------------------------------------------------------
+;;; References (step 5 of M2.11, D-093)
+
+(defn- sorted-key
+  "The key of an element of the seq of the sorted map or set sc."
+  [sc x]
+  (if (map? sc) (nth x 0) x))
+
+(defn subseq
+  "The elements of the sorted map or set sc whose keys pass (test key k), for test one of
+<, <=, > and >=, in order; or between two bounds: (subseq sc >= 3 < 7)."
+  ([sc test k]
+   (let [include? (fn [x] (test (%sorted-compare sc (sorted-key sc x) k) 0))]
+     (if (or (identical? test >) (identical? test >=))
+       (when-let [s (%sorted-seq-from sc k false)]
+         (if (include? (first s)) s (next s)))
+       (take-while include? (%sorted-seq sc false)))))
+  ([sc start-test start-k end-test end-k]
+   (when-let [s (%sorted-seq-from sc start-k false)]
+     (let [s (if (start-test (%sorted-compare sc (sorted-key sc (first s)) start-k) 0)
+               s
+               (next s))]
+       (take-while (fn [x] (end-test (%sorted-compare sc (sorted-key sc x) end-k) 0)) s)))))
+
+(defn rsubseq
+  "The elements of the sorted map or set sc whose keys pass (test key k), in reverse
+order; or between two bounds: (rsubseq sc > 3 <= 7)."
+  ([sc test k]
+   (let [include? (fn [x] (test (%sorted-compare sc (sorted-key sc x) k) 0))]
+     (if (or (identical? test <) (identical? test <=))
+       (when-let [s (%sorted-seq-from sc k true)]
+         (if (include? (first s)) s (next s)))
+       (take-while include? (%sorted-seq sc true)))))
+  ([sc start-test start-k end-test end-k]
+   (when-let [s (%sorted-seq-from sc end-k true)]
+     (let [s (if (end-test (%sorted-compare sc (sorted-key sc (first s)) end-k) 0)
+               s
+               (next s))]
+       (take-while (fn [x] (start-test (%sorted-compare sc (sorted-key sc x) start-k) 0))
+                   s)))))
+
+(defn force
+  "The value of the delay x (running its body if no deref has); x itself if it isn't a
+delay."
+  [x]
+  (if (delay? x) (deref x) x))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Numbers and printing (step 4 of M2.11, D-093)

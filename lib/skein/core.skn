@@ -648,3 +648,10 @@ empty."
   [& body]
   `(%with-out-str (fn [] ~@body)))
 
+
+(defmacro delay
+  "A delay of the body: the first deref (or force) evaluates it and keeps its value, or
+its error, for every deref after. A fiber that derefs it while another runs the body
+waits."
+  [& body]
+  `(%delay (fn [] ~@body)))

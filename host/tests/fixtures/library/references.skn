@@ -1,0 +1,106 @@
+(ns references
+  (:require [skein.test :refer [deftest is are testing run-tests]]))
+
+;; skein.core's references of M2.11 step 5 (D-093), natively, compared with
+;; references.expected: promises, delays, volatiles, watches, validators, swap-vals! and
+;; reset-vals!.
+
+(def self-deref (delay @self-deref))
+
+(deftest promises
+  (let [p (promise)]
+    (is (not (realized? p)))
+    (is (= :timeout (deref p 0.01 :timeout)))
+    (future (sleep 0.02) (deliver p 42))
+    (is (= 42 @p))
+    (is (realized? p))
+    (is (nil? (deliver p 43)))
+    (is (= 42 @p))
+    (is (= "#<promise done 42>" (pr-str p))))
+  (testing "many waiters"
+    (let [p (promise)
+          waiters (mapv (fn [_] (future @p)) (range 10))]
+      (deliver p :go)
+      (is (= (repeat 10 :go) (map deref waiters)))))
+  (is (thrown? error (deliver (atom 1) 2))))
+
+(deftest delays
+  (let [runs (atom 0)
+        d (delay (swap! runs inc) :value)]
+    (is (delay? d))
+    (is (not (realized? d)))
+    (is (= "#<delay pending>" (pr-str d)))
+    (testing "the body runs once, however many fibers deref it at once"
+      (is (= (repeat 16 :value) (map deref (mapv (fn [_] (future @d)) (range 16)))))
+      (is (= 1 @runs)))
+    (is (realized? d))
+    (is (= :value (force d)))
+    (is (= 5 (force 5)))
+    (is (not (delay? 5))))
+  (testing "an error is kept"
+    (let [runs (atom 0)
+          d (delay (swap! runs inc) (error "boom"))]
+      (is (thrown-with-msg? error "boom" @d))
+      (is (thrown-with-msg? error "boom" @d))
+      (is (= 1 @runs))
+      (is (realized? d))))
+  (is (thrown-with-msg? error "dereferenced the delay" @self-deref)))
+
+(deftest volatiles
+  (let [v (volatile! 1)]
+    (is (volatile? v))
+    (is (= 11 (vswap! v + 10)))
+    (is (= 33 (vswap! v * 3)))
+    (is (= :x (vreset! v :x)))
+    (is (= :x @v))
+    (is (= "#<volatile :x>" (pr-str v)))
+    (is (not (volatile? (atom 1))))))
+
+(deftest atom-watches-and-validators
+  (let [a (atom 1)
+        seen (atom [])]
+    (is (identical? a (add-watch a :log (fn [k r old new] (swap! seen conj [k old new])))))
+    (swap! a inc)
+    (reset! a 10)
+    (is (compare-and-set! a 10 11))
+    (is (not (compare-and-set! a 10 12)))
+    (is (= [[:log 1 2] [:log 2 10] [:log 10 11]] @seen))
+    (add-watch a :log (fn [k r old new] (swap! seen conj :replaced)))
+    (swap! a inc)
+    (is (= :replaced (peek @seen)))
+    (remove-watch a :log)
+    (swap! a inc)
+    (is (= 4 (count @seen))))
+  (testing "validators"
+    (let [a (atom 1 :validator pos?)]
+      (is (= pos? (get-validator a)))
+      (is (thrown-with-msg? error "validator rejected" (swap! a -)))
+      (is (thrown-with-msg? error "validator rejected" (reset! a 0)))
+      (is (= 1 @a))
+      (is (= 5 (reset! a 5)))
+      (is (thrown-with-msg? error "rejects the current value" (set-validator! a neg?)))
+      (set-validator! a nil)
+      (is (= -5 (swap! a -)))
+      (is (thrown-with-msg? error "rejects the initial value" (atom 0 :validator pos?)))
+      (is (thrown-with-msg? error "no option" (atom 0 :meta {})))))
+  (testing "swap-vals! and reset-vals!"
+    (let [a (atom 1)]
+      (is (= [1 3] (swap-vals! a + 2)))
+      (is (= [3 :x] (reset-vals! a :x)))
+      (is (= :x @a)))))
+
+(deftest ref-watches-and-validators
+  (let [r (ref 1)
+        seen (atom [])]
+    (add-watch r :log (fn [k ref old new] (swap! seen conj [old new])))
+    (dosync (alter r inc) (alter r inc))
+    (dosync (commute r * 10))
+    (is (= [[1 3] [3 30]] @seen))
+    (set-validator! r even?)
+    (is (thrown-with-msg? error "validator rejected" (dosync (alter r inc))))
+    (is (= 30 @r))
+    (is (= 2 (count @seen)))
+    (is (thrown? error (ref 1 :validator even?)))
+    (is (= 2 @(ref 2 :validator even?)))))
+
+(prn (select-keys (run-tests 'references) [:test :fail :error]))

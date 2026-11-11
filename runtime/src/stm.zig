@@ -20,10 +20,11 @@ const func = @import("func.zig");
 const gc = @import("gc.zig");
 const hash = @import("hash.zig");
 const print = @import("print.zig");
+const watch = @import("watch.zig");
 const Value = @import("value.zig").Value;
 
 // A ref: [value, version (fixnum), lock (nil, or the fixnum id of the committing
-// transaction), identity hash].
+// transaction), identity hash, watches, validator (watch.zig)].
 const r_value = 0;
 const r_version = 1;
 const r_lock = 2;
@@ -63,7 +64,7 @@ pub fn isRef(v: Value) bool {
 
 pub fn makeRef(v: Value) Value {
     const id = hash.mix32(identity_counter.fetchAdd(1, .monotonic) +% 1);
-    return coll.make(.ref, &.{ v, Value.fromFixnum(0), Value.nil, Value.fromFixnum(id) });
+    return coll.make(.ref, &.{ v, Value.fromFixnum(0), Value.nil, Value.fromFixnum(id), Value.nil, Value.nil });
 }
 
 pub fn hashOf(r: Value) u32 {
@@ -253,7 +254,8 @@ fn unlockAll(tx: *Txn) void {
     tx.locked = coll.vectorOf(&.{});
 }
 
-const Commit = struct { tx: *Txn, ok: bool = false };
+/// changes: [ref old new] for each ref with watches, which are called after the commit.
+const Commit = struct { tx: *Txn, ok: bool = false, changes: Value = Value.nil };
 
 fn commitBody(ctx: *anyopaque) callconv(.c) Value {
     const c: *Commit = @ptrCast(@alignCast(ctx));
@@ -290,9 +292,17 @@ fn commitBody(ctx: *anyopaque) callconv(.c) Value {
         fresh = coll.mapAssoc(fresh, r, apply(coll.vectorNth(op, 1).?, base, rest[0..n]));
     }
     it = keysOf(tx.writes);
+    // Validators see the values about to be committed; one that rejects its value
+    // signals, and nothing is committed (M2.11).
+    for (0..coll.vectorCount(it)) |i| {
+        const r = coll.vectorNth(it, i).?;
+        if (watch.watched(r)) watch.validate(r, coll.mapGet(fresh, r) orelse coll.mapGet(tx.writes, r).?);
+    }
+    c.changes = coll.vectorOf(&.{});
     for (0..coll.vectorCount(it)) |i| {
         const r = coll.vectorNth(it, i).?;
         const v = coll.mapGet(fresh, r) orelse coll.mapGet(tx.writes, r).?;
+        if (watch.watched(r)) c.changes = coll.vectorConj(c.changes, coll.vectorOf(&.{ r, load(r, r_value), v }));
         const h = r.toObject();
         gc.store(h, &h.valueSlots()[r_value], v);
         @atomicStore(Value, &slots(r)[r_version], Value.fromFixnum(wv), .release);
@@ -313,6 +323,13 @@ fn commit(tx: *Txn) bool {
     if (coll.mapCount(tx.writes) == 0) return true; // read-only: each read was checked
     var c: Commit = .{ .tx = tx };
     _ = sk_eval_unwind_protect(commitBody, commitCleanup, &c);
+    if (c.ok) {
+        // After the commit, out of the transaction (whose frame is gone by now).
+        for (0..coll.vectorCount(c.changes)) |i| {
+            const ch = coll.vectorNth(c.changes, i).?;
+            watch.notify(coll.vectorNth(ch, 0).?, coll.vectorNth(ch, 1).?, coll.vectorNth(ch, 2).?);
+        }
+    }
     return c.ok;
 }
 
@@ -380,9 +397,16 @@ const Args = []const Value;
 const CoreEntry = @import("compiler.zig").Entry;
 
 pub const entries = [_]CoreEntry{
-    .{ .name = "ref", .min = 1, .max = 1, .impl = struct {
+    // (ref x) or (ref x :validator f)
+    .{ .name = "ref", .min = 1, .max = null, .impl = struct {
         fn f(a: Args) Value {
-            return makeRef(a[0]);
+            const core = @import("core.zig");
+            const r = makeRef(a[0]);
+            if (core.referenceOptions(a[1..], "ref")) |v| {
+                core.validatorCheck(v, a[0]);
+                coll.set(r, 5, v);
+            }
+            return r;
         }
     }.f },
     .{ .name = "ref?", .min = 1, .max = 1, .impl = struct {

@@ -152,6 +152,22 @@ pub const TypeId = enum(u16) {
     // M2.10's STM (D-092; stm.zig).
     /// A ref: [value, version, lock, identity hash].
     ref = 53,
+    // M2.11's references (D-093; tasks.zig and core.zig).
+    /// A promise: [state (0 pending, 2 done), value, nil, nil, identity hash, nil].
+    promise = 54,
+    /// A delay: [state (0 pending, 1 running, 2 done, 3 failed), value, condition, body
+    /// (a function, nil once run), identity hash, the fiber or thread running the body].
+    delay = 55,
+    /// A volatile: [value, identity hash].
+    @"volatile" = 56,
+    /// A sorted map: [count, root (tree node or nil), comparator or nil, hash or nil].
+    sorted_map = 57,
+    /// A sorted set: [sorted map of each element to itself, hash or nil].
+    sorted_set = 58,
+    /// A sorted map's AVL tree node: [key, value, left, right, height].
+    tree_node = 59,
+    /// A seq over a sorted map or set: [stack (list of nodes), flags].
+    tseq = 60,
     _,
 };
 

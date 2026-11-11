@@ -52,7 +52,7 @@ pub fn eduction(xform: Value, c: Value, seq_fn: Value, reduce_fn: Value) Value {
 pub fn isSeq(v: Value) bool {
     if (!v.isObject()) return false;
     return switch (v.toObject().type_id) {
-        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq, .arrseq => true,
+        .list, .empty_list, .cons, .lazy_seq, .vseq, .sseq, .arrseq, .tseq => true,
         else => false,
     };
 }
@@ -92,12 +92,13 @@ pub fn seq(x: Value) Value {
     if (string.isString(x)) return if (string.count(x) == 0) Value.nil else make(.sseq, &.{ x, Value.fromFixnum(0) });
     if (!x.isObject()) unseqable(x);
     return switch (x.toObject().type_id) {
-        .list, .cons, .vseq, .sseq, .arrseq => x,
+        .list, .cons, .vseq, .sseq, .arrseq, .tseq => x,
         .empty_list => Value.nil,
         .lazy_seq => realize(x),
         .vector => if (coll.vectorCount(x) == 0) Value.nil else make(.vseq, &.{ x, Value.fromFixnum(0) }),
         .array_map, .hash_map => mapSeq(x, false),
         .hash_set => mapSeq(coll.get(x, 0), true),
+        .sorted_map, .sorted_set => @import("sorted.zig").seq(x, false),
         .eduction => seq(func.call(coll.get(x, 2), 0, &.{})),
         .prim_array, .any_array, .struct_array, .array_view => if (structs.count(x) == 0) Value.nil else make(.arrseq, &.{ x, Value.fromFixnum(0) }),
         else => unseqable(x),
@@ -138,6 +139,7 @@ pub fn seqFirst(s: Value) Value {
         .vseq => coll.vectorNth(coll.get(s, 0), coll.ux(coll.get(s, 1))).?,
         .sseq => Value.fromChar(string.charAt(coll.get(s, 0), coll.ux(coll.get(s, 1)))),
         .arrseq => structs.aget(coll.get(s, 0), coll.get(s, 1)),
+        .tseq => @import("sorted.zig").seqFirst(s),
         else => unreachable,
     };
 }
@@ -165,6 +167,7 @@ pub fn seqNext(s: Value) Value {
             const i = coll.ux(coll.get(s, 1)) + 1;
             return if (i < string.count(str)) make(.sseq, &.{ str, Value.fromFixnum(@intCast(i)) }) else Value.nil;
         },
+        .tseq => return @import("sorted.zig").seqNext(s),
         else => unreachable,
     }
 }

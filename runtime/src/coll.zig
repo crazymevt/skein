@@ -12,6 +12,7 @@ const object = @import("object.zig");
 const gc = @import("gc.zig");
 const rt = @import("rt.zig");
 const equal = @import("equal.zig");
+const sorted = @import("sorted.zig");
 const Value = @import("value.zig").Value;
 const TypeId = object.TypeId;
 
@@ -629,10 +630,11 @@ fn nodeEach(node: Value, ctx: anytype, comptime f: fn (@TypeOf(ctx), Value, Valu
 // Persistent maps
 
 pub fn isMap(v: Value) bool {
-    return v.isObjectOf(.array_map) or v.isObjectOf(.hash_map);
+    return v.isObjectOf(.array_map) or v.isObjectOf(.hash_map) or v.isObjectOf(.sorted_map);
 }
 
 pub fn mapCount(m: Value) usize {
+    if (m.isObjectOf(.sorted_map)) return sorted.count(m);
     return if (m.isObjectOf(.array_map)) tupleLen(get(m, 0)) / 2 else ux(get(m, 0));
 }
 
@@ -643,6 +645,7 @@ fn arrayMapIndex(array: Value, n: usize, key: Value) ?usize {
 }
 
 pub fn mapGet(m: Value, key: Value) ?Value {
+    if (m.isObjectOf(.sorted_map)) return sorted.lookup(m, key);
     if (m.isObjectOf(.array_map)) {
         const array = get(m, 0);
         const i = arrayMapIndex(array, tupleLen(array), key) orelse return null;
@@ -658,6 +661,7 @@ fn makeHashMap(count: usize, root: Value) Value {
 }
 
 pub fn mapAssoc(m: Value, key: Value, val: Value) Value {
+    if (m.isObjectOf(.sorted_map)) return sorted.assoc(m, key, val);
     if (m.isObjectOf(.array_map)) {
         const array = get(m, 0);
         const n = tupleLen(array);
@@ -679,6 +683,7 @@ pub fn mapAssoc(m: Value, key: Value, val: Value) Value {
 }
 
 pub fn mapDissoc(m: Value, key: Value) Value {
+    if (m.isObjectOf(.sorted_map)) return sorted.dissoc(m, key);
     ensureConstants();
     if (m.isObjectOf(.array_map)) {
         const array = get(m, 0);
@@ -695,6 +700,7 @@ pub fn mapDissoc(m: Value, key: Value) Value {
 
 /// Call `f(ctx, key, value)` for each entry, in order; stop if it returns false.
 pub fn mapEach(m: Value, ctx: anytype, comptime f: fn (@TypeOf(ctx), Value, Value) bool) void {
+    if (m.isObjectOf(.sorted_map)) return sorted.each(m, ctx, f);
     if (m.isObjectOf(.array_map)) {
         const array = get(m, 0);
         var i: usize = 0;
@@ -708,6 +714,7 @@ pub fn mapEach(m: Value, ctx: anytype, comptime f: fn (@TypeOf(ctx), Value, Valu
 // Transient maps
 
 pub fn mapTransient(m: Value) Value {
+    if (m.isObjectOf(.sorted_map)) rt.raise(.unsupported_operation_error, "a sorted map has no transient", .{});
     const edit = makeEdit();
     if (m.isObjectOf(.array_map)) {
         const array = tupleN(2 * array_map_limit, Value.nil);
@@ -830,7 +837,7 @@ pub fn mapOf(kvs: []const Value) Value {
 // Sets: maps from each element to itself
 
 pub fn isSet(v: Value) bool {
-    return v.isObjectOf(.hash_set);
+    return v.isObjectOf(.hash_set) or v.isObjectOf(.sorted_set);
 }
 
 pub fn setOf(items: []const Value) Value {
@@ -845,11 +852,13 @@ pub fn setContains(s: Value, x: Value) bool {
 }
 
 pub fn setConj(s: Value, x: Value) Value {
+    if (s.isObjectOf(.sorted_set)) return sorted.setConj(s, x);
     if (setContains(s, x)) return s;
     return make(.hash_set, &.{ mapAssoc(get(s, 0), x, x), Value.nil });
 }
 
 pub fn setDisj(s: Value, x: Value) Value {
+    if (s.isObjectOf(.sorted_set)) return sorted.setDisj(s, x);
     const m = get(s, 0);
     const new = mapDissoc(m, x);
     if (new == m) return s;
@@ -861,6 +870,7 @@ pub fn setCount(s: Value) usize {
 }
 
 pub fn setTransient(s: Value) Value {
+    if (s.isObjectOf(.sorted_set)) rt.raise(.unsupported_operation_error, "a sorted set has no transient", .{});
     return make(.transient_set, &.{mapTransient(get(s, 0))});
 }
 
@@ -885,7 +895,8 @@ var atom_counter = std.atomic.Value(u32).init(0);
 
 pub fn makeAtom(v: Value) Value {
     const n = atom_counter.fetchAdd(1, .monotonic) +% 1;
-    return make(.atom, &.{ v, fx(@import("hash.zig").mix32(n)) });
+    // [value, hash, watches, validator] (watch.zig).
+    return make(.atom, &.{ v, fx(@import("hash.zig").mix32(n)), Value.nil, Value.nil });
 }
 
 pub fn atomGet(a: Value) Value {

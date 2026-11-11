@@ -391,3 +391,81 @@ TASK-TIMEOUT (and so do those of tasks it spawned meanwhile)."
 (defcore "pmap" (f coll) (parallel-map f coll))
 (defcore "preduce" (f init coll) (parallel-reduce f init coll))
 (defcore "cpu-count" () (skein.platform:cpu-count))
+
+;;; ------------------------------------------------------------------------------------
+;;; Promises, delays and volatiles (M2.11, D-093). Native programs are the reference;
+;;; Phase 0 has them so that the names exist on both hosts.
+
+(defstruct (skein-promise (:copier nil))
+  "A promise (BODY nil) or a delay. STATE is :pending, :running, :done or :failed."
+  (state :pending)
+  (value nil)
+  (condition nil)
+  (body nil)
+  (delay-p nil)
+  (owner nil)
+  (lock (sb-thread:make-mutex :name "promise") :read-only t)
+  (done (sb-thread:make-waitqueue) :read-only t))
+
+(defstruct (skein-volatile (:constructor make-skein-volatile (value)) (:copier nil))
+  "A volatile: a box with no synchronization."
+  (value nil))
+
+(defun promise-realized-p (p)
+  (member (skein-promise-state p) '(:done :failed)))
+
+(defun run-delay (p)
+  (let ((state :pending) value condition)
+    (unwind-protect
+         (handler-case (setf value (skein-apply (skein-promise-body p) '()) state :done)
+           (skein-error (c) (setf condition c state :failed)))
+      (sb-thread:with-mutex ((skein-promise-lock p))
+        (setf (skein-promise-state p) state
+              (skein-promise-value p) value
+              (skein-promise-condition p) condition
+              (skein-promise-owner p) nil)
+        (unless (eq state :pending) (setf (skein-promise-body p) nil))
+        (sb-thread:condition-broadcast (skein-promise-done p))))))
+
+(defun deref-promise (p deadline timeout-value)
+  (when (skein-promise-delay-p p)
+    (let ((run nil))
+      (sb-thread:with-mutex ((skein-promise-lock p))
+        (case (skein-promise-state p)
+          (:pending (setf (skein-promise-state p) :running
+                          (skein-promise-owner p) sb-thread:*current-thread*
+                          run t))
+          (:running (when (eq (skein-promise-owner p) sb-thread:*current-thread*)
+                      (skein-error 'skein-error nil "a delay's body dereferenced the delay")))))
+      (when run (run-delay p))))
+  (let ((r (wait-for (skein-promise-lock p) (skein-promise-done p)
+                     (lambda () (promise-realized-p p))
+                     (lambda () (list (skein-promise-state p) (skein-promise-value p)
+                                      (skein-promise-condition p)))
+                     :deadline deadline)))
+    (cond ((eq r :timeout) timeout-value)
+          ((eq (first r) :failed) (error (third r)))
+          (t (second r)))))
+
+(defcore "promise" () (make-skein-promise))
+(defcore "deliver" (p x)
+  (unless (and (skein-promise-p p) (not (skein-promise-delay-p p)))
+    (skein-error 'skein-error nil "deliver needs a promise, not ~A" (readable-string p)))
+  (sb-thread:with-mutex ((skein-promise-lock p))
+    (if (eq (skein-promise-state p) :pending)
+        (progn (setf (skein-promise-value p) x (skein-promise-state p) :done)
+               (sb-thread:condition-broadcast (skein-promise-done p))
+               p)
+        nil)))
+(defcore "%delay" (f) (make-skein-promise :body f :delay-p t))
+(defcore "delay?" (x) (bool (and (skein-promise-p x) (skein-promise-delay-p x))))
+(defcore "volatile!" (x) (make-skein-volatile x))
+(defcore "volatile?" (x) (bool (skein-volatile-p x)))
+(defcore "vreset!" (v x)
+  (unless (skein-volatile-p v)
+    (skein-error 'skein-error nil "vreset! needs a volatile, not ~A" (readable-string v)))
+  (setf (skein-volatile-value v) x))
+(defcore "vswap!" (v f &rest args)
+  (unless (skein-volatile-p v)
+    (skein-error 'skein-error nil "vswap! needs a volatile, not ~A" (readable-string v)))
+  (setf (skein-volatile-value v) (skein-apply f (cons (skein-volatile-value v) args))))

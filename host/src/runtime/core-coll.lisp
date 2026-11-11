@@ -129,7 +129,10 @@ REDUCED; returns the unwrapped result."
 (defpredicate "char?" (x) (characterp x))
 (defpredicate "boolean?" (x) (or (eq x t) (false-p x)))
 (defpredicate "reduced?" (x) (reduced-p x))
-(defpredicate "realized?" (x) (and (lazy-seq-p x) (null (lazy-seq-fn x))))
+(defpredicate "realized?" (x)
+  (if (skein-promise-p x)
+      (promise-realized-p x)
+      (and (lazy-seq-p x) (null (lazy-seq-fn x)))))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Access
@@ -874,3 +877,19 @@ REDUCED; returns the unwrapped result."
                      (let ((*read-default-float-format* 'double-float) (*read-eval* nil))
                        (read-from-string s)))))
              (and (realp x) (coerce x 'double-float)))))))
+
+;;; Sorted maps and sets (M2.11, D-093) are native only: Phase 0 has the names, so that
+;;; native.skn loads and every native core function exists on both hosts.
+
+(defcore "sorted?" (x) (declare (ignore x)) (bool nil))
+
+(macrolet ((native-only (&rest names)
+             `(progn
+                ,@(loop for name in names
+                        collect `(defcore ,name (&rest args)
+                                   (declare (ignore args))
+                                   (skein-error 'skein-error nil
+                                                "~A: sorted collections are native only (D-093)"
+                                                ,name))))))
+  (native-only "sorted-map" "sorted-map-by" "sorted-set" "sorted-set-by" "%sorted-seq"
+               "%sorted-seq-from" "%sorted-compare" "%sorted-empty"))

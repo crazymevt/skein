@@ -1,0 +1,131 @@
+(ns sorted
+  (:require [skein.test :refer [deftest is are testing run-tests]]))
+
+;; Sorted maps and sets of M2.11 step 5 (D-093), natively, compared with sorted.expected:
+;; the API, and random operations checked against a model (a hash map, sorted).
+
+(deftest sorted-maps
+  (let [m (sorted-map 3 :c 1 :a 2 :b)]
+    (are [x y] (= x y)
+      "{1 :a, 2 :b, 3 :c}" (pr-str m)
+      [[1 :a] [2 :b] [3 :c]] (seq m)
+      [1 2 3] (keys m)
+      [:a :b :c] (vals m)
+      3 (count m)
+      :b (get m 2)
+      :b (m 2)
+      :none (get m 9 :none)
+      true (contains? m 1)
+      [2 :b] (find m 2)
+      "{0 :z, 1 :a, 2 :b, 3 :c}" (pr-str (assoc m 0 :z))
+      "{1 :a, 3 :c}" (pr-str (dissoc m 2))
+      m (dissoc m 9)
+      "{1 :a, 2 :b, 3 :c, 4 :d}" (pr-str (conj m [4 :d]))
+      [[3 :c] [2 :b] [1 :a]] (rseq m)
+      [1 :a] (first m)
+      [3 :c] (last m)
+      true (sorted? m)
+      false (sorted? {})
+      true (map? m)
+      true (= m {1 :a 2 :b 3 :c})
+      true (= {1 :a 2 :b 3 :c} m)
+      false (= m {1 :a 2 :b})
+      true (= (hash m) (hash {1 :a 2 :b 3 :c}))
+      true (sorted? (empty m))
+      "{1 :a, 2 :b, 5 :e}" (pr-str (into (sorted-map 5 :e) {1 :a 2 :b}))
+      "{1 2, 3 4}" (pr-str (merge (sorted-map) {3 4} {1 2}))
+      {:a 1} (select-keys (sorted-map :b 2 :a 1) [:a])
+      "{:a 1, :b 3}" (pr-str (update (sorted-map :a 1 :b 2) :b inc))
+      "{\"a\" 1, \"b\" 2}" (pr-str (sorted-map "b" 2 "a" 1))
+      "{[1 2] :x, [1 3] :y}" (pr-str (sorted-map [1 3] :y [1 2] :x))
+      nil (seq (sorted-map))
+      "{}" (pr-str (sorted-map)))
+    (is (thrown? error (transient m)))
+    (is (thrown? error (sorted-map 1))))
+  (testing "comparators"
+    (are [x y] (= x y)
+      [3 2 1] (keys (sorted-map-by > 1 :a 3 :c 2 :b))
+      [3 2 1] (keys (sorted-map-by (fn [a b] (compare b a)) 1 :a 3 :c 2 :b))
+      ["a" "bb" "ccc"] (keys (sorted-map-by (fn [a b] (compare (count a) (count b)))
+                                            "ccc" 3 "a" 1 "bb" 2))
+      [3 2 1] (keys (into (sorted-map-by >) {1 :a 2 :b 3 :c})))
+    (is (thrown? error (sorted-map :a 1 2 :b)))))
+
+(deftest sorted-sets
+  (let [s (sorted-set 5 1 3 3)]
+    (are [x y] (= x y)
+      "#{1 3 5}" (pr-str s)
+      [1 3 5] (seq s)
+      3 (count s)
+      true (contains? s 3)
+      3 (s 3)
+      nil (s 4)
+      "#{1 2 3 5}" (pr-str (conj s 2))
+      "#{1 5}" (pr-str (disj s 3))
+      s (disj s 9)
+      [5 3 1] (rseq s)
+      true (= s #{1 3 5})
+      true (= #{1 3 5} s)
+      true (= (hash s) (hash #{1 3 5}))
+      true (set? s)
+      true (sorted? s)
+      [5 3 1] (seq (sorted-set-by > 1 5 3))
+      "#{1 2 3}" (pr-str (into (sorted-set) [3 2 1 2]))
+      #{} (empty s)
+      true (sorted? (empty s)))))
+
+(deftest subseqs
+  (let [s (apply sorted-set (range 0 20 2))
+        m (sorted-map 1 :a 3 :c 5 :e 7 :g)]
+    (are [x y] (= x y)
+      [10 12 14 16 18] (subseq s >= 10)
+      [12 14 16 18] (subseq s > 10)
+      [12 14 16 18] (subseq s > 11)
+      [0 2 4] (subseq s < 6)
+      [0 2 4 6] (subseq s <= 6)
+      [4 6 8] (subseq s >= 4 < 10)
+      [6 8 10] (subseq s > 4 <= 10)
+      [18 16] (rsubseq s > 15)
+      [6 4 2 0] (rsubseq s <= 7)
+      [6 4 2 0] (rsubseq s < 8)
+      [8 6] (rsubseq s > 4 <= 9)
+      nil (subseq s > 100)
+      nil (rsubseq s < 0)
+      [[5 :e] [7 :g]] (subseq m >= 4)
+      [[3 :c] [1 :a]] (rsubseq m < 5)
+      [[3 :c] [5 :e]] (subseq m > 1 < 7))))
+
+(defn- model-check
+  "Random assoc and dissoc on a sorted map and a hash map; true if they agree throughout."
+  [steps]
+  (loop [i 0 m (sorted-map) model {} saved nil ok true]
+    (if (or (= i steps) (not ok))
+      (and ok
+           (= (keys m) (seq (sort (keys model))))
+           (= m model)
+           (let [[sm smodel] saved] (= sm smodel)))
+      (let [k (rand-int 300)
+            add? (< (rand-int 3) 2)
+            m2 (if add? (assoc m k i) (dissoc m k))
+            model2 (if add? (assoc model k i) (dissoc model k))
+            from (rand-int 300)]
+        (recur (inc i) m2 model2 (if (= i (quot steps 2)) [m2 model2] saved)
+               (and (= (count m2) (count model2))
+                    (= (get m2 k) (get model2 k))
+                    (= (seq (map first (subseq m2 >= from)))
+                       (seq (sort (filter (fn [x] (>= x from)) (keys model2)))))
+                    (= (seq (map first (rsubseq m2 < from)))
+                       (seq (reverse (sort (filter (fn [x] (< x from)) (keys model2))))))))))))
+
+(deftest against-a-model
+  (dotimes [_ 3]
+    (is (model-check 2000)))
+  (testing "sets"
+    (let [xs (repeatedly 2000 (fn [] (rand-int 500)))
+          s (reduce conj (sorted-set) xs)
+          s2 (reduce disj s (take 700 xs))]
+      (is (= (seq (sort (distinct xs))) (seq s)))
+      (is (= (set (remove (set (take 700 xs)) xs)) s2))
+      (is (= (sort (seq s2)) (seq s2))))))
+
+(prn (select-keys (run-tests 'sorted) [:test :fail :error]))

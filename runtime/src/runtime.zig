@@ -72,6 +72,7 @@ test {
     _ = coll;
     _ = equal;
     _ = @import("coll_test.zig");
+    _ = @import("sorted.zig");
     _ = core;
     _ = cond;
     _ = seq;

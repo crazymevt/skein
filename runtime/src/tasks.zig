@@ -560,6 +560,149 @@ fn fiberValue() Value {
     return if (sched.inFiber()) fx(@intFromPtr(sched.currentFiber())) else Value.nil;
 }
 
+// ---------------------------------------------------------------------------------------
+// Promises and delays (M2.11, D-093): a promise is delivered once, and deref waits for it
+// as for a task; a delay runs its body the first time it's dereferenced, while any other
+// fiber that derefs it then waits, and keeps the value or the error.
+
+const p_state = 0;
+const p_value = 1;
+const p_condition = 2;
+const p_body = 3;
+const p_hash = 4;
+const p_owner = 5;
+const p_pending = 0;
+const p_running = 1;
+const p_done = 2;
+const p_failed = 3;
+
+fn makePromise(t: @import("object.zig").TypeId, body: Value) Value {
+    return coll.make(t, &.{ fx(p_pending), Value.nil, Value.nil, body, identity(), Value.nil });
+}
+
+fn promiseKey(p: Value) u64 {
+    return (5 << 40) | identityOf(p, p_hash);
+}
+
+fn promiseState(p: Value) usize {
+    return ux(get(p, p_state));
+}
+
+pub fn isPromiseLike(v: Value) bool {
+    return v.isObjectOf(.promise) or v.isObjectOf(.delay);
+}
+
+/// realized? of a promise or delay: delivered, or the body has run.
+pub fn promiseRealized(p: Value) bool {
+    lock();
+    defer unlock();
+    return promiseState(p) >= p_done;
+}
+
+/// #<promise pending>, #<delay done 42>.
+pub fn writePromise(v: Value, out: *std.ArrayList(u8)) void {
+    print.put(out, if (v.isObjectOf(.promise)) "#<promise " else "#<delay ");
+    lock();
+    const state = promiseState(v);
+    const value = get(v, p_value);
+    unlock();
+    print.put(out, switch (state) {
+        p_pending => "pending",
+        p_running => "running",
+        p_done => "done ",
+        else => "failed",
+    });
+    if (state == p_done) print.write(value, out, true);
+    print.put(out, ">");
+}
+
+pub fn promiseHash(v: Value) u32 {
+    return @intCast(get(v, p_hash).toFixnum());
+}
+
+/// (deliver p x): give p its value, waking what waits for it; p, or nil if it was
+/// delivered already.
+fn deliver(p: Value, x: Value) Value {
+    if (!p.isObjectOf(.promise)) rt.raise(.type_error, "deliver needs a promise, not {s}", .{readable(p)});
+    lock();
+    defer unlock();
+    if (promiseState(p) != p_pending) return Value.nil;
+    set(p, p_value, x);
+    set(p, p_state, fx(p_done));
+    wait.notifyAll(promiseKey(p));
+    return p;
+}
+
+const PromiseWait = struct {
+    p: Value,
+    fn ready(w: *const PromiseWait) bool {
+        return promiseState(w.p) >= p_done;
+    }
+    fn keys(w: *const PromiseWait, out: []u64) usize {
+        out[0] = promiseKey(w.p);
+        return 1;
+    }
+    fn abort(_: *const PromiseWait) void {}
+};
+
+/// Who runs code here: the fiber, or on another thread the thread.
+fn runnerId() Value {
+    if (sched.inFiber()) return fiberValue();
+    return Value.fromFixnum(-@as(i64, @intCast(std.Thread.getCurrentId() & 0xffffffffffff)) - 1);
+}
+
+/// deref of a promise or a delay: (deref p) or (deref p seconds timeout-value).
+pub fn derefPromise(a: []const Value) Value {
+    const p = a[0];
+    const deadline: ?u64 = if (a.len >= 2) nanosFromNow(a[1]) else null;
+    if (p.isObjectOf(.delay)) {
+        lock();
+        if (promiseState(p) == p_pending) {
+            set(p, p_state, fx(p_running));
+            set(p, p_owner, runnerId());
+            unlock();
+            runDelay(p);
+        } else {
+            const mine = promiseState(p) == p_running and get(p, p_owner) == runnerId();
+            unlock();
+            if (mine) rt.raise(.@"error", "a delay's body dereferenced the delay", .{});
+        }
+    }
+    const w: PromiseWait = .{ .p = p };
+    if (!waitFor(&w, deadline)) return if (a.len >= 3) a[2] else Value.nil;
+    const state = promiseState(p);
+    const value = get(p, p_value);
+    const c = get(p, p_condition);
+    unlock();
+    if (state == p_failed) cond.signalError(c);
+    return value;
+}
+
+/// Run a delay's body here, recording its value or its error. Cancelled, it is pending
+/// again, so the next deref runs it.
+fn runDelay(p: Value) void {
+    const types = [_]Value{ cond.builtinType(.cancelled), cond.builtinType(.@"error") };
+    const r = tryCall(get(p, p_body), &.{}, &types);
+    lock();
+    switch (r[0]) {
+        -1 => {
+            set(p, p_value, r[1]);
+            set(p, p_state, fx(p_done));
+            set(p, p_body, Value.nil);
+        },
+        0 => set(p, p_state, fx(p_pending)),
+        else => {
+            set(p, p_condition, r[1]);
+            set(p, p_state, fx(p_failed));
+            set(p, p_body, Value.nil);
+        },
+    }
+    set(p, p_owner, Value.nil);
+    wait.notifyAll(promiseKey(p));
+    unlock();
+    if (r[0] == 0) cond.signalError(r[1]);
+}
+
 const FinishedWait = struct {
     t: Value,
     fn ready(w: *const FinishedWait) bool {
@@ -1100,6 +1243,28 @@ fn e(name: []const u8, min: u32, max: ?u32, impl: *const fn (Args) Value) Entry 
 }
 
 pub const entries = [_]Entry{
+    e("promise", 0, 0, struct {
+        fn f(_: Args) Value {
+            return makePromise(.promise, Value.nil);
+        }
+    }.f),
+    e("deliver", 2, 2, struct {
+        fn f(a: Args) Value {
+            return deliver(a[0], a[1]);
+        }
+    }.f),
+    // (%delay f): a delay of the body f (the delay macro).
+    e("%delay", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!a[0].isObjectOf(.function)) rt.raise(.type_error, "%delay needs a function", .{});
+            return makePromise(.delay, a[0]);
+        }
+    }.f),
+    e("delay?", 1, 1, struct {
+        fn f(a: Args) Value {
+            return Value.fromBool(a[0].isObjectOf(.delay));
+        }
+    }.f),
     // (%install-task-runner! f): call every task's function as (f task-fn) (D-088).
     e("%install-task-runner!", 1, 1, struct {
         fn f(a: Args) Value {

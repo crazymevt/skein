@@ -68,14 +68,18 @@ pub fn equiv(a: Value, b: Value) bool {
     }
     if (coll.isMap(a)) {
         if (!coll.isMap(b) or coll.mapCount(a) != coll.mapCount(b)) return false;
-        var ctx: MapEq = .{ .other = b };
-        coll.mapEach(a, &ctx, MapEq.check);
+        // Look the keys up in a hash map rather than a sorted one, whose comparator may not
+        // take the other's keys.
+        const swap = b.isObjectOf(.sorted_map) and !a.isObjectOf(.sorted_map);
+        var ctx: MapEq = .{ .other = if (swap) a else b };
+        coll.mapEach(if (swap) b else a, &ctx, MapEq.check);
         return ctx.equal;
     }
     if (coll.isSet(a)) {
         if (!coll.isSet(b) or coll.setCount(a) != coll.setCount(b)) return false;
-        var ctx: SetEq = .{ .other = b };
-        coll.mapEach(coll.get(a, 0), &ctx, SetEq.check);
+        const swap = b.isObjectOf(.sorted_set) and !a.isObjectOf(.sorted_set);
+        var ctx: SetEq = .{ .other = if (swap) a else b };
+        coll.mapEach(coll.get(if (swap) b else a, 0), &ctx, SetEq.check);
         return ctx.equal;
     }
     return false;
@@ -184,7 +188,7 @@ pub fn hashOf(v: Value) u32 {
         .string => hash.hashString(string.bytes(v)),
         .symbol, .keyword => names.nameHash(v),
         .vector => cached(v, 4, orderedHash),
-        .cons, .lazy_seq, .vseq, .sseq => orderedHash(v),
+        .cons, .lazy_seq, .vseq, .sseq, .tseq => orderedHash(v),
         .instance => @import("objects.zig").instanceHash(v),
         .@"struct" => @import("structs.zig").hashOf(v),
         .prim_array, .any_array, .struct_array, .array_view => @import("structs.zig").identityHash(v),
@@ -194,9 +198,13 @@ pub fn hashOf(v: Value) u32 {
         .array_map => cached(v, 1, mapHash),
         .hash_map => cached(v, 2, mapHash),
         .hash_set => cached(v, 1, setHash),
+        .sorted_map => cached(v, 3, mapHash),
+        .sorted_set => cached(v, 1, setHash),
         .atom => @intCast(coll.get(v, 1).toFixnum()),
         .task, .nursery, .chan => @import("tasks.zig").hashOf(v),
         .ref => @import("stm.zig").hashOf(v),
+        .promise, .delay => @import("tasks.zig").promiseHash(v),
+        .@"volatile" => @intCast(coll.get(v, 1).toFixnum()),
         .condition, .condition_type, .restart => @import("cond.zig").hashOf(v),
         // Identity: a function's code pointer, or for other objects... (permanent ones
         // never move, so their address will do).
