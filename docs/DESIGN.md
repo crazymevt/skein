@@ -966,6 +966,8 @@ Phase 0 status (D-040):
   - Scalar functions keep float types; integer arguments give `f64`.
   - Natively (M1.12, D-070), the runtime has the scalar functions, `noise`, and `skein.time`'s `now` and `now-ns`, with Phase 0's results: they call the system's libm, as SBCL does, and an `f32` is computed as an `f64` and rounded.
 
+- **`skein.core`'s numbers and printing (M2.11, D-093):** as Clojure's, natively. `int?` is an integer that fits in 64 bits; `random-uuid` returns the UUID as a string (Skein has no UUID type); the `bit-` operations take fixnums. `format` writes Java's common directives: `%s` (as `print`), `%S`, `%d`, `%x`, `%X`, `%o`, `%b`, `%c`, `%f`, `%e`, `%%` and `%n`, with the flags `- + space 0 ,`, a width and a precision. `read-string` reads the first form of a string as data, in programs built with `--eval` (the reader comes with the evaluator). `spit` takes `:append true`. When `*print-length*` is bound to n, collections print their first n elements and then `...`; Phase 0 ignores it.
+
 Bindings shipped as separate libraries: `sdl3` (windowing, input, the 2D renderer and the GPU API; D-020), `miniaudio`, `cimgui`, `box2d`, `stb`.
 
 ## 22. Open questions

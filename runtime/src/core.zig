@@ -35,6 +35,53 @@ fn typeName(v: Value) []const u8 {
     return buf.items;
 }
 
+fn bitArg(v: Value, comptime name: []const u8) i64 {
+    if (!v.isFixnum()) rt.raise(.@"error", name ++ " needs fixnums, not {s}", .{typeName(v)});
+    return v.toFixnum();
+}
+
+fn shiftArg(v: Value, comptime name: []const u8) u64 {
+    if (!v.isFixnum() or v.toFixnum() < 0) rt.raise(.@"error", name ++ " needs a non-negative shift, not {s}", .{typeName(v)});
+    return @intCast(@min(v.toFixnum(), 127));
+}
+
+const BitOp = enum { @"and", @"or", xor, and_not };
+
+fn bitFold(comptime op: BitOp) fn (Args) Value {
+    return struct {
+        fn f(a: Args) Value {
+            var x = bitArg(a[0], "bit operation");
+            for (a[1..]) |v| {
+                const y = bitArg(v, "bit operation");
+                x = switch (op) {
+                    .@"and" => x & y,
+                    .@"or" => x | y,
+                    .xor => x ^ y,
+                    .and_not => x & ~y,
+                };
+            }
+            return Value.fromFixnum(x);
+        }
+    }.f;
+}
+
+const BitAt = enum { set, clear, flip };
+
+fn bitAt(comptime op: BitAt) fn (Args) Value {
+    return struct {
+        fn f(a: Args) Value {
+            const x: i128 = bitArg(a[0], "bit-set, bit-clear or bit-flip");
+            const n = shiftArg(a[1], "bit-set, bit-clear or bit-flip");
+            const mask = @as(i128, 1) << @intCast(@min(n, 126));
+            return num.fromI128(switch (op) {
+                .set => x | mask,
+                .clear => x & ~mask,
+                .flip => x ^ mask,
+            });
+        }
+    }.f;
+}
+
 fn badArg(comptime name: []const u8, v: Value) noreturn {
     rt.raise(.type_error, name ++ " can't use {s}", .{typeName(v)});
 }
@@ -623,6 +670,13 @@ const base_table = [_]Entry{
     }.f),
     // Printing
     e("println", 0, null, printFn(false, true)),
+    // (%set-print-length-fn! f): the printer calls f for *print-length* (M2.11).
+    e("%set-print-length-fn!", 1, 1, struct {
+        fn f(a: Args) Value {
+            @import("print.zig").setPrintLengthFn(a[0]);
+            return Value.nil;
+        }
+    }.f),
     // (%with-out-str f): what (f) prints, as a string (with-out-str, M2.11).
     e("%with-out-str", 1, 1, struct {
         fn f(a: Args) Value {
@@ -884,6 +938,85 @@ const base_table = [_]Entry{
             const text = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, n }) catch
                 rt.raise(.@"error", "gensym prefix is too long", .{});
             return names.symbol(null, text);
+        }
+    }.f),
+    // Bit operations on fixnums (M2.11, D-093); a result outside the fixnum range is a
+    // bignum, as integer arithmetic gives one.
+    e("bit-and", 2, null, bitFold(.@"and")),
+    e("bit-or", 2, null, bitFold(.@"or")),
+    e("bit-xor", 2, null, bitFold(.xor)),
+    e("bit-and-not", 2, null, bitFold(.and_not)),
+    e("bit-not", 1, 1, struct {
+        fn f(a: Args) Value {
+            return Value.fromFixnum(~bitArg(a[0], "bit-not"));
+        }
+    }.f),
+    e("bit-shift-left", 2, 2, struct {
+        fn f(a: Args) Value {
+            const x = bitArg(a[0], "bit-shift-left");
+            const n = shiftArg(a[1], "bit-shift-left");
+            return num.fromI128(@as(i128, x) << @intCast(n));
+        }
+    }.f),
+    e("bit-shift-right", 2, 2, struct {
+        fn f(a: Args) Value {
+            const x = bitArg(a[0], "bit-shift-right");
+            return Value.fromFixnum(x >> @intCast(@min(shiftArg(a[1], "bit-shift-right"), 63)));
+        }
+    }.f),
+    e("unsigned-bit-shift-right", 2, 2, struct {
+        fn f(a: Args) Value {
+            const x: u64 = @bitCast(bitArg(a[0], "unsigned-bit-shift-right"));
+            const n = shiftArg(a[1], "unsigned-bit-shift-right");
+            return num.fromI128(if (n >= 64) 0 else @as(i128, x >> @intCast(n)));
+        }
+    }.f),
+    e("bit-test", 2, 2, struct {
+        fn f(a: Args) Value {
+            const x = bitArg(a[0], "bit-test");
+            return Value.fromBool((x >> @intCast(@min(shiftArg(a[1], "bit-test"), 63))) & 1 == 1);
+        }
+    }.f),
+    e("bit-set", 2, 2, bitAt(.set)),
+    e("bit-clear", 2, 2, bitAt(.clear)),
+    e("bit-flip", 2, 2, bitAt(.flip)),
+    e("double?", 1, 1, struct {
+        fn f(a: Args) Value {
+            return Value.fromBool(a[0].isObjectOf(.f64));
+        }
+    }.f),
+    // (parse-double s): the f64 that s writes (as Clojure's: digits, a point, an exponent,
+    // Infinity or NaN), or nil.
+    e("parse-double", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!string.isString(a[0])) rt.raise(.@"error", "parse-double needs a string, not {s}", .{typeName(a[0])});
+            const text = string.bytes(a[0]);
+            const body = if (text.len > 0 and (text[0] == '+' or text[0] == '-')) text[1..] else text;
+            if (std.mem.eql(u8, body, "Infinity") or std.mem.eql(u8, body, "NaN")) {
+                const v: f64 = if (body[0] == 'N') std.math.nan(f64) else std.math.inf(f64);
+                return num.boxF64(if (text[0] == '-') -v else v);
+            }
+            for (body) |ch| switch (ch) {
+                '0'...'9', '.', 'e', 'E', '+', '-' => {},
+                else => return Value.nil,
+            };
+            return num.boxF64(std.fmt.parseFloat(f64, text) catch return Value.nil);
+        }
+    }.f),
+    // (%format-number x kind precision): x as format's %f (kind 0) or %e (kind 1) writes it,
+    // with precision digits after the point (M2.11, D-093).
+    e("%format-number", 3, 3, struct {
+        fn f(a: Args) Value {
+            if (!num.isNumber(a[0]) or !a[1].isFixnum() or !a[2].isFixnum())
+                rt.raise(.@"error", "%format-number needs a number, a kind and a precision", .{});
+            const x = num.toF64(a[0]);
+            const p: usize = @intCast(@min(@max(a[2].toFixnum(), 0), 30));
+            var buf: [400]u8 = undefined;
+            const text = if (a[1].toFixnum() == 1)
+                std.fmt.bufPrint(&buf, "{e:.[1]}", .{ x, p }) catch "?"
+            else
+                std.fmt.bufPrint(&buf, "{d:.[1]}", .{ x, p }) catch "?";
+            return string.make(text);
         }
     }.f),
     e("parse-long", 1, 1, struct {

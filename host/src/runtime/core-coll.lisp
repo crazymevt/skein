@@ -799,3 +799,78 @@ REDUCED; returns the unwrapped result."
 (defcore "%with-out-str" (f)
   ;; with-out-str (M2.11): Phase 0 prints to *standard-output*.
   (with-output-to-string (*standard-output*) (scall f)))
+
+(defcore "%set-print-length-fn!" (f)
+  ;; *print-length* (M2.11) is native only; Phase 0 prints collections whole.
+  (declare (ignore f))
+  nil)
+
+(defcore "%format-number" (x kind precision)
+  ;; format's %f and %e (M2.11). Phase 0 is not the reference for format: CL's ~E writes
+  ;; exponents differently from Zig's.
+  (if (eql kind 1)
+      (format nil "~,vE" precision (coerce x 'double-float))
+      (format nil "~,vF" precision (coerce x 'double-float))))
+
+;;; Numbers (M2.11 step 4, D-093). Native programs are the reference; Phase 0 has these
+;;; so that the names exist on both hosts.
+
+(defpredicate "double?" (x) (typep x 'double-float))
+
+(defun bit-integer (x name)
+  (unless (integerp x)
+    (skein-error 'skein-error nil "~A needs integers, not ~A" name (readable-string x)))
+  x)
+
+(defun bit-index (n name)
+  (unless (and (integerp n) (>= n 0))
+    (skein-error 'skein-error nil "~A needs a non-negative shift, not ~A" name
+                 (readable-string n)))
+  n)
+
+(defcore "bit-and" (x y &rest more)
+  (reduce #'logand (mapcar (lambda (v) (bit-integer v "bit-and")) (list* x y more))))
+(defcore "bit-or" (x y &rest more)
+  (reduce #'logior (mapcar (lambda (v) (bit-integer v "bit-or")) (list* x y more))))
+(defcore "bit-xor" (x y &rest more)
+  (reduce #'logxor (mapcar (lambda (v) (bit-integer v "bit-xor")) (list* x y more))))
+(defcore "bit-and-not" (x y &rest more)
+  (reduce #'logandc2 (mapcar (lambda (v) (bit-integer v "bit-and-not")) (list* x y more))))
+(defcore "bit-not" (x) (lognot (bit-integer x "bit-not")))
+(defcore "bit-shift-left" (x n)
+  (ash (bit-integer x "bit-shift-left") (bit-index n "bit-shift-left")))
+(defcore "bit-shift-right" (x n)
+  (ash (bit-integer x "bit-shift-right") (- (min 63 (bit-index n "bit-shift-right")))))
+(defcore "unsigned-bit-shift-right" (x n)
+  (ash (ldb (byte 64 0) (bit-integer x "unsigned-bit-shift-right"))
+       (- (bit-index n "unsigned-bit-shift-right"))))
+(defcore "bit-test" (x n)
+  (bool (logbitp (min 63 (bit-index n "bit-test")) (bit-integer x "bit-test"))))
+(defcore "bit-set" (x n)
+  (logior (bit-integer x "bit-set") (ash 1 (bit-index n "bit-set"))))
+(defcore "bit-clear" (x n)
+  (logandc2 (bit-integer x "bit-clear") (ash 1 (bit-index n "bit-clear"))))
+(defcore "bit-flip" (x n)
+  (logxor (bit-integer x "bit-flip") (ash 1 (bit-index n "bit-flip"))))
+
+(defcore "parse-double" (s)
+  (unless (stringp s)
+    (skein-error 'skein-error nil "parse-double needs a string, not ~A" (readable-string s)))
+  (let* ((negative (and (plusp (length s)) (char= (char s 0) #\-)))
+         (body (if (and (plusp (length s)) (find (char s 0) "+-")) (subseq s 1) s)))
+    (cond ((string= body "Infinity")
+           (if negative
+               sb-ext:double-float-negative-infinity
+               sb-ext:double-float-positive-infinity))
+          ((string= body "NaN")
+           (sb-kernel:make-double-float -524288 0))
+          ((or (zerop (length body))
+               (notevery (lambda (c) (or (digit-char-p c) (find c ".eE+-"))) body)
+               (notany #'digit-char-p body))
+           nil)
+          (t
+           ;; Only digits, a point, signs and exponents get here; the CL reader parses them.
+           (let ((x (ignore-errors
+                     (let ((*read-default-float-format* 'double-float) (*read-eval* nil))
+                       (read-from-string s)))))
+             (and (realp x) (coerce x 'double-float)))))))

@@ -214,7 +214,8 @@ export fn sk_register_core_var(v: Value, macro: c_int) void {
     registered[0] = coll.vectorConj(registered[0], coll.vectorOf(&.{ v, Value.fromBool(macro != 0) }));
 }
 
-/// [[name value macro?]...] for the registered vars, with their current values.
+/// [[ns name value macro? var]...] for the registered vars, with their current values; var
+/// is the var itself if it's dynamic (a binding of it must bind this var), else nil.
 fn registeredCoreVars() Value {
     var out = coll.vectorOf(&.{});
     if (!registered_ready) return out;
@@ -224,7 +225,8 @@ fn registeredCoreVars() Value {
         const v = coll.vectorNth(entry, 0).?;
         const name = @import("string.zig").make(names.varName(v));
         const ns = @import("string.zig").make(names.varNamespaceName(v));
-        out = coll.vectorConj(out, coll.vectorOf(&.{ ns, name, names.varValue(v), coll.vectorNth(entry, 1).? }));
+        const dynamic = if (names.isDynamic(v)) v else Value.nil;
+        out = coll.vectorConj(out, coll.vectorOf(&.{ ns, name, names.varValue(v), coll.vectorNth(entry, 1).?, dynamic }));
     }
     return out;
 }

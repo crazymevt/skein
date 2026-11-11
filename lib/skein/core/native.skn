@@ -943,3 +943,185 @@ mutual recursion without growing the stack."
   "The x for which (k x) is least (the last of several)."
   [k x & more]
   (reduce (fn [a b] (if (<= (k b) (k a)) b a)) x more))
+
+;;; ------------------------------------------------------------------------------------
+;;; Numbers and printing (step 4 of M2.11, D-093)
+
+(defn int?
+  "True for an integer that fits in 64 bits, as Clojure's long."
+  [x]
+  (and (integer? x) (<= -9223372036854775808 x 9223372036854775807)))
+
+(defn pos-int? "True for a positive int?." [x] (and (int? x) (pos? x)))
+(defn neg-int? "True for a negative int?." [x] (and (int? x) (neg? x)))
+(defn nat-int? "True for a non-negative int?." [x] (and (int? x) (not (neg? x))))
+
+(defn parse-boolean
+  "true for \"true\", false for \"false\", else nil."
+  [s]
+  (cond (not (string? s)) (error "parse-boolean needs a string, not" (pr-str s))
+        (= s "true") true
+        (= s "false") false
+        :else nil))
+
+(defn hash
+  "x's hash, the one hash maps use: equal values have equal hashes (hash-of, for
+instances of classes that specialize it)."
+  [x]
+  (hash-of x))
+
+(def ^:private hex-digits "0123456789abcdef")
+
+(defn random-uuid
+  "A random (version 4) UUID, as its string: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx."
+  []
+  (let [digit (fn [i]
+                (cond (contains? #{8 13 18 23} i) "-"
+                      (= i 14) "4"
+                      (= i 19) (nth hex-digits (+ 8 (rand-int 4)))
+                      :else (nth hex-digits (rand-int 16))))]
+    (apply str (map digit (range 36)))))
+
+(def ^:dynamic *print-length*
+  "When bound to a non-negative integer n, collections print their first n elements and
+then ..., so an infinite seq prints. nil prints them all."
+  nil)
+
+(%set-print-length-fn! (fn [] *print-length*))
+
+(defn prn-str
+  "What prn prints of xs, as a string."
+  [& xs]
+  (with-out-str (apply prn xs)))
+
+(defn print-str
+  "What print prints of xs, as a string."
+  [& xs]
+  (with-out-str (apply print xs)))
+
+(defn println-str
+  "What println prints of xs, as a string."
+  [& xs]
+  (with-out-str (apply println xs)))
+
+(defn slurp
+  "The text of the file at path (UTF-8)."
+  [path]
+  (%read-file path))
+
+(defn spit
+  "Write the text of x (as str prints it) to the file at path, replacing it, or after
+what it holds with :append true. Returns nil."
+  [path x & {:keys [append]}]
+  (%write-file path (if (and append (%file-exists? path))
+                      (str (%read-file path) x)
+                      (str x)))
+  nil)
+
+;;; format: Java's directives for the common cases.
+
+(defn- pad
+  "text padded to width with ch, at the left unless left?."
+  [text width left? ch]
+  (let [n (- width (count text))]
+    (if (pos? n)
+      (let [fill (apply str (repeat n ch))] (if left? (str text fill) (str fill text)))
+      text)))
+
+(defn- digits-of
+  "The digits of the integer n in base radix (n not negative)."
+  [n radix]
+  (if (zero? n)
+    "0"
+    (loop [n n out ()]
+      (if (zero? n)
+        (apply str out)
+        (recur (quot n radix) (cons (nth hex-digits (rem n radix)) out))))))
+
+(defn- group-thousands
+  "The digits text with a comma between each group of three."
+  [text]
+  (let [n (count text)]
+    (apply str (map-indexed (fn [i ch]
+                              (if (and (pos? i) (zero? (rem (- n i) 3))) (str "," ch) ch))
+                            text))))
+
+(defn- upper-case* [s]
+  (apply str (map (fn [ch] (if (<= (int \a) (int ch) (int \z)) (char (- (int ch) 32)) ch)) s)))
+
+(defn- format-integer [x radix flags]
+  (when-not (integer? x)
+    (error "format needs an integer for %d, %x, %o or %b, not" (pr-str x)))
+  (let [text (digits-of (abs x) radix)
+        text (if (contains? flags \,) (group-thousands text) text)]
+    (cond (neg? x) (str "-" text)
+          (contains? flags \+) (str "+" text)
+          (contains? flags \space) (str " " text)
+          :else text)))
+
+(defn- format-float [x kind precision flags]
+  (when-not (number? x) (error "format needs a number for %f or %e, not" (pr-str x)))
+  (let [text (%format-number x kind (or precision 6))]
+    (cond (and (not= (first text) \-) (contains? flags \+)) (str "+" text)
+          (and (not= (first text) \-) (contains? flags \space)) (str " " text)
+          :else text)))
+
+(defn- format-one [conversion flags width precision x]
+  (let [text (case conversion
+               \s (let [t (print-str x)] (if precision (subs t 0 (min precision (count t))) t))
+               \S (upper-case* (print-str x))
+               \d (format-integer x 10 flags)
+               \x (format-integer x 16 flags)
+               \X (upper-case* (format-integer x 16 flags))
+               \o (format-integer x 8 flags)
+               \b (if (contains? #{nil false} x) "false" "true")
+               \c (str (if (integer? x) (char x) x))
+               \f (format-float x 0 precision flags)
+               \e (format-float x 1 precision flags)
+               (error (str "format has no conversion %" conversion)))
+        left? (contains? flags \-)
+        zero-pad? (and (contains? flags \0) (not left?)
+                       (contains? #{\d \x \X \o \f \e} conversion))]
+    (if (and zero-pad? width (contains? #{\- \+ \space} (first text)))
+      (str (first text) (pad (subs text 1) (dec width) false \0))
+      (pad text (or width 0) left? (if zero-pad? \0 \space)))))
+
+(defn format
+  "fmt with each directive replaced by the next of args, as Java's String.format writes
+it: %s (as print), %S, %d, %x, %X, %o, %b, %c, %f and %e, with flags (- + space 0 ,), a
+width and a precision (%-8s, %05d, %.2f), and %% and %n."
+  [fmt & args]
+  (let [n (count fmt)
+        digit? (fn [ch] (and ch (<= (int \0) (int ch) (int \9))))]
+    (loop [i 0 args args out []]
+      (if (>= i n)
+        (apply str out)
+        (let [ch (nth fmt i)]
+          (if (not= ch \%)
+            (recur (inc i) args (conj out ch))
+            (let [at (fn [j] (when (< j n) (nth fmt j)))
+                  [flags j] (loop [j (inc i) flags #{}]
+                              (if (contains? #{\- \+ \space \0 \,} (at j))
+                                (recur (inc j) (conj flags (at j)))
+                                [flags j]))
+                  [width j] (loop [j j w nil]
+                              (if (digit? (at j))
+                                (recur (inc j) (+ (* 10 (or w 0)) (- (int (at j)) (int \0))))
+                                [w j]))
+                  [precision j] (if (= \. (at j))
+                                  (loop [j (inc j) p 0]
+                                    (if (digit? (at j))
+                                      (recur (inc j) (+ (* 10 p) (- (int (at j)) (int \0))))
+                                      [p j]))
+                                  [nil j])
+                  conversion (at j)]
+              (cond
+                (nil? conversion) (error "format's text ends inside a directive:" (pr-str fmt))
+                (= conversion \%) (recur (inc j) args (conj out "%"))
+                (= conversion \n) (recur (inc j) args (conj out "\n"))
+                :else
+                (do (when (empty? args)
+                      (error (str "format has too few arguments for %" conversion)))
+                    (recur (inc j) (rest args)
+                           (conj out (format-one conversion flags width precision
+                                                 (first args)))))))))))))

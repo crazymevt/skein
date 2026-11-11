@@ -149,13 +149,15 @@ test_compiler() {
   done
   # Native-only fixtures: supervision policies (M2.8, D-088; Phase 0 has only
   # :cancel-siblings), STM (M2.10, D-092; Phase 0 has none) and the standard library's
-  # additions (M2.11, D-093). Each prints its .expected
-  # on standard output, every ";; stderr: " line on standard error, and exits with its
-  # ";; status: " (0 if none).
+  # additions (M2.11, D-093). Each is built with the options of its ";; build: " line,
+  # prints its .expected on standard output, every ";; stderr: " line on standard error,
+  # and exits with its ";; status: " (0 if none).
   for program in host/tests/fixtures/supervise/*.skn host/tests/fixtures/stm/*.skn \
                  host/tests/fixtures/library/*.skn; do
     name=$(basename "$(dirname "$program")")-$(basename "$program" .skn)
-    "$skeinc" build "$program" -o "build/examples/$name$exe" > /dev/null
+    build_options=$(sed -n 's/^;; build: //p' "$program" | tr -d '\r')
+    # shellcheck disable=SC2086 # the options are words
+    "$skeinc" build $build_options "$program" -o "build/examples/$name$exe" > /dev/null
     status=0
     "build/examples/$name$exe" > "build/examples/$name.out" 2> "build/examples/$name.err" \
       || status=$?

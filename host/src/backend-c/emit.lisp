@@ -380,7 +380,9 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%string-end" "%string-char-at" "%string-next" "%string-slice" "%string-find"
     "%string-cursor->index" "%string-index->cursor" "%string-ascii-case"
     ;; skein.core's additions (M2.11, D-093)
-    "%with-out-str"
+    "%with-out-str" "%set-print-length-fn!" "read-string" "parse-double" "double?" "%format-number"
+    "bit-and" "bit-or" "bit-xor" "bit-and-not" "bit-not" "bit-shift-left" "bit-shift-right"
+    "unsigned-bit-shift-right" "bit-test" "bit-set" "bit-clear" "bit-flip"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

@@ -661,8 +661,21 @@ identity, so code that calls them sees the new definitions."
 
 (reset! env/namespace-loader load-namespace!)
 
+(defn- read-string*
+  "The first form of the string s, as data (read-string, M2.11): ::keywords and aliases
+as in the current namespace."
+  [s]
+  (when-not (string? s) (error "read-string needs a string, not" (pr-str s)))
+  (let [r (reader/make-reader s {:namespace (%current-namespace-name)
+                                 :resolve-alias
+                                 (fn [alias]
+                                   (when-let [ns (%find-alias (%current-namespace) alias)]
+                                     (%namespace-name ns)))})]
+    (expander/syntax-value (reader/read-form r true nil))))
+
 (%install-evaluator!
  {"eval" eval-form
+  "read-string" read-string*
   "load-file" load-file*
   "reload" reload*
   "macroexpand-1" expander/macroexpand-data-1

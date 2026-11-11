@@ -180,3 +180,15 @@ Returns the value of -main, or of the file's last form."
 
 ;;; skein.core's macros are written in Skein, so load them whenever this system loads.
 (load-core-library)
+
+(skein.runtime:defcore "read-string" (s)
+  ;; The first form of the string s, as data (M2.11, D-093).
+  (unless (stringp s)
+    (skein-error 'skein-error nil "read-string needs a string, not ~A"
+                 (skein.runtime:readable-string s)))
+  (with-input-from-string (in s)
+    (skein.expander::syntax-value
+     (skein.reader:read-form
+      (skein.reader:make-reader
+       in :namespace (skein.runtime:namespace-name skein.runtime:*current-namespace*))
+      :eof-error-p t))))

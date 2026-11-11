@@ -124,6 +124,9 @@ pub const entries = [_]Entry{
     hookEntry("macroexpand-1"),
     hookEntry("macroexpand"),
     hookEntry("macroexpand-all"),
+    // (read-string s): the first form of s, as data (M2.11, D-093): the reader is in
+    // --eval builds only.
+    hookEntry("read-string"),
     // (%install-debugger! f): f is called with an error that no handler handled, in its
     // fiber, before the program reports it and exits (D-081).
     .{ .name = "%install-debugger!", .min = 1, .max = 1, .impl = struct {

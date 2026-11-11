@@ -95,13 +95,13 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
         .vector => writeSequential(v, out, readably, "[", "]"),
         .array_map, .hash_map => {
             put(out, "{");
-            var ctx: Entries = .{ .out = out, .readably = readably };
+            var ctx: Entries = .{ .out = out, .readably = readably, .limit = printLength() };
             coll.mapEach(v, &ctx, Entries.mapEntry);
             put(out, "}");
         },
         .hash_set => {
             put(out, "#{");
-            var ctx: Entries = .{ .out = out, .readably = readably };
+            var ctx: Entries = .{ .out = out, .readably = readably, .limit = printLength() };
             coll.mapEach(coll.get(v, 0), &ctx, Entries.setElement);
             put(out, "}");
         },
@@ -121,14 +121,42 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
     }
 }
 
+/// A function of no arguments giving skein.core/*print-length* (M2.11, D-093): when that
+/// is a non-negative integer n, collections print their first n elements, then "...".
+/// native.skn registers it; a root.
+var print_length_fn: [1]Value = .{Value.nil};
+
+pub fn setPrintLengthFn(f: Value) void {
+    if (print_length_fn[0] == Value.nil) @import("gc.zig").addRoots(&print_length_fn);
+    print_length_fn[0] = f;
+}
+
+fn printLength() ?usize {
+    if (print_length_fn[0] == Value.nil) return null;
+    const n = func.call(print_length_fn[0], 0, &.{});
+    if (!n.isFixnum() or n.toFixnum() < 0) return null;
+    return @intCast(n.toFixnum());
+}
+
+/// True if a collection may print another element after `n`; else writes the "...".
+fn more(out: *std.ArrayList(u8), limit: ?usize, n: usize, separator: []const u8) bool {
+    const l = limit orelse return true;
+    if (n < l) return true;
+    if (n > 0) put(out, separator);
+    put(out, "...");
+    return false;
+}
+
 const Elements = struct {
     out: *std.ArrayList(u8),
     readably: bool,
-    first: bool = true,
+    n: usize = 0,
+    limit: ?usize,
 
     fn add(c: *Elements, x: Value) bool {
-        if (!c.first) put(c.out, " ");
-        c.first = false;
+        if (!more(c.out, c.limit, c.n, " ")) return false;
+        if (c.n > 0) put(c.out, " ");
+        c.n += 1;
         write(x, c.out, c.readably);
         return true;
     }
@@ -136,7 +164,7 @@ const Elements = struct {
 
 fn writeSequential(v: Value, out: *std.ArrayList(u8), readably: bool, open: []const u8, close: []const u8) void {
     put(out, open);
-    var ctx: Elements = .{ .out = out, .readably = readably };
+    var ctx: Elements = .{ .out = out, .readably = readably, .limit = printLength() };
     equal.eachElement(v, &ctx, Elements.add);
     put(out, close);
 }
@@ -144,11 +172,13 @@ fn writeSequential(v: Value, out: *std.ArrayList(u8), readably: bool, open: []co
 const Entries = struct {
     out: *std.ArrayList(u8),
     readably: bool,
-    first: bool = true,
+    n: usize = 0,
+    limit: ?usize,
 
     fn mapEntry(c: *Entries, k: Value, x: Value) bool {
-        if (!c.first) put(c.out, ", ");
-        c.first = false;
+        if (!more(c.out, c.limit, c.n, ", ")) return false;
+        if (c.n > 0) put(c.out, ", ");
+        c.n += 1;
         write(k, c.out, c.readably);
         put(c.out, " ");
         write(x, c.out, c.readably);
@@ -156,8 +186,9 @@ const Entries = struct {
     }
 
     fn setElement(c: *Entries, k: Value, _: Value) bool {
-        if (!c.first) put(c.out, " ");
-        c.first = false;
+        if (!more(c.out, c.limit, c.n, " ")) return false;
+        if (c.n > 0) put(c.out, " ");
+        c.n += 1;
         write(k, c.out, c.readably);
         return true;
     }
