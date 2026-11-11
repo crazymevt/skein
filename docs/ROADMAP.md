@@ -432,7 +432,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Steps, in order (D-097), in skein-ui:
   1. ✅ The repository: a library `project.skn`, CI on the three platforms that checks out Skein's main and runs `skein test`; the core: the widget class, properties as cell slots with `property-changed`, events (`on`, `off`, `handle-event`, vetoes), the backend protocol, the headless backend, and `ui` to build trees of widgets.
   2. ✅ Layout (boxes and grids: expansion, alignment, margins, spacing) and the simple controls (labels, buttons, toggles and checks, radio buttons, entries, sliders, spin buttons, progress bars and spinners, combo boxes, images, frames), on the headless backend.
-  3. The rest of the widgets on the headless backend: the text view, list boxes, sortable tables, trees, color and date pickers, tabs, split panes, scrolled windows, the canvas and drawing; menus, alerts, file choosers, timers and the clipboard.
+  3. ✅ The rest of the widgets on the headless backend: the text view, list boxes, sortable tables, trees, color and date pickers, tabs, split panes, scrolled windows, the canvas and drawing; menus, alerts, file choosers, timers and the clipboard.
   4. The Cocoa backend (AppKit through the Objective-C runtime, with M2.13's by-value structs and `objc_msgSend` shapes), and calls from any fiber handed to the main thread.
   5. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
   6. The GTK 4 backend, in Linux CI under Xvfb.

@@ -1323,6 +1323,14 @@ Date: 2026-11-11 · Status: Accepted
   - **Windows** hold one widget, as frames do (`content`, `set-content!`); a window's `:width` and `:height` are its content area's, `nil` until `show!` fits them to the content.
   - **Backends report the user's changes** through `changed-by-user!`, `toggled-by-user!` (which turns the rest of a radio group off), `chosen-by-user!` and `resized-by-user!`: each stores the value without sending it back, then emits the event. A program's own `set-slot!` emits nothing.
   - `add!` is a generic function, so grids, frames and windows check or place a child in `:before` methods. Images are `image` objects from a file (`image-from-file`, whose size the backend reads) or RGBA bytes (`image-from-pixels`). Numbers in a range are stored as given, not converted to floats as LGT does.
+- **As built (step 3):**
+  - Timers emit events without being widgets: `on`, `off` and `handle-event` work on any `emitter`, the superclass of widgets, windows, menus and timers. `after` and `every` make and start a timer (not `repeatedly`, which is `skein.core`'s).
+  - Menus are not widgets (no layout) but are made as widgets are: `menu-bar`, `menu`, `menu-item`, `check-menu-item` and `menu-separator`, whose classes take the `-widget` suffix too. A window's `:menu-bar` is a property. Shortcut strings are LGT's (`"Primary+Shift+S"`); "Primary" needs the operating system, which `skein.system/os` (D-098) gives.
+  - Colors are a value struct, `color` (`rgb`, `rgb255`, `hsv`, `parse-color`), and properties and drawing take color designators: a color, a string such as `"#3a7bd5"`, a named color keyword or a system color keyword, which follows dark mode. Fonts are maps (`font`).
+  - Drawing functions end in `!`, as Skein names side effects (`fill-rectangle!`, `draw-text!`), and take an option map (`{:color :red :line-width 2}`); `with-saved-state` is a macro. Backends implement LGT's `gc-` drawing protocol on a `graphics-context` subclass.
+  - The core keeps what LGT asked the native control for: a tree's open items (a set of `:item-key` keys) and its selection (items), a table's sort, a notebook page's tab (the page's `:tab-label`), and a split pane's sizes (from its `:position`), so the backends only show them.
+  - Dialogs wait for the user's answer and return it; calls from fibers other than the UI thread's come with step 4. The headless backend answers dialogs with `answer!`, runs timers on an imagined clock (`advance!`), and records drawing (`draw!`).
+  - The date picker's `:date` is milliseconds since 1970, `skein.time/epoch-millis` (added for it), as `skein.io/modified-time` gives a file's.
 
 ## D-098: `skein.system`, and the operating system a program runs on
 Date: 2026-11-11 · Status: Accepted
