@@ -163,7 +163,23 @@ received to that form's metadata (as data), for %syntax-meta.")
                "%run-attached" "%utf8-length" "%utf8-split" "%absolute-path" "%load-module"
                ;; STM (M2.10, D-092)
                "ref" "ref?" "%dosync" "%in-transaction?" "ref-set" "alter" "commute"
-               "ensure"))
+               "ensure"
+               ;; skein.io's directories, bytes and streams, and skein.log's clock (M2.11,
+               ;; D-093)
+               "%stat" "%delete-path" "%rename-path" "%read-bytes" "%write-bytes"
+               "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes"
+               "%stream-write" "%stream-flush" "%stream-close"))
+
+(defcore "%epoch-millis" ()
+  ;; Wall-clock time in milliseconds since 1970 (skein.log, M2.11).
+  (multiple-value-bind (seconds microseconds) (sb-ext:get-time-of-day)
+    (+ (* seconds 1000) (floor microseconds 1000))))
+
+(defcore "%write-stderr" (text)
+  ;; skein.log's default handler (M2.11).
+  (write-string text *error-output*)
+  (force-output *error-output*)
+  nil)
 
 (defcore "%evaluated?" (f)
   ;; Phase 0 compiles everything it evaluates (D-091).

@@ -1,0 +1,112 @@
+(ns skein.log
+  "Leveled logging (DESIGN §21, M2.11, D-093).
+
+  (log/info \"loaded\" n \"levels\")
+  ;; stderr: 2026-11-11T02:44:05.123Z INFO game.core: loaded 12 levels
+
+The levels, lowest first, are :trace, :debug, :info, :warn and :error. trace, debug,
+info, warn and error are macros: below the current level (set-level!, :info at first) they
+don't evaluate their arguments. A message joins the arguments with spaces, as println
+prints them. The handler (set-handler!) gets each entry as {:level :time :ns :message},
+:time in milliseconds since 1970; the default writes a line to stderr.")
+
+(def ^:private levels
+  "Each level's rank."
+  {:trace 0 :debug 1 :info 2 :warn 3 :error 4})
+
+(def ^:private current-level (atom 2))
+
+(defn- rank [level]
+  (or (get levels level)
+      ;; Qualified: this namespace's own error is the logging macro.
+      (skein.core/error "a log level is :trace, :debug, :info, :warn or :error, not"
+                        (pr-str level))))
+
+(defn set-level!
+  "Log only entries at level (one of :trace :debug :info :warn :error) and above."
+  [level]
+  (reset! current-level (rank level))
+  nil)
+
+(defn level
+  "The current level."
+  []
+  (let [r @current-level] (some (fn [[k v]] (when (= v r) k)) levels)))
+
+(defn enabled?
+  "True if an entry at level would be logged."
+  [level]
+  (>= (rank level) @current-level))
+
+;;; ------------------------------------------------------------------------------------
+;;; Formatting
+
+(defn- two [n] (if (< n 10) (str "0" n) (str n)))
+(defn- three [n] (cond (< n 10) (str "00" n) (< n 100) (str "0" n) :else (str n)))
+
+(defn format-time
+  "The time t (milliseconds since 1970) as UTC in ISO 8601: 2026-11-11T02:44:05.123Z."
+  [t]
+  (let [days (quot t 86400000)
+        days (if (and (neg? t) (not (zero? (rem t 86400000)))) (dec days) days)
+        ms (- t (* days 86400000))
+        ;; Days to a civil date (Howard Hinnant's algorithm).
+        z (+ days 719468)
+        era (quot (if (neg? z) (- z 146096) z) 146097)
+        doe (- z (* era 146097))
+        yoe (quot (- doe (quot doe 1460) (- (quot doe 36524)) (quot doe 146096)) 365)
+        doy (- doe (- (+ (* 365 yoe) (quot yoe 4)) (quot yoe 100)))
+        mp (quot (+ (* 5 doy) 2) 153)
+        day (inc (- doy (quot (+ (* 153 mp) 2) 5)))
+        month (if (< mp 10) (+ mp 3) (- mp 9))
+        year (+ (* era 400) yoe (if (<= month 2) 1 0))]
+    (str year "-" (two month) "-" (two day)
+         "T" (two (quot ms 3600000)) ":" (two (rem (quot ms 60000) 60))
+         ":" (two (rem (quot ms 1000) 60)) "." (three (rem ms 1000)) "Z")))
+
+(def ^:private level-names
+  {:trace "TRACE" :debug "DEBUG" :info "INFO" :warn "WARN" :error "ERROR"})
+
+(defn format-entry
+  "The line the default handler writes for entry, without its newline."
+  [{:keys [level time ns message]}]
+  (str (format-time time) " " (get level-names level) " " ns ": " message))
+
+(defn- default-handler [entry]
+  (%write-stderr (str (format-entry entry) "\n")))
+
+(def ^:private handler (atom default-handler))
+
+(defn set-handler!
+  "Send each entry, {:level :time :ns :message}, to the function f instead of stderr; nil
+restores the default."
+  [f]
+  (reset! handler (or f default-handler))
+  nil)
+
+;;; ------------------------------------------------------------------------------------
+;;; Logging
+
+(defn- text-of [x]
+  (if (or (string? x) (char? x)) (str x) (pr-str x)))
+
+(defn log*
+  "Log the entry of xs at level from the namespace ns-name, if level is enabled (the
+macros call this)."
+  [level ns-name xs]
+  (when (enabled? level)
+    (@handler {:level level :time (%epoch-millis) :ns ns-name
+               :message (apply str (interpose " " (map text-of xs)))}))
+  nil)
+
+(defmacro log
+  "Log xs at level; xs are evaluated only if level is enabled."
+  [level & xs]
+  `(let [l# ~level]
+     (when (enabled? l#) (log* l# ~(%current-namespace-name) [~@xs]))))
+
+(defmacro trace "Log xs at :trace." [& xs] `(log :trace ~@xs))
+(defmacro debug "Log xs at :debug." [& xs] `(log :debug ~@xs))
+(defmacro info "Log xs at :info." [& xs] `(log :info ~@xs))
+(defmacro warn "Log xs at :warn." [& xs] `(log :warn ~@xs))
+(defmacro error "Log xs at :error." [& xs] `(log :error ~@xs))

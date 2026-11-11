@@ -338,7 +338,7 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "f64" "f32" "sqrt" "rand" "rand-int" "gensym" "parse-long" "boolean" "associative?"
     "counted?" "ifn?"
     ;; The object system (step 4)
-    "equiv" "initialize" "update-instance-for-redefined-class" "make" "with" "slot"
+    "equiv" "initialize" "update-instance-for-redefined-class" "close" "make" "with" "slot"
     "set-slot!" "%set-slot!" "update-slot!" "cell" "instance?" "class-of" "class-name"
     "class-slots" "class-precedence-list" "generic-methods" "%define-class" "%class"
     "%eql-specializer" "%define-generic"
@@ -387,7 +387,9 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "swap-vals!" "reset-vals!" "add-watch" "remove-watch" "set-validator!" "get-validator"
     "sorted-map" "sorted-map-by" "sorted-set" "sorted-set-by" "sorted?" "%sorted-seq"
     "%sorted-seq-from" "%sorted-compare" "%sorted-empty" "meta" "with-meta" "ex-info" "ex-data"
-    "ex-cause" "ex-message"
+    "ex-cause" "ex-message" "%stat" "%delete-path" "%rename-path" "%read-bytes" "%write-bytes"
+    "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes" "%stream-write"
+    "%stream-flush" "%stream-close" "%epoch-millis" "%write-stderr"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

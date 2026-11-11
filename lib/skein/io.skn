@@ -1,11 +1,26 @@
 (ns skein.io
-  "Files and processes (DESIGN §21; M1.9, D-050, D-058). Failures signal io-error.
+  "Files, directories, paths, streams and processes (DESIGN §21; M1.9, D-050, D-058;
+M2.11, D-093). Failures signal io-error.
   (read-file path)              the file's contents, a string (UTF-8)
   (write-file path string)      write the file, replacing it
-  (file-exists? path)           true if a file or directory exists there
+  (append-file path string)     add to the end of the file
+  (read-bytes path)             the file's bytes, a u8 array
+  (write-bytes path data)       write a u8 array, byte view or string
+  (file-exists? path) (file? path) (directory? path) (file-size path)
+  (modified-time path)          milliseconds since 1970
+  (list-dir path)               the names in a directory, sorted
+  (make-dirs path) (delete path) (delete-tree path) (copy-file from to) (rename from to)
+  (path a b ...) (file-name p) (parent p) (extension p) (absolute? p) (absolute-path p)
+  (open-reader path) (read-line r) (line-seq r) (read-text r)
+  (open-writer path {:append true}?) (write w x) (flush w)
+  (open-input path) (read-bytes! in array start? n?)
+  (open-output path {:append true}?) (write-bytes! out data start? end?)
+  (close stream), or with-open
   (run-process [program args...] {:dir path}?)
                                 run a program without a shell; {:exit :out :err}
-  (resource-dir)                the directory holding the program's assets")
+  (resource-dir)                the directory holding the program's assets
+
+Path functions take / or \\ as separators and join with /, which every OS accepts.")
 
 (defcondition io-error [error]
   "A file that can't be read or written, or a program that can't be started."
@@ -53,3 +68,248 @@ started."
   ([argv opts]
    (or (%run-process argv (:dir opts))
        (fail (first argv) "cannot run " (first argv)))))
+;;; ------------------------------------------------------------------------------------
+;;; Paths (M2.11, D-093): strings; / and \ both separate, and path joins with /.
+
+(defn- separator? [ch] (or (= ch \/) (= ch \\)))
+
+(defn- last-separator
+  "The index of the last separator in p, or nil."
+  [p]
+  (loop [i (dec (count p))]
+    (cond (neg? i) nil
+          (separator? (nth p i)) i
+          :else (recur (dec i)))))
+
+(defn- trim-separators
+  "p without separators at its end, unless it is all separators."
+  [p]
+  (loop [n (count p)]
+    (if (and (> n 1) (separator? (nth p (dec n)))) (recur (dec n)) (subs p 0 n))))
+
+(defn path
+  "The parts joined with /, as one path: (path \"assets\" \"level1.txt\")."
+  [part & parts]
+  (reduce (fn [acc p]
+            (let [p (str p)]
+              (cond (= "" acc) p
+                    (= "" p) acc
+                    (separator? (nth acc (dec (count acc))))
+                    (str acc (if (separator? (first p)) (subs p 1) p))
+                    (separator? (first p)) (str acc p)
+                    :else (str acc "/" p))))
+          (str part)
+          parts))
+
+(defn file-name
+  "The last part of path p: (file-name \"a/b/c.txt\") is \"c.txt\"."
+  [p]
+  (let [p (trim-separators p)]
+    (if-let [i (last-separator p)] (subs p (inc i)) p)))
+
+(defn parent
+  "The directory part of path p, or nil if it has none: (parent \"a/b/c.txt\") is \"a/b\"."
+  [p]
+  (let [p (trim-separators p)]
+    (when-let [i (last-separator p)]
+      (cond (zero? i) (subs p 0 1)
+            ;; A drive's root keeps its separator: C:\
+            (and (= i 2) (= \: (nth p 1))) (subs p 0 3)
+            :else (subs p 0 i)))))
+
+(defn extension
+  "The extension of path p's file name, without the dot, or nil: \"gz\" for c.tar.gz. A
+name that only starts with a dot (.gitignore) has none."
+  [p]
+  (let [n (file-name p)]
+    (loop [i (dec (count n))]
+      (cond (<= i 0) nil
+            (= \. (nth n i)) (when (< (inc i) (count n)) (subs n (inc i)))
+            :else (recur (dec i))))))
+
+(defn absolute?
+  "True if path p is absolute: it starts with a separator, or a drive (C:\\ or C:/)."
+  [p]
+  (or (and (pos? (count p)) (separator? (first p)))
+      (and (>= (count p) 3) (= \: (nth p 1)) (separator? (nth p 2)))))
+
+(defn absolute-path
+  "Path p made absolute and with its links resolved; the file must exist."
+  [p]
+  (or (%absolute-path p) (fail p "file not found: " p)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Files and directories (M2.11, D-093)
+
+(defn- stat [p] (%stat p))
+
+(defn file?
+  "True if a file (not a directory) exists at path."
+  [path]
+  (= :file (first (stat path))))
+
+(defn directory?
+  "True if a directory exists at path."
+  [path]
+  (= :directory (first (stat path))))
+
+(defn file-size
+  "The size of the file at path, in bytes."
+  [path]
+  (if-let [s (stat path)] (nth s 1) (fail path "file not found: " path)))
+
+(defn modified-time
+  "When the file at path last changed, in milliseconds since 1970 (UTC)."
+  [path]
+  (if-let [s (stat path)] (nth s 2) (fail path "file not found: " path)))
+
+(defn list-dir
+  "The names of the files and directories in the directory at path, sorted."
+  [path]
+  (if-let [names (%list-directory path)]
+    (mapv (fn [n] (if (= \/ (nth n (dec (count n)))) (subs n 0 (dec (count n))) n)) names)
+    (fail path "cannot list directory " path)))
+
+(defn make-dirs
+  "Make the directory at path, and any missing directories above it. Returns nil."
+  [path]
+  (when-not (%make-directories path) (fail path "cannot make directory " path))
+  nil)
+
+(defn delete
+  "Delete the file or empty directory at path. Returns nil."
+  [path]
+  (when-not (%delete-path path)
+    (if (file-exists? path)
+      (fail path "cannot delete " path)
+      (fail path "file not found: " path)))
+  nil)
+
+(defn delete-tree
+  "Delete the file, or the directory and everything in it, at path. Returns nil."
+  [path]
+  (when (and (file-exists? path) (not (%delete-tree path)))
+    (fail path "cannot delete " path))
+  nil)
+
+(defn copy-file
+  "Copy the file at from to to, replacing it. Returns nil."
+  [from to]
+  (when-not (%copy-file from to) (fail from "cannot copy " from " to " to))
+  nil)
+
+(defn rename
+  "Move the file or directory at from to to. Returns nil."
+  [from to]
+  (when-not (%rename-path from to) (fail from "cannot move " from " to " to))
+  nil)
+
+(defn append-file
+  "Add string to the end of the file at path (UTF-8), making it if it's missing. Returns
+nil."
+  [path string]
+  (when-not (%write-bytes path string true) (fail path "cannot write file " path))
+  nil)
+
+(defn read-bytes
+  "The bytes of the file at path, a u8 array."
+  [path]
+  (or (%read-bytes path)
+      (if (file-exists? path)
+        (fail path "cannot read file " path)
+        (fail path "file not found: " path))))
+
+(defn write-bytes
+  "Write data (a u8 array, a byte view or a string) to the file at path, replacing it.
+Returns nil."
+  [path data]
+  (when-not (%write-bytes path data false) (fail path "cannot write file " path))
+  nil)
+
+;;; ------------------------------------------------------------------------------------
+;;; Streams (M2.11, D-093): text readers and writers, and byte inputs and outputs. close
+;;; (or with-open) flushes and closes one.
+
+(defclass stream []
+  "An open file: kind is :reader, :writer, :input or :output."
+  (handle)
+  (kind)
+  (path :reader stream-path))
+
+(defmethod close [(s stream)]
+  (%stream-close (:handle s)))
+
+(defn- open-stream [path kind mode]
+  (if-let [h (%open-stream path mode)]
+    (make stream :handle h :kind kind :path path)
+    (if (or (pos? mode) (file-exists? path))
+      (fail path "cannot open " path)
+      (fail path "file not found: " path))))
+
+(defn- handle-of [s kind what]
+  (when-not (and (instance? stream s) (= kind (:kind s)))
+    (error (str what " needs a " (name kind) " stream, not " (pr-str s))))
+  (:handle s))
+
+(defn open-reader
+  "Open the file at path to read its text (UTF-8)."
+  [path]
+  (open-stream path :reader 0))
+
+(defn read-line
+  "The next line of the reader r, without its line ending, or nil at the end."
+  [r]
+  (%stream-read-line (handle-of r :reader "read-line")))
+
+(defn line-seq
+  "A lazy seq of the lines left in the reader r."
+  [r]
+  (lazy-seq (when-let [line (read-line r)] (cons line (line-seq r)))))
+
+(defn read-text
+  "The rest of the reader r's text."
+  [r]
+  (%stream-read-rest (handle-of r :reader "read-text")))
+
+(defn open-writer
+  "Open the file at path to write text (UTF-8), replacing it, or after what it holds
+with {:append true}."
+  ([path] (open-writer path {}))
+  ([path opts] (open-stream path :writer (if (:append opts) 2 1))))
+
+(defn write
+  "Write the text of x (as str prints it) to the writer w. Returns nil."
+  [w x]
+  (%stream-write (handle-of w :writer "write") (str x) nil nil))
+
+(defn flush
+  "Write what the writer or output s holds back to its file. Returns nil."
+  [s]
+  (when-not (and (instance? stream s) (contains? #{:writer :output} (:kind s)))
+    (error (str "flush needs a writer or an output stream, not " (pr-str s))))
+  (%stream-flush (:handle s)))
+
+(defn open-input
+  "Open the file at path to read its bytes."
+  [path]
+  (open-stream path :input 0))
+
+(defn read-bytes!
+  "Read bytes from the input in into array (a u8 array or a byte view), from index start
+(0) up to n of them (to its end); how many it read, or nil at the end of the file."
+  ([in array] (read-bytes! in array 0 (count array)))
+  ([in array start] (read-bytes! in array start (- (count array) start)))
+  ([in array start n] (%stream-read-bytes (handle-of in :input "read-bytes!") array start n)))
+
+(defn open-output
+  "Open the file at path to write bytes, replacing it, or after what it holds with
+{:append true}."
+  ([path] (open-output path {}))
+  ([path opts] (open-stream path :output (if (:append opts) 2 1))))
+
+(defn write-bytes!
+  "Write data (a u8 array, a byte view or a string) to the output out, its bytes from
+start to end. Returns nil."
+  ([out data] (write-bytes! out data nil nil))
+  ([out data start end]
+   (%stream-write (handle-of out :output "write-bytes!") data start end)))

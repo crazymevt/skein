@@ -591,6 +591,10 @@ default one applies to ARGS (whose first element is an instance)."
 (define-core-generic "equiv" 2 '(lambda (a b) (bool (if (instance-p a) (eq a b) (equiv a b)))))
 (define-core-generic "hash-of" 1 '(lambda (x) (if (instance-p x) (identity-hash x) (hash-of x))))
 (define-core-generic "initialize" 1 '(lambda (x) (declare (ignore x)) nil))
+;; with-open's (M2.11): streams and user classes specialize it.
+(define-core-generic "close" 1 '(lambda (x)
+                                 (skein-error 'unsupported-operation-error nil
+                                              "close has no method for ~A" (readable-string x))))
 (let ((gf (make-skein-generic "skein.core/update-instance-for-redefined-class" 4 nil)))
   (def-var (intern-var +core+ "update-instance-for-redefined-class") gf)
   (c2mop:ensure-method gf '(lambda (obj added discarded old)

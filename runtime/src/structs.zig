@@ -870,6 +870,21 @@ export fn sk_division_by_zero() noreturn {
     rt.raise(.arithmetic_error, "division by zero", .{});
 }
 
+/// The bytes of a u8 array or a view of one, or of a byte view (skein.io, M2.11); null
+/// for anything else. Valid until the next allocation (the GC may move the array).
+pub fn bytesOf(a: Value) ?[]u8 {
+    if (!a.isObject()) return null;
+    const ok = switch (a.toObject().type_id) {
+        .prim_array => primKind(a) == .u8,
+        .array_view => primKind(slot(a, 0)) == .u8,
+        .byte_view => true,
+        else => false,
+    };
+    if (!ok) return null;
+    const p: [*]u8 = @ptrFromInt(arrayAddress(a).?);
+    return p[0..count(a)];
+}
+
 /// The address of the first element of a primitive array, a view of one or a byte view,
 /// for passing it to C (M1.10); null for anything else. The caller keeps the array
 /// referenced from its stack, which pins it.

@@ -959,12 +959,19 @@ As built (M2.11, D-093): `(deftest name body...)` defines a function of no argum
 
 Phase 0 status (D-040):
 - **Done:** `skein.core`, `skein.ffi`, `skein.jobs` (job graphs; the rest of `skein.conc` is in `skein.core`) and `skein.math`. `skein.time` has `now` and `now-ns`, with `sleep` in `skein.core`. `skein.game` has `run-loop` and the frame restarts, but no input mapping yet.
-- **Not started:** `skein.string`, `skein.gc`, `skein.log` and `skein.test`. The REPL is in the host rather than `skein.repl`.
+- **Not started:** `skein.gc`. (`skein.string`, `skein.log` and `skein.test` came in M2.11.) The REPL is in the host rather than `skein.repl`.
 - **`skein.io`** starts in M1.9 (D-050, D-058) with what the native compiler needs:
   - `(read-file path)` returns the file's contents as a string (UTF-8); `(write-file path string)` writes one, replacing the file; `(file-exists? path)`.
   - `(run-process [program arg ...])` and `(run-process [program arg ...] {:dir path})` run a program directly, without a shell, wait for it, and return `{:exit code :out stdout :err stderr}`.
   - Failures signal `skein.io/io-error`, whose `path` is the file or program: a missing or unreadable file, one that can't be written, or a program that can't be started. A program that exits with a failure status is not an error.
   - `(resource-dir)` returns the directory holding the program's assets (`project.skn`'s `:assets`), ending with `/`: natively the executable's directory, or a macOS app's `Contents/Resources`; run from source, the nearest directory at or above the main file with a `project.skn`, else the main file's directory (D-073). Read an asset with `(read-file (str (resource-dir) "assets/level1.txt"))`.
+- **`skein.io` and `skein.log` in M2.11 (D-093):**
+  - Paths are strings; the path functions take `/` and `\` as separators on every platform and join with `/`, which every OS accepts: `(path "assets" "level1.txt")`, `file-name`, `parent` (nil if there is none), `extension` (without the dot; nil for `.gitignore`), `absolute?`, `absolute-path`.
+  - Files and directories: `file?`, `directory?`, `file-size`, `modified-time` (milliseconds since 1970), `list-dir` (names, sorted), `make-dirs`, `delete` (a file or an empty directory), `delete-tree`, `copy-file`, `rename`, `append-file`, and whole files as bytes, `read-bytes` (a `u8` array) and `write-bytes` (a `u8` array, a byte view or a string).
+  - Streams: `open-reader` (`read-line`, `line-seq`, `read-text`) and `open-writer` (`write`, `flush`) for UTF-8 text; `open-input` (`(read-bytes! in array start? n?)`, nil at the end) and `open-output` (`write-bytes!`) for bytes. Writers and outputs take `{:append true}`. `close` flushes and closes one, and closing twice does nothing.
+  - `(with-open [name init ...] body...)` closes its values, the last first, however the body ends. `close` is a generic function in `skein.core`: classes add methods to join `with-open`.
+  - `skein.log`: the macros `trace`, `debug`, `info`, `warn` and `error` (and `(log level xs...)`) join their arguments as `println` does and skip them below the level (`set-level!`, `:info` at first). The default handler writes `2026-11-11T02:44:05.123Z INFO game.core: message` to stderr; `set-handler!` takes a function of `{:level :time :ns :message}`.
+  - Natively; in Phase 0 the path functions and `skein.log` work, and the rest of the new `skein.io` signals that it is native only.
 - **`skein.math`:**
   - The operations on its types are generic functions: `v+ v- v* vdiv negate dot length length-sq distance normalize lerp` for vectors, and `m* transform transpose determinant inverse` for matrices and quaternions. Functions such as `cross`, `rotate`, `quat-rotate`, `slerp` and `mat3-translation` cover the rest.
   - Matrices are column-major: field `mCR` is column C, row R.

@@ -1,0 +1,162 @@
+(ns io-log
+  (:require [skein.test :refer [deftest is are testing run-tests]]
+            [skein.io :as io]
+            [skein.log :as log]))
+
+;; skein.io's paths, directories, bytes and streams, and skein.log, of M2.11 step 7
+;; (D-093), natively, compared with io-log.expected. Files go under build/examples/.
+
+(def dir "build/examples/io-log-test")
+
+(deftest paths
+  (are [x y] (= x y)
+    "assets/level1.txt" (io/path "assets" "level1.txt")
+    "a/b/c" (io/path "a/" "/b" "c")
+    "/root/x" (io/path "/root" "x")
+    "a" (io/path "a" "")
+    "c.txt" (io/file-name "a/b/c.txt")
+    "c.txt" (io/file-name "a\\b\\c.txt")
+    "b" (io/file-name "a/b/")
+    "c.txt" (io/file-name "c.txt")
+    "a/b" (io/parent "a/b/c.txt")
+    "C:\\games" (io/parent "C:\\games\\x.skn")
+    "C:\\" (io/parent "C:\\x.skn")
+    "/" (io/parent "/x")
+    nil (io/parent "x")
+    "gz" (io/extension "c.tar.gz")
+    "skn" (io/extension "dir.v2/x.skn")
+    nil (io/extension "dir.v2/x")
+    nil (io/extension ".gitignore")
+    nil (io/extension "x.")
+    true (io/absolute? "/x")
+    true (io/absolute? "C:\\x")
+    true (io/absolute? "C:/x")
+    false (io/absolute? "x/y"))
+  (is (io/absolute? (io/absolute-path "build"))))
+
+(deftest files-and-directories
+  (io/delete-tree dir)
+  (io/make-dirs (io/path dir "sub" "deeper"))
+  (is (io/directory? dir))
+  (is (not (io/file? dir)))
+  (io/write-file (io/path dir "a.txt") "hello")
+  (io/append-file (io/path dir "a.txt") ", world")
+  (is (= "hello, world" (io/read-file (io/path dir "a.txt"))))
+  (is (io/file? (io/path dir "a.txt")))
+  (is (= 12 (io/file-size (io/path dir "a.txt"))))
+  (is (< 1700000000000 (io/modified-time (io/path dir "a.txt"))))
+  (io/copy-file (io/path dir "a.txt") (io/path dir "b.txt"))
+  (io/rename (io/path dir "b.txt") (io/path dir "c.txt"))
+  (is (= ["a.txt" "c.txt" "sub"] (io/list-dir dir)))
+  (io/delete (io/path dir "c.txt"))
+  (io/delete (io/path dir "sub" "deeper"))
+  (is (= ["a.txt" "sub"] (io/list-dir dir)))
+  (is (thrown? io/io-error (io/delete (io/path dir "missing"))))
+  (is (thrown-with-msg? io/io-error "file not found" (io/file-size (io/path dir "missing"))))
+  (is (thrown? io/io-error (io/list-dir (io/path dir "missing")))))
+
+(deftest bytes
+  (let [a (make-array u8 4)
+        p (io/path dir "bytes.bin")]
+    (dotimes [i 4] (aset! a i (* 60 i)))
+    (io/write-bytes p a)
+    (let [b (io/read-bytes p)]
+      (is (= 4 (count b)))
+      (is (= [0 60 120 180] (vec (map (fn [i] (aget b i)) (range 4))))))
+    (io/write-bytes p "AB")
+    (is (= [65 66] (vec (map (fn [i] (aget (io/read-bytes p) i)) (range 2)))))))
+
+(deftest streams
+  (let [p (io/path dir "lines.txt")]
+    (with-open [w (io/open-writer p)]
+      (io/write w "one\n")
+      (io/write w 2)
+      (io/write w "\r\nthree"))
+    (with-open [w (io/open-writer p {:append true})]
+      (io/write w "\nfour\n"))
+    (with-open [r (io/open-reader p)]
+      (is (= "one" (io/read-line r)))
+      (is (= ["2" "three" "four"] (vec (io/line-seq r))))
+      (is (nil? (io/read-line r))))
+    (with-open [r (io/open-reader p)]
+      (io/read-line r)
+      (is (= "2\r\nthree\nfour\n" (io/read-text r))))
+    (testing "a long file, past the buffers"
+      (with-open [w (io/open-writer p)]
+        (dotimes [i 20000] (io/write w (str "line " i "\n"))))
+      (with-open [r (io/open-reader p)]
+        (let [lines (vec (io/line-seq r))]
+          (is (= 20000 (count lines)))
+          (is (= "line 19999" (peek lines)))))))
+  (testing "bytes"
+    (let [p (io/path dir "stream.bin")
+          buf (make-array u8 3)]
+      (with-open [out (io/open-output p)]
+        (io/write-bytes! out "abcde")
+        (io/write-bytes! out "xyz" 1 3))
+      (with-open [in (io/open-input p)]
+        (is (= 3 (io/read-bytes! in buf)))
+        (is (= [97 98 99] (vec (map (fn [i] (aget buf i)) (range 3)))))
+        (is (= 2 (io/read-bytes! in buf 1)))
+        (is (= 2 (io/read-bytes! in buf 0 2)))
+        (is (= [121 122 101] (vec (map (fn [i] (aget buf i)) (range 3)))))
+        (is (nil? (io/read-bytes! in buf))))))
+  (testing "closing"
+    (let [r (io/open-reader (io/path dir "a.txt"))]
+      (close r)
+      (close r)
+      (is (thrown-with-msg? error "closed" (io/read-line r))))
+    (is (thrown? io/io-error (io/open-reader (io/path dir "missing.txt"))))
+    (is (thrown? error (io/write (io/open-reader (io/path dir "a.txt")) "x")))
+    (is (thrown-with-msg? error "no method" (close 5)))
+    (let [closed (atom [])]
+      (try (with-open [a (io/open-reader (io/path dir "a.txt"))
+                       b (io/open-reader (io/path dir "a.txt"))]
+             (error "inside"))
+           (catch error e (swap! closed conj (condition-message e))))
+      (is (= ["inside"] @closed)))))
+
+(defclass resource [] (name) (log))
+
+(defmethod close [(r resource)]
+  (swap! (:log r) conj (:name r)))
+
+(deftest with-open-on-a-class
+  (let [log (atom [])]
+    (with-open [a (make resource :name :a :log log)
+                b (make resource :name :b :log log)]
+      (swap! log conj :body))
+    (is (= [:body :b :a] @log))))
+
+(deftest logging
+  (let [entries (atom [])
+        evaluated (atom 0)]
+    (log/set-handler! (fn [e] (swap! entries conj e)))
+    (log/info "loaded" 12 "levels" :ok)
+    (log/debug "hidden" (swap! evaluated inc))
+    (log/set-level! :debug)
+    (log/debug "shown" (swap! evaluated inc))
+    (log/warn "careful")
+    (log/set-level! :error)
+    (log/warn "hidden")
+    (log/error "bad" {:k 1})
+    (log/set-level! :info)
+    (log/set-handler! nil)
+    (is (= 1 @evaluated))
+    (is (= [[:info "loaded 12 levels :ok"] [:debug "shown 1"] [:warn "careful"]
+            [:error "bad {:k 1}"]]
+           (mapv (fn [e] [(:level e) (:message e)]) @entries)))
+    (is (= "io-log" (:ns (first @entries))))
+    (is (< 1700000000000 (:time (first @entries))))
+    (is (= :info (log/level)))
+    (is (thrown? error (log/set-level! :loud))))
+  (are [x y] (= x y)
+    "1970-01-01T00:00:00.000Z" (log/format-time 0)
+    "2026-11-11T02:44:05.123Z" (log/format-time 1794365045123)
+    "2000-02-29T23:59:59.999Z" (log/format-time 951868799999)
+    "1969-12-31T23:59:59.999Z" (log/format-time -1)
+    "2026-11-11T02:44:05.123Z INFO game.core: hi"
+    (log/format-entry {:level :info :time 1794365045123 :ns "game.core" :message "hi"})))
+
+(prn (select-keys (run-tests 'io-log) [:test :fail :error]))
+(io/delete-tree dir)

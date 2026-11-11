@@ -1172,9 +1172,9 @@ pub fn genericMethods(f: Value) Value {
 
 // The generic functions of skein.core.
 
-pub const CoreGeneric = enum { equiv, @"hash-of", initialize, @"update-instance-for-redefined-class" };
+pub const CoreGeneric = enum { equiv, @"hash-of", initialize, @"update-instance-for-redefined-class", close };
 
-pub var core_generics: [4]Value = @splat(Value.nil);
+pub var core_generics: [std.enums.values(CoreGeneric).len]Value = @splat(Value.nil);
 
 pub fn coreGeneric(name: []const u8) ?Value {
     ensureBuiltins();
@@ -1199,6 +1199,16 @@ fn hashDefault(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value 
     return Value.fromFixnum(if (isObjectInstance(x)) identityHash(x) else equal.hashOf(x));
 }
 
+/// close's default (M2.11): with-open closes what it opened with close, which streams and
+/// user classes specialize.
+fn closeDefault(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
+    _ = self;
+    _ = argc;
+    var out: std.ArrayList(u8) = .empty;
+    @import("print.zig").write(argv[2], &out, true);
+    rt.raise(.unsupported_operation_error, "close has no method for {s}", .{out.items});
+}
+
 fn nothing(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
     _ = self;
     _ = argc;
@@ -1212,6 +1222,7 @@ fn makeCoreGenerics() void {
         .{ .@"hash-of", 1, hashDefault },
         .{ .initialize, 1, nothing },
         .{ .@"update-instance-for-redefined-class", 4, nothing },
+        .{ .close, 1, closeDefault },
     };
     for (defs) |d| {
         var buf: [64]u8 = undefined;

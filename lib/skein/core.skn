@@ -655,3 +655,16 @@ its error, for every deref after. A fiber that derefs it while another runs the 
 waits."
   [& body]
   `(%delay (fn [] ~@body)))
+
+(defmacro with-open
+  "(with-open [name init ...] body...): bind each name to its init, run the body, and
+close them, the last first, however the body ends. close is a generic function: skein.io's
+streams have methods, and other classes can (M2.11, D-093)."
+  [bindings & body]
+  (when-not (and (vector? bindings) (even? (count bindings)))
+    (error "with-open needs a vector of names and values"))
+  (if (empty? bindings)
+    `(do ~@body)
+    `(let [~(first bindings) ~(second bindings)]
+       (try (with-open [~@(drop 2 bindings)] ~@body)
+            (finally (close ~(first bindings)))))))

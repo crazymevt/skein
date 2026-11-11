@@ -1698,7 +1698,7 @@ const base_table = [_]Entry{
 /// skein.ffi's functions (ffi.zig, named skein.ffi/<name>), and skein.math's and
 /// skein.time's (mathtime.zig, named skein.math/<name> and skein.time/<name>), and eval
 /// and its relatives (evaluate.zig), and what the REPL and skein dev need (devio.zig).
-const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(watch.entries) ++ entriesOf(io.entries) ++
+const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(watch.entries) ++ entriesOf(@import("files.zig").entries) ++ entriesOf(io.entries) ++
     entriesOf(compiler.entries) ++ entriesOf(ffi.entries) ++ entriesOf(mathtime.entries) ++
     entriesOf(evaluate.entries) ++ entriesOf(devio.entries) ++
     entriesOf(@import("stm.zig").entries) ++ entriesOf(string.entries);

@@ -396,7 +396,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   4. ✅ Numbers and printing: parsing, predicates, `hash`, `random-uuid`, the `bit-` operations, `format`, `prn-str`, `print-str`, `read-string`, `slurp`, `spit`, and `*print-length*`.
   5. ✅ References and collections: `delay`/`force`, `promise`/`deliver`, `volatile!`, watches and validators on atoms and refs, `swap-vals!`, `reset-vals!`, and sorted maps and sets (randomized tests against a model).
   6. ✅ Metadata on collections and symbols, and `ex-info`, `ex-data` and `ex-message`.
-  7. `skein.io` (directories, paths, bytes, streams) and `skein.log`.
+  7. ✅ `skein.io` (directories, paths, bytes, streams) and `skein.log`.
   8. Docstrings and argument lists for the runtime's Zig functions, which `--eval` builds register for SLIME and describe.
 
 **Exit:** every function and macro above exists natively with tests (randomized against a model where it fits), the Phase 0 host has the ones that fixtures compare with it, and `skein test` runs a project's tests on all three platforms.
@@ -457,7 +457,7 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - Flatten nested value structs inline (DESIGN §9.1), and make `(safety 0)` integer overflow wrap (DESIGN §12.3).
 - Startup: `lib/skein/core.skn` is compiled on every start, adding about 0.15 s (0.3 s total for `skein run`). Cache it, e.g. in a saved SBCL core, if this becomes annoying.
 - `defn` and `defn-` stay built in because they attach metadata (docstrings, `^:private`) to the name; move them to Skein if runtime metadata or a metadata helper for macros is added.
-- Core macros from DESIGN §5.2 that wait on later milestones: `defclass`, `defgeneric`, `defmethod` (M0.7), `defstruct` (M0.8), `with-nursery` (M0.9), `with-open` (needs a `close` protocol, M0.7 or with `skein.io`), `binding` (dynamic vars).
+- Core macros from DESIGN §5.2 that wait on later milestones: `defclass`, `defgeneric`, `defmethod` (M0.7), `defstruct` (M0.8), `with-nursery` (M0.9), `with-open` (built in M2.11 with a `close` generic function), `binding` (dynamic vars).
 - Methods can specialize on condition types (M0.7), but `defcondition` still makes plain CL condition classes rather than Skein classes; unify them if conditions need slots with cells, `with`, or inheritance from Skein classes.
 - Custom metaclasses written in Skein (DESIGN §8.5) and `:cell :ref` (STM) are not supported yet.
 - Generic function arity errors come from CLOS without a Skein location.
