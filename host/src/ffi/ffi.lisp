@@ -460,9 +460,15 @@ warning is signaled inside a barrier too, so a handler that tries to exit is sto
     (def-var (intern-var *current-namespace* (sym-name name)) c)
     nil))
 (defffi "%define-function" (name c-name return-type params blocking owned)
-  (define-foreign-function name c-name return-type
-    (mapcar (lambda (p) (vector-to-list p)) (seq-to-cl params))
-    (truthy-p blocking) (truthy-p owned))
+  (if (some #'sym-p (seq-to-cl params))
+      ;; A variadic call shape (its & stays in the parameters) is native only (D-096).
+      (def-var (intern-var *current-namespace* (sym-name name))
+               (lambda (&rest args)
+                 (declare (ignore args))
+                 (ffi-error "~A: variadic C calls are native only (D-096)" (sym-name name))))
+      (define-foreign-function name c-name return-type
+        (mapcar (lambda (p) (vector-to-list p)) (seq-to-cl params))
+        (truthy-p blocking) (truthy-p owned)))
   nil)
 (defffi "%define-function-ptr" (name return-type params blocking owned)
   ;; Calls through function pointers are native only (M2.13, D-096).

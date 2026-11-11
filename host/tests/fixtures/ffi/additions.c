@@ -1,6 +1,9 @@
-/* A C library for the by-value FFI fixture (M2.13, D-096): structs and unions that the
-   C calling conventions pass in different ways, in registers or in memory. */
+/* A C library for the FFI additions fixture (M2.13, D-096): structs and unions that the
+   C calling conventions pass in different ways, in registers or in memory; callbacks;
+   function pointers; and variadic functions. */
+#include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #if defined(_WIN32)
 #define EXPORT __declspec(dllexport)
@@ -53,3 +56,32 @@ EXPORT const op_table *ops_table(void) { static const op_table t = {{op_add, op_
 typedef vec2f (*vec2_op)(vec2f a, vec2f b);
 EXPORT vec2_op vec2_add_pointer(void) { return vec2_add; }
 EXPORT uint64_t length_of(const char *s) { uint64_t n = 0; while (s[n]) n++; return n; }
+
+/* Variadic functions (step 4). va_sum reads its arguments as types says: i an int (what
+   a small integer becomes in a ...), l an int64_t, d a double (what a float becomes), p a
+   C string's length. va_format formats with vsnprintf. */
+EXPORT double va_sum(const char *types, ...) {
+  va_list ap;
+  double sum = 0;
+  va_start(ap, types);
+  for (const char *t = types; *t; t++) {
+    switch (*t) {
+      case 'i': sum += va_arg(ap, int); break;
+      case 'l': sum += (double)va_arg(ap, int64_t); break;
+      case 'd': sum += va_arg(ap, double); break;
+      case 'p': { const char *s = va_arg(ap, const char *); while (*s++) sum += 1; } break;
+    }
+  }
+  va_end(ap);
+  return sum;
+}
+EXPORT const char *va_format(const char *fmt, ...) {
+  static char buf[256];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof buf, fmt, ap);
+  va_end(ap);
+  return buf;
+}
+typedef double (*va_sum_fn)(const char *types, ...);
+EXPORT va_sum_fn va_sum_pointer(void) { return va_sum; }

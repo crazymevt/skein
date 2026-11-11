@@ -4,10 +4,26 @@ structs, unions, enums and functions. The functions of this namespace (alloc, fr
 put!, field, put-field!, sizeof, c-string, handle, ...) are built into the host; the
 macros are here.")
 
-(defn- params-data [params]
-  (when-not (and (vector? params) (even? (count params)))
-    (error "C parameters look like [name type, name type ...]"))
-  (vec (map vec (partition 2 params))))
+(defn- variadic-marker? [x] (and (symbol? x) (= "&" (name x))))
+
+(defn- params-data
+  "[[name type] ...] for C parameters written [name type, name type ...]. A & before the
+variadic ones of a variadic function's call shape stays, as the symbol &, between them
+(M2.13, D-096)."
+  [params]
+  (let [shape "C parameters look like [name type, name type ...]"]
+    (when-not (vector? params) (error shape))
+    (let [fixed (vec (take-while (fn [x] (not (variadic-marker? x))) params))
+          more (drop (inc (count fixed)) params)
+          variadic? (< (count fixed) (count params))]
+      (when-not (and (even? (count fixed)) (even? (count more))
+                     (not-any? variadic-marker? more))
+        (error shape))
+      (when (and variadic? (empty? fixed))
+        (error "a variadic C function needs a parameter before &"))
+      (vec (concat (map vec (partition 2 fixed))
+                   (when variadic? ['&])
+                   (map vec (partition 2 more)))))))
 
 (defmacro deflibrary
   "Load a C library, choosing the file by operating system:
@@ -43,7 +59,9 @@ flags) or an integer."
   "Bind name to a C function: (defcfun name \"c_name\" return-type [param type ...]).
 Mark the name ^:blocking for calls that may wait. Mark the return type ^:owned, as in
 ^:owned (ptr T), when C hands over memory that Skein must free; ^:borrowed, the default,
-means it does not."
+means it does not. For a variadic C function, & before the parameters that go in its
+... gives one shape of call: [obj ptr, name c-string & value c-string, end ptr]; bind a
+name for each shape (M2.13, D-096; native only)."
   [fn-name c-name return-type params]
   `(%define-function '~fn-name ~c-name '~return-type '~(params-data params)
                      ~(boolean (:blocking (%syntax-meta fn-name)))
@@ -63,6 +81,8 @@ COM vtables and other tables of function pointers (M2.13, D-096). Native only."
 (defcallback name return-type [param type ...] body...)."
   [cb-name return-type params & body]
   (let [data (params-data params)]
+    (when (some variadic-marker? data)
+      (error "a callback can't be variadic: " (name cb-name)))
     `(%define-callback '~(symbol (%current-namespace-name) (name cb-name)) '~return-type
                        '~data
                        (fn [~@(map first data)] ~@body))))

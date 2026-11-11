@@ -371,34 +371,35 @@ test_native_only() {
     fi
     echo "skeinc: $name ok"
   done
-  # Structs and unions by value, in calls and callbacks (M2.13, D-096):
-  # host/tests/fixtures/ffi/byvalue.c, built beside the program, which loads it from its
+  # The FFI additions (M2.13, D-096): structs and unions by value in calls and callbacks,
+  # calls through function pointers and variadic calls, with
+  # host/tests/fixtures/ffi/additions.c, built beside the program, which loads it from its
   # own directory.
-  local bv_lib=libbyvalue.so
+  local bv_lib=libadditions.so
   case "$host" in
-    *macos) bv_lib=libbyvalue.dylib ;;
-    *windows*) bv_lib=byvalue.dll ;;
+    *macos) bv_lib=libadditions.dylib ;;
+    *windows*) bv_lib=additions.dll ;;
   esac
-  "${SKEIN_ZIG:-zig}" cc -shared -o "build/examples/$bv_lib" host/tests/fixtures/ffi/byvalue.c
-  "$skeinc" build host/tests/fixtures/ffi/byvalue.skn -o "build/examples/ffi-byvalue$exe" \
+  "${SKEIN_ZIG:-zig}" cc -shared -o "build/examples/$bv_lib" host/tests/fixtures/ffi/additions.c
+  "$skeinc" build host/tests/fixtures/ffi/additions.skn -o "build/examples/ffi-additions$exe" \
     > /dev/null
-  "build/examples/ffi-byvalue$exe" > build/examples/ffi-byvalue.out \
-    2> build/examples/ffi-byvalue.err
-  if ! diff --strip-trailing-cr host/tests/fixtures/ffi/byvalue.expected \
-       build/examples/ffi-byvalue.out > /dev/null; then
-    echo "skeinc: ffi-byvalue differs from its .expected"
-    diff --strip-trailing-cr host/tests/fixtures/ffi/byvalue.expected \
-      build/examples/ffi-byvalue.out | head -20
+  "build/examples/ffi-additions$exe" > build/examples/ffi-additions.out \
+    2> build/examples/ffi-additions.err
+  if ! diff --strip-trailing-cr host/tests/fixtures/ffi/additions.expected \
+       build/examples/ffi-additions.out > /dev/null; then
+    echo "skeinc: ffi-additions differs from its .expected"
+    diff --strip-trailing-cr host/tests/fixtures/ffi/additions.expected \
+      build/examples/ffi-additions.out | head -20
     exit 1
   fi
   # A callback that fails warns and returns a zeroed struct (step 2).
-  if ! grep -q "callback byvalue/bad-color signaled no color; returning a zeroed struct" \
-       build/examples/ffi-byvalue.err; then
-    echo "skeinc: ffi-byvalue's failing callback didn't warn:"
-    cat build/examples/ffi-byvalue.err
+  if ! grep -q "callback additions/bad-color signaled no color; returning a zeroed struct" \
+       build/examples/ffi-additions.err; then
+    echo "skeinc: ffi-additions's failing callback didn't warn:"
+    cat build/examples/ffi-additions.err
     exit 1
   fi
-  echo "skeinc: ffi-byvalue ok"
+  echo "skeinc: ffi-additions ok"
 }
 
 test_ring_and_dev() {

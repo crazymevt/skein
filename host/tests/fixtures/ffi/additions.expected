@@ -19,8 +19,14 @@
 :vtable 13 42
 :pointer-by-value [4.0f 6.0f]
 :one-symbol-two-signatures 5 2
+:va-small 71247.0
+:va-floats 3.75
+:va-mixed 1.00000000025e10
+:va-none 0.0
+:va-format "42|3.14|skein"
+:va-through-pointer 7.25
 :nil-pointer "call-binop needs a C function pointer to call, not nil"
 :null-pointer "call-binop needs a C function pointer to call, not nil"
 :arity skein.core/arity-error
-:not-a-struct "byvalue/vec2f by value needs a pointer to one or a map of its fields, not 5"
-:no-such-field "byvalue/vec2f has no field :z"
+:not-a-struct "additions/vec2f by value needs a pointer to one or a map of its fields, not 5"
+:no-such-field "additions/vec2f has no field :z"

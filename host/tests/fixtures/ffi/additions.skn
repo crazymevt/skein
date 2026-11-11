@@ -1,15 +1,16 @@
-(ns byvalue
+(ns additions
   (:require [skein.ffi :as ffi]))
 
-;; Structs and unions passed and returned by value, and calls through function pointers
-;; (M2.13 steps 1 to 3, D-096), natively, with
-;; host/tests/fixtures/ffi/byvalue.c, which the bootstrap builds into build/examples/.
+;; Structs and unions passed and returned by value, calls through function pointers, and
+;; variadic calls (M2.13 steps 1 to 4, D-096), natively, with
+;; host/tests/fixtures/ffi/additions.c, which the bootstrap builds into build/examples/.
 ;; Arguments are maps of the fields (nested maps for nested structs) or pointers to a
 ;; struct; results are owned pointers to a copy, read with ffi/field. Callbacks get
-;; by-value parameters as owned pointers and return a map or a pointer.
+;; by-value parameters as owned pointers and return a map or a pointer. A variadic C
+;; function gets a name for each shape of call, with & before the variadic parameters.
 
-(ffi/deflibrary byvalue
-  {:macos "libbyvalue.dylib" :linux "libbyvalue.so" :windows "byvalue.dll"})
+(ffi/deflibrary additions
+  {:macos "libadditions.dylib" :linux "libadditions.so" :windows "additions.dll"})
 
 (ffi/defcstruct vec2f (x f32) (y f32))
 (ffi/defcstruct rectd (x f64) (y f64) (w f64) (h f64))
@@ -57,6 +58,15 @@
 (ffi/defcfun length-of-string "length_of" u64 [s c-string])
 (ffi/defcfun length-of-bytes "length_of" u64 [p ptr])
 
+;; Small integers and floats are promoted in a ..., as C does.
+(ffi/defcfun va-small "va_sum" f64 [types c-string & a i8, b i16, c u8, d i32])
+(ffi/defcfun va-floats "va_sum" f64 [types c-string & x f32, y f64])
+(ffi/defcfun va-mixed "va_sum" f64 [types c-string & n i64, x f32, m i32, s c-string])
+(ffi/defcfun va-none "va_sum" f64 [types c-string &])
+(ffi/defcfun format-row "va_format" c-string [fmt c-string & i i32, d f64, s c-string])
+(ffi/defcfun-ptr va-sum-through f64 [types c-string & x f32, n i64])
+(ffi/defcfun va-sum-pointer "va_sum_pointer" ptr [])
+
 (defn fields [p type ks] (mapv (fn [k] (ffi/field p type k)) ks))
 
 (defn -main [& args]
@@ -96,6 +106,12 @@
     (dotimes [i 2] (ffi/put! bytes u8 65 i))
     (prn :one-symbol-two-signatures (length-of-string "hello") (length-of-bytes bytes))
     (ffi/free bytes))
+  (prn :va-small (va-small "iiii" -3 1000 250 70000))
+  (prn :va-floats (va-floats "dd" 1.5 2.25))
+  (prn :va-mixed (va-mixed "ldip" 10000000000 0.5 -2 "four"))
+  (prn :va-none (va-none ""))
+  (prn :va-format (format-row "%d|%.2f|%s" 42 3.14159 "skein"))
+  (prn :va-through-pointer (va-sum-through (va-sum-pointer) "dl" 0.25 7))
   (prn :nil-pointer (try (call-binop nil 1 2) (catch error e (condition-message e))))
   (prn :null-pointer (try (call-binop (ffi/null) 1 2) (catch error e (condition-message e))))
   (prn :arity (try (call-binop (ffi/get (ops-table) ptr 0) 1)
