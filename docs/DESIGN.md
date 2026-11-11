@@ -929,7 +929,21 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
  :targets [:aarch64-macos :x86_64-windows-gnu :x86_64-linux-gnu]}
 ```
 
-`:paths` lists where namespaces are found (default `["src"]`); `:test-paths` where `skein test` finds tests (default `["test"]`); `:assets` lists directories copied into a package as they are; `:main` is the function called with the command-line arguments. The file is read as data, and `skein build` with no file builds the project in the current directory (D-069). `:deps` names libraries from git repositories (GitHub's included, pinned to a tag or a commit) and from local files and folders (M2.12, D-085). A package registry is deferred.
+`:paths` lists where namespaces are found (default `["src"]`); `:test-paths` where `skein test` finds tests (default `["test"]`); `:assets` lists directories copied into a package as they are; `:main` is the function called with the command-line arguments. The file is read as data, and `skein build` with no file builds the project in the current directory (D-069). `:deps` names libraries from git repositories (GitHub's included, pinned to a tag or a commit) and from local folders (M2.12, D-085, D-094). A package registry is deferred.
+
+Dependencies (M2.12, D-094):
+
+```clojure
+:deps {skein/sdl3   {:git "https://github.com/skein-lang/sdl3" :tag "v0.1.0"}
+       acme/physics {:git "git@github.com:acme/physics.git" :sha "3f2a9c1"}
+       my/shared    {:local "../shared"}}
+```
+
+- A library name is a symbol. A git dependency is pinned by `:tag` or `:sha`; a local one is a folder (relative to the project), whose `project.skn`, if it has one, gives its `:paths`, `:deps`, `:native` and `:assets`, and which is otherwise a source path itself.
+- Git dependencies are fetched with the `git` command into a cache shared by projects, one checkout per commit: `~/.skein/deps`, or `%LOCALAPPDATA%\skein\deps` on Windows.
+- `skein.lock`, beside `project.skn`, records the commit each git dependency resolved to; commit it with the project. `skein build`, `run`, `dev`, `test` and `package` fetch only what is missing, so a project whose dependencies are cached builds offline. `skein deps` fetches what the lock names; `skein deps update` (or `skein deps update lib`) resolves tags again and rewrites the lock.
+- A library's own `:deps` are followed. Two different versions of one library are an error naming both, unless the project's own `:deps` names that library, which then wins.
+- Dependencies' namespaces are found after the project's own, their `:native` libraries and `:assets` go into packages, and `skein dev` reloads the project's own files.
 
 ### 20.3 Testing
 `skein.test` follows the style of `clojure.test`: `deftest`, `is`, `testing`, fixtures. There is also property-based testing with `skein.test.check` (Deferred).

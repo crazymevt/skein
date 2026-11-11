@@ -41,7 +41,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.9 Hot reload of compiled code | ⬜ |
 | M2.10 STM | 🟨 |
 | M2.11 Standard library | 🟨 |
-| M2.12 Package management | ⬜ |
+| M2.12 Package management | 🟨 |
 | M2.13 FFI additions | ⬜ |
 | M2.14 UI library | ⬜ |
 | M2.15 Driftrock developed live, natively | ⬜ |
@@ -403,13 +403,12 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ### M2.12 Package management
 - `project.skn`'s `:deps` (DESIGN §20.2, D-085): a project uses libraries from git repositories, GitHub's included, pinned to a tag or a commit, and from local files and folders. `skein build`, `run`, `dev` and `package` find their namespaces; a library's `:native` libraries and `:assets` go into packages.
-- To settle when preparing it, in DESIGN and DECISIONS:
-  - the `:deps` syntax for git and local dependencies, and whether a local one is a folder with its own `project.skn`, a source folder, or a single `.skn` file;
-  - how sources are fetched: the `git` command, or GitHub's HTTPS archives, which need an HTTP client and archive extraction natively;
-  - where fetched sources are cached, and a lock file that pins the commits a build used;
-  - transitive dependencies and conflicting versions of one library;
-  - building offline from the cache, and a command to fetch or update dependencies.
-- Steps are planned when the milestone starts.
+- Settled (D-094): `{:git url :tag t}`, `{:git url :sha s}` or `{:local "folder"}`, a local folder with or without its own `project.skn`; fetched with the `git` command into a user-level cache, one checkout per commit; `skein.lock` pins commits; builds fetch only what is missing and work offline from the cache; `skein deps` and `skein deps update [lib]`; transitive `:deps` followed, two versions of one library an error unless the project names it.
+- Steps, in order (D-094):
+  1. Reading `:deps` and resolving local folders, transitively, with the conflict rule: the project's source paths, `:native` libraries and `:assets` grow by its dependencies' in `build`, `run`, `dev`, `test` and `package`.
+  2. Git dependencies: the cache, fetching and checking out with `git`, `:tag` and `:sha`, and `skein deps`; tests with local repositories made by `git`.
+  3. `skein.lock`: written when dependencies are first resolved, used after, and rewritten by `skein deps update [lib]`; offline builds from the cache; clear errors when git is missing or a fetch fails.
+  4. Transitive git dependencies with the conflict rule, and packages carrying dependencies' native libraries and assets, on all three platforms; a dependency on a public GitHub repository in CI.
 
 **Exit:** a project that depends on a library in a git repository (a local repository in the tests, and one on GitHub in CI) and on a local folder builds, runs with `skein run` and `skein dev`, and packages with its dependencies' native libraries and assets, on all three platforms.
 
