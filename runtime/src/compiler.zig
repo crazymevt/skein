@@ -320,7 +320,7 @@ var fn_names: std.StringHashMapUnmanaged([:0]const u8) = .empty;
 
 /// A permanent C string for `name`, made once per name.
 fn internedName(name: []const u8) [*:0]const u8 {
-    fn_names_lock.lock();
+    gc.lockMutex(&fn_names_lock);
     defer fn_names_lock.unlock();
     if (fn_names.get(name)) |n| return n.ptr;
     const copy = std.heap.c_allocator.dupeSentinel(u8, name, 0) catch rt.fatal("out of memory", .{});

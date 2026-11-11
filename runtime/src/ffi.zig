@@ -135,14 +135,14 @@ var registry_lock: platform.Mutex = .{};
 pub var registry: std.StringHashMapUnmanaged(Value) = .empty;
 
 fn register(qualified: []const u8, t: Value) void {
-    registry_lock.lock();
+    gc.lockMutex(&registry_lock);
     defer registry_lock.unlock();
     const key = if (registry.getKey(qualified)) |k| k else alloc.dupe(u8, qualified) catch rt.fatal("out of memory", .{});
     registry.put(alloc, key, t) catch rt.fatal("out of memory", .{});
 }
 
 fn lookup(qualified: []const u8) ?Value {
-    registry_lock.lock();
+    gc.lockMutex(&registry_lock);
     defer registry_lock.unlock();
     return registry.get(qualified);
 }
@@ -482,7 +482,7 @@ fn ensureHandles() void {
 }
 
 fn makeHandle(x: Value) Value {
-    handles_lock.lock();
+    gc.lockMutex(&handles_lock);
     defer handles_lock.unlock();
     ensureHandles();
     next_handle += 1;
@@ -492,14 +492,14 @@ fn makeHandle(x: Value) Value {
 }
 
 fn handleValue(h: Value) Value {
-    handles_lock.lock();
+    gc.lockMutex(&handles_lock);
     defer handles_lock.unlock();
     ensureHandles();
     return coll.mapGet(handle_roots[0], h) orelse fail("{s} is not a live handle", .{readable(h)});
 }
 
 fn freeHandle(h: Value) Value {
-    handles_lock.lock();
+    gc.lockMutex(&handles_lock);
     defer handles_lock.unlock();
     ensureHandles();
     handle_roots[0] = coll.mapDissoc(handle_roots[0], h);

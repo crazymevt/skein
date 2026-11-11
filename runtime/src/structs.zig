@@ -193,13 +193,13 @@ pub var defs: std.StringHashMapUnmanaged(Value) = .empty;
 const table_alloc = std.heap.page_allocator;
 
 fn lookup(name: []const u8) ?Value {
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     return defs.get(name);
 }
 
 fn register(name: []const u8, def: Value) void {
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     const k = table_alloc.dupe(u8, name) catch @panic("out of memory");
     defs.put(table_alloc, k, def) catch @panic("out of memory");
@@ -247,7 +247,7 @@ pub fn findDef(x: Value) ?Value {
     if (names.nsOf(x)) |ns| {
         return lookup(std.fmt.bufPrint(&buf, "{s}/{s}", .{ ns, names.nameOf(x) }) catch return null);
     }
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     var found: ?Value = null;
     var it = defs.iterator();

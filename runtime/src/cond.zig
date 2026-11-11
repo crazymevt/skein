@@ -314,7 +314,7 @@ fn newType(qualified: []const u8, parents: Value, slots: Value, report: Value, d
 }
 
 fn register(qualified: []const u8, t: Value) void {
-    types_lock.lock();
+    gc.lockMutex(&types_lock);
     defer types_lock.unlock();
     const key = table_alloc.dupe(u8, qualified) catch @panic("out of memory");
     registry.put(table_alloc, key, t) catch @panic("out of memory");
@@ -327,7 +327,7 @@ pub fn typeByName(qualified: []const u8) ?Value {
 }
 
 fn lookup(qualified: []const u8) ?Value {
-    types_lock.lock();
+    gc.lockMutex(&types_lock);
     defer types_lock.unlock();
     return registry.get(qualified);
 }
@@ -395,7 +395,7 @@ pub fn findType(x: Value, ns: ?[]const u8) Value {
     var found: ?Value = null;
     var ambiguous = false;
     {
-        types_lock.lock();
+        gc.lockMutex(&types_lock);
         defer types_lock.unlock();
         var it = registry.iterator();
         while (it.next()) |entry| {

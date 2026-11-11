@@ -460,6 +460,23 @@ const BlockingCall = struct {
     arg: ?*anyopaque,
 };
 
+/// Lock `m`, a mutex that is held while allocating from the heap, without stopping
+/// collections: if it's taken, wait for it as a blocking call. Otherwise a thread holding
+/// it that parks for a collection, and one waiting for it outside a blocking call (which
+/// the collection waits for), would wait for each other forever.
+pub fn lockMutex(m: *platform.Mutex) void {
+    for (0..64) |_| {
+        if (m.tryLock()) return;
+        std.atomic.spinLoopHint();
+    }
+    blocking(lockMutexBlocking, m);
+}
+
+fn lockMutexBlocking(arg: ?*anyopaque) void {
+    const m: *platform.Mutex = @ptrCast(@alignCast(arg));
+    m.lock();
+}
+
 /// Run `f(arg)` as a blocking call: collections can happen meanwhile, so `f` must not
 /// touch the heap. The registers are spilled first, so heap pointers that only the
 /// caller holds stay visible to the collector.

@@ -81,13 +81,13 @@ pub var generics: std.StringHashMapUnmanaged(Value) = .empty;
 const table_alloc = std.heap.page_allocator;
 
 fn lookup(table: *std.StringHashMapUnmanaged(Value), key: []const u8) ?Value {
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     return table.get(key);
 }
 
 fn register(table: *std.StringHashMapUnmanaged(Value), key: []const u8, v: Value) void {
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     const k = table_alloc.dupe(u8, key) catch @panic("out of memory");
     table.put(table_alloc, k, v) catch @panic("out of memory");
@@ -334,7 +334,7 @@ pub fn findClass(x: Value) Value {
         // A unique unqualified name, as for condition types.
         var found: ?Value = null;
         {
-            lock.lock();
+            gc.lockMutex(&lock);
             defer lock.unlock();
             var it = classes.iterator();
             while (it.next()) |entry| {
@@ -441,7 +441,7 @@ fn inPrecedenceList(k: Value, c: Value) bool {
 /// precedence list is longer than any of its superclasses', and recompute reads the
 /// superclasses' precedence lists.
 fn allClasses() std.ArrayList(Value) {
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     var out: std.ArrayList(Value) = .empty;
     var it = classes.valueIterator();
@@ -833,7 +833,7 @@ fn newGeneric(name: []const u8, required: usize, rest: bool) Value {
     setSlot(g, g_methods, coll.vectorOf(&.{}));
     setSlot(g, g_cache, Value.nil);
     setSlot(g, g_eql, Value.false);
-    lock.lock();
+    gc.lockMutex(&lock);
     all_generics.append(table_alloc, g) catch @panic("out of memory");
     lock.unlock();
     // Permanent: the generics table isn't scanned by the collector, so a young closure
@@ -846,7 +846,7 @@ fn newGeneric(name: []const u8, required: usize, rest: bool) Value {
 var all_generics: std.ArrayList(Value) = .empty;
 
 fn clearDispatchCaches() void {
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     for (all_generics.items) |g| setSlot(g, g_cache, Value.nil);
 }

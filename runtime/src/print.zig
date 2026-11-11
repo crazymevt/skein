@@ -303,7 +303,7 @@ var capture_var: [1]Value = .{Value.nil};
 var capture_lock: @import("platform").Mutex = .{};
 
 fn captureVar() Value {
-    capture_lock.lock();
+    @import("gc.zig").lockMutex(&capture_lock);
     defer capture_lock.unlock();
     if (capture_var[0] == Value.nil) {
         const v = names.makeVar("skein.core", "%captured-output");

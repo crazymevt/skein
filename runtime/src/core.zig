@@ -1742,7 +1742,7 @@ pub fn function(name: []const u8) ?Value {
     if (objs.coreGeneric(name)) |g| return g;
     inline for (table, 0..) |entry, i| {
         if (std.mem.eql(u8, entry.name, name)) {
-            objects_lock.lock();
+            gc.lockMutex(&objects_lock);
             defer objects_lock.unlock();
             if (objects[i] == Value.nil) {
                 const h = gc.allocPermanent(.function, 2);

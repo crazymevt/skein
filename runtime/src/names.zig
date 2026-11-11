@@ -42,7 +42,7 @@ fn qualified(ns: ?[]const u8, name: []const u8) []u8 {
 }
 
 fn intern(table: *std.StringHashMapUnmanaged(Value), t: object.TypeId, ns: ?[]const u8, name: []const u8, salt: u32) Value {
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     // Look up with the key on the stack; allocate it only for a new name.
     var buf: [256]u8 = undefined;
@@ -100,7 +100,7 @@ pub fn nameOf(v: Value) []const u8 {
 
 /// The namespace object called `name`, made if needed.
 pub fn namespace(name: []const u8) Value {
-    lock.lock();
+    gc.lockMutex(&lock);
     defer lock.unlock();
     if (namespaces.get(name)) |v| return v;
     const h = gc.allocPermanent(.namespace, 1);

@@ -109,7 +109,7 @@ fn permanent(t: TypeId, vals: []const Value) Value {
 
 pub fn ensureConstants() void {
     if (@atomicLoad(bool, &constants_ready, .acquire)) return;
-    constants_lock.lock();
+    gc.lockMutex(&constants_lock);
     defer constants_lock.unlock();
     if (constants_ready) return;
     empty_tuple = permanent(.tuple, &.{Value.nil});
