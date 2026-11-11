@@ -440,7 +440,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
      - ✅ B. Appearance (light, dark, inherited), color palettes, control sizes and surface roles.
      - ✅ C. Stacks (with a page list or sidebar) and tabbed panes (closable, reorderable and draggable tabs, accessories).
      - ✅ D. Surfaces: popovers, completion popups and custom dialogs (`run-dialog`, `respond`).
-     - E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
+     - ✅ E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
      - F. Images from bytes, system and glyph images, font families and font files, and icons in lists, tables and trees.
      - G. Window state: saving and restoring a window's frame.
      - H. The web view (Jessie's: a program of Jessie's needs it): WKWebView on Cocoa, WebKitGTK 6.0 on GTK 4 (Linux only: Homebrew has no WebKitGTK), and WebView2 with the Win32 backend; loading URLs and HTML, running scripts, messages between the page and Skein, and navigation events.
