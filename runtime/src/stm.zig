@@ -188,6 +188,23 @@ fn refSet(r: Value, v: Value) Value {
     return txSet(needTransaction("ref-set"), r, v, "ref-set");
 }
 
+/// The committed value of a ref, outside any transaction's view (redefining a class
+/// unwraps a :cell :ref slot with it).
+pub fn committed(r: Value) Value {
+    return load(r, r_value);
+}
+
+/// set-slot! of a :cell :ref slot: ref-set, so in a transaction.
+pub fn setSlotRef(r: Value, v: Value, what: []const u8) Value {
+    return txSet(needTransaction(what), r, v, what);
+}
+
+/// update-slot! of a :cell :ref slot: alter, so in a transaction.
+pub fn updateSlotRef(r: Value, f: Value, rest: []const Value) Value {
+    const tx = needTransaction("update-slot!");
+    return txSet(tx, r, apply(f, txRead(tx, r), rest), "update-slot!");
+}
+
 /// (f current args...), with the arguments after the first two of a.
 fn apply(f: Value, current_value: Value, rest: []const Value) Value {
     var buf: [16]Value = undefined;

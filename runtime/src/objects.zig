@@ -13,6 +13,7 @@ const platform = @import("platform");
 const rt = @import("rt.zig");
 const gc = @import("gc.zig");
 const coll = @import("coll.zig");
+const stm = @import("stm.zig");
 const string = @import("string.zig");
 const names = @import("names.zig");
 const func = @import("func.zig");
@@ -368,9 +369,8 @@ fn lookupDefclass(x: Value) ?Value {
 
 fn cellKind(x: Value) Value {
     if (x == Value.nil) return Value.nil;
-    if (isKw(x, "atom") or isKw(x, "unsynchronized")) return x;
-    if (isKw(x, "ref")) rt.raise(.@"error", ":cell :ref is reserved and not supported yet", .{});
-    rt.raise(.@"error", ":cell must be :atom or :unsynchronized, not {s}", .{readable(x)});
+    if (isKw(x, "atom") or isKw(x, "unsynchronized") or isKw(x, "ref")) return x;
+    rt.raise(.@"error", ":cell must be :atom, :ref or :unsynchronized, not {s}", .{readable(x)});
 }
 
 /// defclass: create or redefine the class `name` (a qualified symbol) with superclasses
@@ -561,9 +561,12 @@ fn upToDate(obj: Value) Value {
         const cell = coll.vectorNth(spec, 1).?;
         if (slotIndex(old_slots, names.nameOf(key))) |j| {
             const v = coll.get(old_values, j);
-            const was_atom = isKw(slotCell(old_slots, j), "atom");
-            const is_atom = isKw(cell, "atom");
-            coll.set(values, i, if (is_atom and !was_atom) coll.makeAtom(v) else if (was_atom and !is_atom) coll.atomGet(v) else v);
+            const old_cell = slotCell(old_slots, j);
+            // A cell of the same kind is kept (so are its watchers and transactions);
+            // otherwise the value is unwrapped and wrapped in the new kind.
+            const same = (isKw(old_cell, "atom") and isKw(cell, "atom")) or
+                (isKw(old_cell, "ref") and isKw(cell, "ref"));
+            coll.set(values, i, if (same) v else stored(cell, unwrapped(old_cell, v)));
         } else {
             const init = coll.vectorNth(spec, 2).?;
             coll.set(values, i, stored(cell, if (init == Value.nil) Value.nil else func.call(init, 0, &.{})));
@@ -588,8 +591,18 @@ fn upToDate(obj: Value) Value {
     return obj;
 }
 
+/// What a slot of cell kind `cell` holds for the value v: an atom or a ref, or v itself.
 fn stored(cell: Value, v: Value) Value {
-    return if (isKw(cell, "atom")) coll.makeAtom(v) else v;
+    if (isKw(cell, "atom")) return coll.makeAtom(v);
+    if (isKw(cell, "ref")) return stm.makeRef(v);
+    return v;
+}
+
+/// The value of what a slot of cell kind `cell` holds (a ref's committed value).
+fn unwrapped(cell: Value, held: Value) Value {
+    if (isKw(cell, "atom")) return coll.atomGet(held);
+    if (isKw(cell, "ref")) return stm.committed(held);
+    return held;
 }
 
 fn checkInitargs(c: Value, slots: Value, kvs: []const Value) void {
@@ -666,8 +679,8 @@ pub fn with(obj: Value, kvs_in: []const Value) Value {
         const old = value(obj, k);
         const v = if (given(kvs, names.nameOf(coll.vectorNth(spec, 0).?))) |g|
             stored(cell, g)
-        else if (fresh and isKw(cell, "atom"))
-            coll.makeAtom(coll.atomGet(old))
+        else if (fresh and (isKw(cell, "atom") or isKw(cell, "ref")))
+            stored(cell, cellValue(cell, old))
         else
             old;
         setValue(copy, k, v);
@@ -680,8 +693,15 @@ pub fn get(obj: Value, key: Value) ?Value {
     if (!names.isKeyword(key)) return null;
     const slots = slot(upToDate(obj), i_slots);
     const i = slotIndex(slots, names.nameOf(key)) orelse return null;
-    const v = value(obj, i);
-    return if (isKw(slotCell(slots, i), "atom")) coll.atomGet(v) else v;
+    return cellValue(slotCell(slots, i), value(obj, i));
+}
+
+/// A slot's current value: an :atom cell's value, a :ref cell's (a transaction's view in
+/// one), or what an immutable or :unsynchronized slot holds.
+fn cellValue(cell: Value, held: Value) Value {
+    if (isKw(cell, "atom")) return coll.atomGet(held);
+    if (isKw(cell, "ref")) return stm.deref(held);
+    return held;
 }
 
 pub fn keys(obj: Value) Value {
@@ -715,6 +735,7 @@ pub fn setSlotValue(obj: Value, key: Value, v: Value) Value {
     const cell = slotCell(slot(obj, i_slots), i);
     if (cell == Value.nil) immutable(obj, key);
     if (isKw(cell, "atom")) return coll.atomReset(value(obj, i), v);
+    if (isKw(cell, "ref")) return stm.setSlotRef(value(obj, i), v, "set-slot!");
     checkOwner(obj, key);
     setValue(obj, i, v);
     return v;
@@ -737,6 +758,7 @@ pub fn updateSlot(obj: Value, key: Value, f: Value, args: []const Value) Value {
             if (coll.atomCompareAndSet(at, old, new)) return new;
         }
     }
+    if (isKw(cell, "ref")) return stm.updateSlotRef(value(obj, i), f, args);
     checkOwner(obj, key);
     buf[0] = value(obj, i);
     const new = func.call(f, @intCast(1 + args.len), &buf);
@@ -744,18 +766,18 @@ pub fn updateSlot(obj: Value, key: Value, f: Value, args: []const Value) Value {
     return new;
 }
 
-/// cell: the atom behind an :atom cell slot.
+/// cell: the atom or ref behind an :atom or :ref cell slot.
 pub fn cellOf(obj: Value, key: Value) Value {
     const i = instanceSlot(obj, key, "cell");
     const cell = slotCell(slot(obj, i_slots), i);
     if (cell == Value.nil)
         rt.raise(.@"error", "slot {s} of {s} has no cell; it is immutable", .{ readable(key), className(slot(obj, i_class)) });
-    if (!isKw(cell, "atom"))
+    if (!isKw(cell, "atom") and !isKw(cell, "ref"))
         rt.raise(.@"error", "slot {s} of {s} is :unsynchronized; it holds its value directly, with no cell object", .{ readable(key), className(slot(obj, i_class)) });
     return value(obj, i);
 }
 
-/// set! on (:slot obj): an :unsynchronized or :atom cell slot.
+/// set! on (:slot obj): an :unsynchronized, :atom or :ref (in a transaction) cell slot.
 pub fn setBang(obj: Value, key: Value, v: Value) Value {
     if (!isObjectInstance(obj)) rt.raise(.@"error", "set! of {s} needs an instance, not {s}", .{ readable(key), readable(obj) });
     return setSlotValue(obj, key, v);

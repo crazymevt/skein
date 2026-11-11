@@ -1,0 +1,50 @@
+(ns slots)
+
+;; :cell :ref slots (M2.10 step 2, D-092), compared with slots.expected: a slot holding a
+;; ref, read like any slot and changed in transactions.
+
+(defn message-of [thunk] (try (thunk) (catch error e (condition-message e))))
+
+(defclass account [] (owner :init "nobody") (balance :cell :ref :init 100))
+
+(def a (make account :owner "ann"))
+(def b (make account :owner "bob" :balance 50))
+(prn (:balance a) (slot b :balance) (ref? (cell a :balance)) a)
+
+;; Changed in a transaction, all at once.
+(dosync (update-slot! a :balance - 30) (update-slot! b :balance + 30))
+(prn (:balance a) (:balance b))
+(prn (dosync (set-slot! a :balance 1) (:balance a)) (:balance a))
+(dosync (set! (:balance a) 70))
+(prn (:balance a))
+
+;; Outside a transaction they can't change.
+(prn (message-of (fn [] (set-slot! a :balance 5))))
+(prn (message-of (fn [] (update-slot! a :balance inc))))
+
+;; An error abandons the transaction's changes.
+(prn (message-of (fn [] (dosync (set-slot! a :balance 0) (error "abandoned")))) (:balance a))
+
+;; with shares the ref, unless :fresh-cells.
+(let [shared (with a :owner "ann's copy")
+      fresh (with a :fresh-cells true)]
+  (dosync (update-slot! shared :balance + 5))
+  (dosync (update-slot! fresh :balance + 1000))
+  (prn (:balance a) (:balance shared) (:balance fresh)))
+
+;; Concurrent transfers between slots keep their total.
+(def accounts (vec (for [i (range 8)] (make account :owner (str "a" i)))))
+(with-nursery [n]
+  (dotimes [_ 6]
+    (spawn n (dotimes [_ 1000]
+               (let [from (accounts (rand-int 8)) to (accounts (rand-int 8))]
+                 (dosync (when (pos? (:balance from))
+                           (update-slot! from :balance dec)
+                           (update-slot! to :balance inc))))))))
+(prn (reduce + (map :balance accounts)))
+
+;; Redefining the class with another cell kind keeps the value.
+(defclass account [] (owner :init "nobody") (balance :cell :atom :init 100))
+(prn (:balance b) (ref? (cell b :balance)) (atom? (cell b :balance)))
+(defclass account [] (owner :init "nobody") (balance :cell :ref :init 100))
+(prn (:balance b) (ref? (cell b :balance)))

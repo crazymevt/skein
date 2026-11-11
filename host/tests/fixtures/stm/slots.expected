@@ -1,0 +1,11 @@
+100 50 true #<slots/account {:owner "ann", :balance 100}>
+70 80
+1 1
+70
+"set-slot! needs a transaction: call it in dosync"
+"update-slot! needs a transaction: call it in dosync"
+"abandoned" 70
+75 75 1070
+800
+80 false true
+80 true
