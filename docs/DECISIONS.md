@@ -1245,3 +1245,14 @@ Date: 2026-11-10 · Status: Accepted
 - **Step 3, as built:** each attempt pushes a restart cluster with `retry-transaction` ("Run the transaction again from the start"), whose function returns to the attempt's block as a conflict does, so the body runs again with nothing it wrote; only the outermost `dosync` has one. The text REPL's debugger and SLDB list it like any restart.
 - **Consequences:** Watches and validators on refs come with the standard library's for atoms (M2.11).
 
+## D-093: The standard library's open questions
+Date: 2026-11-11 · Status: Accepted
+- **Context:** M2.11 (D-089) left four questions for when it was prepared: metadata on values, `ex-info`, documentation for the runtime's functions written in Zig, and the order of the work.
+- **Decision** (Jessie's):
+  - **Metadata:** vectors, maps, sets, lists and symbols carry a metadata map, read with `meta` and set with `with-meta` and `vary-meta`; equality and hashing ignore it, and quoted data keeps the metadata the reader gave it. Functions don't carry any. This supersedes D-032's "no runtime metadata in v1".
+  - **`ex-info`:** `(ex-info message data)` makes an error of a built-in condition type `ex-info` that holds the map; `ex-data` and `ex-message` read it. It's an ordinary error: `try`/`catch`, handlers and restarts work with it as with any other.
+  - **Docs for Zig functions:** a table in Skein of `[name arglists docstring]` for the runtime's skein.core functions, which `--eval` builds register with the rest, so autodoc and describe (D-086) cover every skein.core function.
+  - **Order:** `skein.test` and `skein test` first, so the later steps are tested with it; then `skein.string` with its cursors; `skein.core`'s macros and helpers; numbers and printing; references and sorted collections; metadata and `ex-info`; `skein.io` and `skein.log`; the docs table.
+- **Alternatives:** metadata on functions too (a wrapper, as Clojure does), or none on values; no `ex-info`; docstrings in the Zig entries, or none yet; strings or `skein.core` first.
+- **Consequences:** collection objects grow by a metadata slot (nil when there is none). Phase 0 gets what fixtures compare with it; much of the library is Skein source that both have.
+

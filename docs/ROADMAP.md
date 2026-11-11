@@ -388,7 +388,16 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   - **`skein.string`:** `split`, `join`, `upper-case`, `lower-case`, `trim`, `starts-with?`, `ends-with?`, `includes?`, `index-of`, `replace`, `blank?`, a string builder, and D-019's byte-offset cursors (`cursor`, `next`, ...), which the reader and the Swank server then use (ROADMAP's note on non-ASCII text).
   - **`skein.io`:** directory listing, path helpers (join, file name, directory, extension, absolute path), bytes, and streams. **`skein.log`:** leveled logging.
   - **`skein.test`:** `deftest`, `is`, `testing` and fixtures (DESIGN §20.3), and a `skein test` command.
-- To settle when preparing it: whether values (collections, symbols) carry metadata, with `meta`, `with-meta` and `vary-meta` (today only syntax does); `ex-info` and `ex-data` beside Skein's conditions, or not; docstrings and argument lists for the runtime's functions written in Zig; the order of the steps.
+- Settled (D-093): collections and symbols carry metadata (`meta`, `with-meta`, `vary-meta`); `ex-info`, `ex-data` and `ex-message` over conditions; docstrings and argument lists for the runtime's Zig functions from a table in Skein.
+- Steps, in order (D-093):
+  1. `skein.test` (`deftest`, `is`, `testing`, `are`, fixtures, reports) and `skein test`, which runs a project's tests natively; the later steps' tests use it.
+  2. `skein.string`, with D-019's byte-offset cursors and a string builder; the reader and the Swank server use the cursors (the note on non-ASCII text).
+  3. `skein.core`'s macros and seq and function helpers: `cond->` ... `with-out-str`, `partition-by` ... `distinct?`, `some-fn` ... `min-key`.
+  4. Numbers and printing: parsing, predicates, `hash`, `random-uuid`, the `bit-` operations, `format`, `prn-str`, `print-str`, `read-string`, `slurp`, `spit`, and `*print-length*`.
+  5. References and collections: `delay`/`force`, `promise`/`deliver`, `volatile!`, watches and validators on atoms and refs, `swap-vals!`, `reset-vals!`, and sorted maps and sets (randomized tests against a model).
+  6. Metadata on collections and symbols, and `ex-info`, `ex-data` and `ex-message`.
+  7. `skein.io` (directories, paths, bytes, streams) and `skein.log`.
+  8. Docstrings and argument lists for the runtime's Zig functions, which `--eval` builds register for SLIME and describe.
 
 **Exit:** every function and macro above exists natively with tests (randomized against a model where it fits), the Phase 0 host has the ones that fixtures compare with it, and `skein test` runs a project's tests on all three platforms.
 

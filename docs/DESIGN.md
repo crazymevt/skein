@@ -209,7 +209,7 @@ Clojure-style destructuring in `let`, `fn` parameters, `loop` and `doseq`:
 - Small maps of up to 8 entries use an **array map** representation for speed.
 - **Transients** (`transient`, `conj!`, `assoc!`, `persistent!`) provide fast batch construction. A transient is owned by the fiber that created it; using it from another fiber is an error in safe mode.
 - Maps and sets keep no insertion order. (Array maps happen to iterate in insertion order; programs must not rely on it.)
-- Collections carry no runtime metadata in v1; metadata is a property of syntax (§3) (D-032).
+- Collections carry no runtime metadata in v1; metadata is a property of syntax (§3) (D-032). From M2.11 (D-093) collections and symbols carry a metadata map: `meta`, `with-meta`, `vary-meta`; equality and hashing ignore it, and quoted data keeps its metadata.
 - Map entries are two-element vectors: `(first {:a 1})` is `[:a 1]`.
 
 ### 6.3 Mutable and reference types
