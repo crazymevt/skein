@@ -49,6 +49,15 @@ means it does not."
                      ~(boolean (:blocking (%syntax-meta fn-name)))
                      ~(boolean (:owned (%syntax-meta return-type)))))
 
+(defmacro defcfun-ptr
+  "Bind name to a function that calls a C function pointer, its first argument, with the
+rest: (defcfun-ptr name return-type [param type ...]), as defcfun declares them; for
+COM vtables and other tables of function pointers (M2.13, D-096). Native only."
+  [fn-name return-type params]
+  `(%define-function-ptr '~fn-name '~return-type '~(params-data params)
+                         ~(boolean (:blocking (%syntax-meta fn-name)))
+                         ~(boolean (:owned (%syntax-meta return-type)))))
+
 (defmacro defcallback
   "Bind name to a C function pointer that calls the body:
 (defcallback name return-type [param type ...] body...)."

@@ -508,6 +508,15 @@ fn ctypeLayout(t: Value) Value {
     return coll.vectorOf(&.{ get(t, t_size), get(t, t_align), get(t, t_fields) });
 }
 
+/// The function pointer a defcfun-ptr function calls (M2.13, D-096): its first argument,
+/// which must be a non-null pointer.
+export fn sk_ffi_function_pointer(v: Value, name: [*:0]const u8) usize {
+    if (v == Value.nil or !isPointer(v)) fail("{s} needs a C function pointer to call, not {s}", .{ name, readable(v) });
+    const a = toAddress(v);
+    if (a == 0) fail("{s} was given a null function pointer", .{name});
+    return a;
+}
+
 export fn sk_ffi_struct_arg(v: Value, qualified: [*:0]const u8, out: *anyopaque) void {
     const t = lookup(std.mem.span(qualified)) orelse fail("unknown foreign type {s}", .{qualified});
     structFrom(t, v, @intFromPtr(out));

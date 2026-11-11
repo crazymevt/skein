@@ -787,9 +787,13 @@ D-065), and skein.math's and skein.time's (runtime/src/mathtime.zig, M1.12)."
       (contains? (get host-functions (var-ns-name var)) (%var-name var))
       (let [nm (str (var-ns-name var) "/" (%var-name var))]
         (startup-constant st [:core nm] (str "sk_core(" (c-string-literal nm) ")")))
-      (and (ffi-var? var) (contains? #{"%define-function" "%define-callback"} (%var-name var)))
+      (and (ffi-var? var) (contains? #{"%define-function" "%define-function-ptr" "%define-callback"}
+                                     (%var-name var)))
       (unsupported node "skein.ffi/" (%var-name var) " is supported natively only as "
-                   (if (= (%var-name var) "%define-function") "defcfun" "defcallback")
+                   (case (%var-name var)
+                     "%define-function" "defcfun"
+                     "%define-function-ptr" "defcfun-ptr"
+                     "defcallback")
                    " expands it")
       :else (emit-var-ref* st node var))))
 
@@ -1552,9 +1556,15 @@ sk_value."
   "(skein.ffi/%define-function 'name \"c_name\" 'return '[[param type]...] blocking owned):
 a C function that converts its arguments, calls c_name through a function pointer of its
 C type (looked up on the first call) and converts the result, as Phase 0's defcfun does
-(D-066). The var named name in this namespace is set to it."
-  [st node args]
-  (let [[nm c-name ret params blocking owned] (mapv :value args)
+(D-066). The var named name in this namespace is set to it. With pointer? (defcfun-ptr,
+M2.13, D-096) there is no c_name: the function pointer to call is the first argument."
+  [st node args pointer?]
+  (let [[nm c-name ret params blocking owned] (if pointer?
+                                                (let [[nm ret params blocking owned]
+                                                      (mapv :value args)]
+                                                  [nm (name nm) ret params blocking owned])
+                                                (mapv :value args))
+        base (if pointer? 1 0)
         _ (when (some (fn [[_ t]] (nil? t)) params)
             (unsupported node "every parameter of " c-name " needs a type"))
         pdescs (mapv (fn [[_ t]] (ffi-type-desc st node t c-name)) params)
@@ -1579,13 +1589,16 @@ C type (looked up on the first call) and converts the result, as Phase 0's defcf
             (join ", " (map (fn [i] (str "c->a" i)) (range n))) ");")
       (line "}"))
     (line "static sk_value " code "(sk_value self, uint32_t argc, const sk_value *argv) {")
-    (line "  static uintptr_t sym;")
+    (line "  " (if pointer? "" "static ") "uintptr_t sym" (if pointer? " = 0" "") ";")
     (when-not blocking (line "  static int warned;"))
     (line "  (void)argv;")
-    (line "  if (argc != " n ") return sk_arity_error(self, argc, " (location-literal node) ");")
-    (line "  if (!sym) sym = sk_ffi_symbol(" (c-string-literal c-name) ");")
+    (line "  if (argc != " (+ n base) ") return sk_arity_error(self, argc, "
+          (location-literal node) ");")
+    (if pointer?
+      (line "  sym = sk_ffi_function_pointer(argv[0], " (c-string-literal c-name) ");")
+      (line "  if (!sym) sym = sk_ffi_symbol(" (c-string-literal c-name) ");"))
     (doseq [[i d] (map-indexed vector pdescs)]
-      (line "  " (:c d) " a" i " = " (ffi-argument d (str "argv[" i "]")) ";"))
+      (line "  " (:c d) " a" i " = " (ffi-argument d (str "argv[" (+ i base) "]")) ";"))
     (if blocking
       (do (line "  struct " code "_call c = {sym"
                 (concat-strings (map (fn [i] (str ", a" i)) (range n))) "};")
@@ -1683,7 +1696,8 @@ namespace is set to a pointer to the C function."
         args (qualify-condition-type-call f (:args node))]
     (cond (or (ffi-call? f "%define-struct" args 3) (ffi-call? f "%define-enum" args 3))
           (emit-ffi-definition st node f args)
-          (ffi-call? f "%define-function" args 6) (emit-define-function st node args)
+          (ffi-call? f "%define-function" args 6) (emit-define-function st node args false)
+          (ffi-call? f "%define-function-ptr" args 5) (emit-define-function st node args true)
           ;; defonce (M1.12): whether the var named by a constant qualified symbol has a
           ;; value. Natively nothing is reloaded, so the first time it hasn't.
           (and (core-call? f "%var-bound?" args 1) (namespace (:value (first args))))

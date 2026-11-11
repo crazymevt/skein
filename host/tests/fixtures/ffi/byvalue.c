@@ -42,3 +42,14 @@ EXPORT vec2f apply_vec2(vec2_fn f, vec2f v) { return f(v, 2.0f); }
 EXPORT rectd apply_rect(rect_fn f) { rectd r = {1.0, 2.0, 3.0, 4.0}; return f(r); }
 EXPORT int64_t apply_mixed(mixed_fn f) { mixed m = {7, 40000000000, 9}; return f(m) + 1; }
 EXPORT color apply_color(color_fn f, color c) { return f(c); }
+
+/* Calls through function pointers (step 3): a table of them, as COM's vtables are, and
+   one that takes structs by value. And one symbol bound under two signatures. */
+typedef int64_t (*binop)(int64_t a, int64_t b);
+static int64_t op_add(int64_t a, int64_t b) { return a + b; }
+static int64_t op_mul(int64_t a, int64_t b) { return a * b; }
+typedef struct { binop ops[2]; } op_table;
+EXPORT const op_table *ops_table(void) { static const op_table t = {{op_add, op_mul}}; return &t; }
+typedef vec2f (*vec2_op)(vec2f a, vec2f b);
+EXPORT vec2_op vec2_add_pointer(void) { return vec2_add; }
+EXPORT uint64_t length_of(const char *s) { uint64_t n = 0; while (s[n]) n++; return n; }

@@ -1,7 +1,8 @@
 (ns byvalue
   (:require [skein.ffi :as ffi]))
 
-;; Structs and unions passed and returned by value (M2.13 steps 1 and 2, D-096), natively, with
+;; Structs and unions passed and returned by value, and calls through function pointers
+;; (M2.13 steps 1 to 3, D-096), natively, with
 ;; host/tests/fixtures/ffi/byvalue.c, which the bootstrap builds into build/examples/.
 ;; Arguments are maps of the fields (nested maps for nested structs) or pointers to a
 ;; struct; results are owned pointers to a copy, read with ffi/field. Callbacks get
@@ -48,6 +49,14 @@
 
 (ffi/defcallback bad-color color [c color] (error "no color"))
 
+(ffi/defcfun ops-table "ops_table" ptr [])
+(ffi/defcfun-ptr call-binop i64 [a i64, b i64])
+(ffi/defcfun vec2-add-pointer "vec2_add_pointer" ptr [])
+(ffi/defcfun-ptr call-vec2-op vec2f [a vec2f, b vec2f])
+;; One C function, two signatures (as objc_msgSend is bound once per message).
+(ffi/defcfun length-of-string "length_of" u64 [s c-string])
+(ffi/defcfun length-of-bytes "length_of" u64 [p ptr])
+
 (defn fields [p type ks] (mapv (fn [k] (ffi/field p type k)) ks))
 
 (defn -main [& args]
@@ -79,6 +88,18 @@
        (fields (apply-color same-color {:r 1 :g 2 :b 3 :a 4}) color [:r :g :b :a]))
   (prn :callback-error (fields (apply-color bad-color {:r 1 :g 2 :b 3 :a 4}) color
                                [:r :g :b :a]))
+  (let [t (ops-table)]
+    (prn :vtable (call-binop (ffi/get t ptr 0) 6 7) (call-binop (ffi/get t ptr 1) 6 7)))
+  (prn :pointer-by-value
+       (fields (call-vec2-op (vec2-add-pointer) {:x 1.0 :y 2.0} {:x 3.0 :y 4.0}) vec2f [:x :y]))
+  (let [bytes (ffi/alloc u8 4)]
+    (dotimes [i 2] (ffi/put! bytes u8 65 i))
+    (prn :one-symbol-two-signatures (length-of-string "hello") (length-of-bytes bytes))
+    (ffi/free bytes))
+  (prn :nil-pointer (try (call-binop nil 1 2) (catch error e (condition-message e))))
+  (prn :null-pointer (try (call-binop (ffi/null) 1 2) (catch error e (condition-message e))))
+  (prn :arity (try (call-binop (ffi/get (ops-table) ptr 0) 1)
+                   (catch error e (condition-type-name (condition-type e)))))
   (prn :not-a-struct (try (vec2-add 5 {:x 1.0 :y 1.0})
                           (catch error e (condition-message e))))
   (prn :no-such-field (try (vec2-add {:z 1.0} {:x 1.0 :y 1.0})
