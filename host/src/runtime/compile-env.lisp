@@ -226,6 +226,9 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore h seconds))
   (error "skein.process is native only (D-103)"))
 
+(defcore "%interrupt-ignored?" ()
+  (error "skein.process is native only (D-103)"))
+
 (defcore "%environment" ()
   (error "skein.process is native only (D-103)"))
 

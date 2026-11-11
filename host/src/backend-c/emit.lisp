@@ -375,7 +375,7 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%install-task-runner!" "%task-spawner-restarts" "%choose-spawner-restart!"
     ;; Processes (M3.1, D-103)
     "%process-start" "%process-stream" "%process-signal" "%process-pid" "%process-exit" "%process-wait"
-    "%environment" "%executable-path"
+    "%environment" "%executable-path" "%interrupt-ignored?"
     ;; Hot reload (M2.9, D-091)
     "%load-module" "%evaluated?"
     ;; STM (M2.10, D-092)

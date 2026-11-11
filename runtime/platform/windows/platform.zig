@@ -427,8 +427,11 @@ pub fn childProcessId(child: *const std.process.Child) i64 {
 
 extern "kernel32" fn TerminateProcess(process: *anyopaque, code: u32) callconv(.winapi) i32;
 extern "kernel32" fn TerminateJobObject(job: *anyopaque, code: u32) callconv(.winapi) i32;
-extern "kernel32" fn GenerateConsoleCtrlEvent(event: u32, group: u32) callconv(.winapi) i32;
 extern "kernel32" fn DuplicateHandle(source_process: *anyopaque, source: *anyopaque, target_process: *anyopaque, target: *?*anyopaque, access: u32, inherit: i32, options: u32) callconv(.winapi) i32;
+
+pub fn interruptIgnored() bool {
+    return false;
+}
 
 /// The program's handle for signaling it: a copy of its process handle, which stays valid
 /// after the reaper's wait closes the original.
@@ -439,19 +442,22 @@ pub fn childHandle(child: *const std.process.Child) ?*anyopaque {
     return copy;
 }
 
-/// Signal a program by intent: 0 interrupt (a Ctrl-Break event, which reaches it only if
-/// it leads a console process group), 1 terminate and 2 kill (TerminateProcess); with
-/// `tree`, its job object, which holds what it started.
-pub fn signalProcess(pid: i64, handle: ?*anyopaque, job: ?*anyopaque, kind: u8, tree: bool) void {
-    if (kind == 0) {
-        _ = GenerateConsoleCtrlEvent(1, @intCast(pid)); // CTRL_BREAK_EVENT
-        return;
-    }
+/// Signal a program by intent: 1 terminate and 2 kill (TerminateProcess); with `tree`,
+/// its job object, which holds what it started, even once the program has ended. An
+/// interrupt (0) isn't supported: skein.process refuses it, since a Ctrl-Break event only
+/// reaches a program started in a console process group of its own, which Zig's spawn
+/// can't do (D-103).
+pub fn signalProcess(pid: i64, handle: ?*anyopaque, job: ?*anyopaque, kind: u8, tree: bool, own_group: bool, ended: bool) void {
+    _ = pid;
+    _ = own_group;
+    if (kind == 0) return;
     if (tree) if (job) |j| {
         _ = TerminateJobObject(j, 1);
         return;
     };
-    if (handle) |h| _ = TerminateProcess(h, 1);
+    if (!ended) if (handle) |h| {
+        _ = TerminateProcess(h, 1);
+    };
 }
 
 const SECURITY_ATTRIBUTES = extern struct { length: u32, descriptor: ?*anyopaque, inherit: i32 };

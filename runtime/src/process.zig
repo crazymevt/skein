@@ -3,9 +3,9 @@
 //! thread per program that waits for it to end and wakes the fibers waiting for it
 //! (tasks.zig). lib/skein/process.skn wraps these.
 //!
-//! A process is a handle (a fixnum) into a table kept outside the heap, as a stream is. A
-//! program starts in a process group of its own on Unix (unless it reads the terminal) and
-//! in a job object on Windows (platform), so that what it starts can be reached too.
+//! A process is a handle (a fixnum) into a table kept outside the heap, as a stream is. On
+//! Windows a program starts in a job object of its own, which holds what it starts; on
+//! Unix, destroy-tree! walks the process table for its descendants (platform).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -48,9 +48,12 @@ const Proc = struct {
     exit: std.atomic.Value(i64) = std.atomic.Value(i64).init(running),
     /// The wait queue key (tasks.zig) of the fibers waiting for it to end.
     key: u64,
-    /// The job object it runs in, and a handle to signal it with, on Windows.
+    /// The job object it runs in, and a handle to signal it with, on Windows. Both stay
+    /// open after it ends, so that destroy-tree! can still reach what it started.
     job: ?*anyopaque = null,
     handle: ?*anyopaque = null,
+    /// Unused: programs stay in this program's process group (D-103's step 3).
+    own_group: bool = false,
     /// Its stdin, stdout and stderr as stream handles, or nil.
     streams: [3]Value = .{ Value.nil, Value.nil, Value.nil },
 };
@@ -256,8 +259,6 @@ fn reap(p: *Proc) void {
         .signal, .stopped => |sig| @intFromEnum(sig),
         .unknown => |n| n,
     } else |_| -1;
-    platform.releaseProcessJob(p.job);
-    p.job = null;
     p.exit.store(code, .release);
     tasks.notifyFromAnyThread(p.key);
 }
@@ -278,14 +279,16 @@ fn waitFor(h: Value, seconds: Value) Value {
     return Value.fromFixnum(p.exit.load(.acquire));
 }
 
-/// (%process-signal h kind tree): signal the program, if it's still running, by intent
-/// (0 interrupt, 1 terminate, 2 kill), with `tree` what it started too. Returns nil.
+/// (%process-signal h kind tree): signal the program by intent (0 interrupt, 1 terminate,
+/// 2 kill) while it runs; with `tree`, what it started too, even once it has ended (its
+/// process group or job object). Returns nil.
 fn signal(h: Value, kind: Value, tree: Value) Value {
     const p = procOf(h);
     if (!kind.isFixnum() or kind.toFixnum() < 0 or kind.toFixnum() > 2)
         rt.raise(.@"error", "%process-signal needs 0, 1 or 2, not {s}", .{readable(kind)});
-    // Once it has ended its pid may be another program's.
-    if (!ended(p)) platform.signalProcess(p.pid, p.handle, p.job, @intCast(kind.toFixnum()), tree.isTruthy());
+    // Once it has ended its pid may be another program's: the platform signals it alone
+    // only while it runs.
+    platform.signalProcess(p.pid, p.handle, p.job, @intCast(kind.toFixnum()), tree.isTruthy(), p.own_group, ended(p));
     return Value.nil;
 }
 
@@ -360,6 +363,14 @@ pub const entries = [_]io.Entry{
     .{ .name = "%process-wait", .min = 2, .max = 2, .impl = struct {
         fn f(a: Args) Value {
             return waitFor(a[0], a[1]);
+        }
+    }.f },
+    .{ .name = "%interrupt-ignored?", .min = 0, .max = 0, .impl = struct {
+        fn f(a: Args) Value {
+            // Whether this program ignores SIGINT, which the programs it starts inherit
+            // (for tests run by a shell in the background).
+            _ = a;
+            return Value.fromBool(platform.interruptIgnored());
         }
     }.f },
     .{ .name = "%environment", .min = 0, .max = 0, .impl = struct {

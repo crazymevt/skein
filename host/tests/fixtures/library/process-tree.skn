@@ -1,0 +1,67 @@
+;; skein.process's signals and trees (M3.1 step 3, D-103), natively: this program starts
+;; itself as a child, which may start two grandchildren of its own that share its stdout.
+;; That pipe ends only when all three have exited, which shows what a signal reached.
+(ns process-tree
+  (:require [skein.process :as process :refer [process]]
+            [skein.system :as system]
+            [skein.io :as io]))
+
+(defn- self [mode] [(%executable-path) mode])
+
+(defn- child [mode]
+  (case mode
+    "quick" nil
+    "sleep" (sleep 60)
+    "nap" (sleep 6)
+    ;; Two grandchildren, which inherit this program's stdout and end within 6 seconds
+    ;; on their own, then a long sleep.
+    "tree" (do (process (self "nap") {:out :inherit})
+               (process (self "nap") {:out :inherit})
+               (println "started")
+               (sleep 60))))
+
+(defn- ended-within?
+  "True if every holder of p's stdout exits within seconds: the pipe ends."
+  [p seconds]
+  (= :ended (deref (future (io/read-text (:out p)) :ended) seconds :running)))
+
+(defn- parent []
+  ;; By intent: each ends a sleeping program (the exit is the signal's number on Unix,
+  ;; 1 on Windows); an interrupt isn't supported on Windows yet.
+  (doseq [kind [:terminate :kill]]
+    (let [p (process (self "sleep"))]
+      (println kind "ends it:" (pos? (:exit @(process/signal! p kind))))))
+  (println ":interrupt:"
+           (if (= :windows (system/os))
+             (try (process/signal! (process (self "sleep")) :interrupt) :accepted
+                  (catch error e :ok))
+             (let [p (process (self "sleep"))]
+               (process/signal! p :interrupt)
+               (if (%interrupt-ignored?)
+                 ;; Started by a shell in the background, this program ignores SIGINT,
+                 ;; and so does its child: the interrupt can't be seen here.
+                 (do @(process/destroy! p) :ok)
+                 (if-let [ended (deref p 10 nil)]
+                   (if (pos? (:exit ended)) :ok :not-interrupted)
+                   (do @(process/destroy! p) :not-interrupted))))))
+  ;; A tree: destroy-tree! ends the child and both grandchildren, well before the
+  ;; grandchildren would end by themselves.
+  (let [p (process (self "tree"))]
+    (println "child:" (io/read-line (:out p)))
+    (process/destroy-tree! p)
+    (println "destroy-tree! ends all three:" (ended-within? p 3)))
+  ;; destroy! ends the child alone: the grandchildren go on, until they end themselves.
+  (let [p (process (self "tree"))]
+    (io/read-line (:out p))
+    @(process/destroy! p)
+    (println "destroy! leaves the grandchildren:" (not (ended-within? p 1)))
+    (println "which end on their own:" (ended-within? p 15)))
+  ;; Signals after the end do nothing.
+  (let [p @(process (self "quick"))]
+    (process/destroy! p)
+    (process/signal! p :kill)
+    (process/destroy-tree! p)
+    (println "after the end:" (:exit p))))
+
+(defn -main [& args]
+  (if (seq args) (child (first args)) (parent)))

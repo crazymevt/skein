@@ -1,0 +1,8 @@
+:terminate ends it: true
+:kill ends it: true
+:interrupt: :ok
+child: started
+destroy-tree! ends all three: true
+destroy! leaves the grandchildren: true
+which end on their own: true
+after the end: 0

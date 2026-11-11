@@ -400,10 +400,12 @@ pub fn prepareForProcesses() void {
     posix.sigaction(posix.SIG.PIPE, &act, null);
 }
 
-/// A program in a process group of its own, so that it and what it starts can be signaled
-/// together; not when it reads the terminal, which a background group can't.
+/// On Unix a program stays in this program's process group: destroy-tree! finds what it
+/// started by walking the process table (descendants), as Java's ProcessHandle does,
+/// which reaches programs that make groups of their own too.
 pub fn processGroupOptions(options: *std.process.SpawnOptions, own_group: bool) void {
-    if (own_group) options.pgid = 0;
+    _ = options;
+    _ = own_group;
 }
 
 /// After it starts: Windows puts the program in a job object; nothing here.
@@ -420,31 +422,115 @@ pub fn childProcessId(child: *const std.process.Child) i64 {
     return child.id.?;
 }
 
+/// Whether this program ignores SIGINT, as one a shell started in the background does:
+/// the programs it starts inherit that, and an interrupt doesn't reach them.
+pub fn interruptIgnored() bool {
+    var old: posix.Sigaction = undefined;
+    posix.sigaction(posix.SIG.INT, null, &old);
+    return old.handler.handler == posix.SIG.IGN;
+}
+
 /// The program's handle for signaling it (Windows's process handle; nothing on Unix).
 pub fn childHandle(child: *const std.process.Child) ?*anyopaque {
     _ = child;
     return null;
 }
 
-extern "c" fn getpgid(pid: c.pid_t) c.pid_t;
-
 /// Signal a program by intent: 0 interrupt (SIGINT), 1 terminate (SIGTERM), 2 kill
-/// (SIGKILL); with `tree`, its process group too when it has its own.
-pub fn signalProcess(pid: i64, handle: ?*anyopaque, job: ?*anyopaque, kind: u8, tree: bool) void {
+/// (SIGKILL), while it runs; with `tree`, its descendants first. Once it has ended, its
+/// pid may be another program's, and its children belong to init: nothing is signaled.
+pub fn signalProcess(pid: i64, handle: ?*anyopaque, job: ?*anyopaque, kind: u8, tree: bool, own_group: bool, ended: bool) void {
     _ = handle;
     _ = job;
+    _ = own_group;
+    if (ended) return;
     const sig: posix.SIG = switch (kind) {
         0 => .INT,
         1 => .TERM,
         else => .KILL,
     };
-    const target: c_int = @intCast(pid);
-    // -pid is its group, if it leads one; else the program alone.
-    if (tree and getpgid(target) == target) {
-        _ = std.c.kill(-target, sig);
-    } else {
-        _ = std.c.kill(target, sig);
+    const target: c.pid_t = @intCast(pid);
+    if (tree) {
+        // On the heap: this may run on a fiber's small stack.
+        const buf = std.heap.c_allocator.alloc(c.pid_t, 4096) catch return;
+        defer std.heap.c_allocator.free(buf);
+        const n = descendants(target, buf);
+        for (buf[0..n]) |d| _ = std.c.kill(d, sig);
     }
+    _ = std.c.kill(target, sig);
+}
+
+extern "c" fn proc_listchildpids(ppid: c.pid_t, buffer: ?*anyopaque, size: c_int) c_int;
+extern "c" fn readdir(dir: *c.DIR) ?*c.dirent;
+
+/// The descendants of `pid` (children, theirs, and so on), into `out`; how many.
+fn descendants(pid: c.pid_t, out: []c.pid_t) usize {
+    var n: usize = 0;
+    if (builtin.os.tag == .macos) {
+        // Breadth first: out[i] for i < n are found, and each one's children follow.
+        var queue_from: usize = 0;
+        var parent = pid;
+        while (true) {
+            const room = out.len - n;
+            if (room == 0) break;
+            const got = proc_listchildpids(parent, @ptrCast(out[n..].ptr), @intCast(room * @sizeOf(c.pid_t)));
+            if (got > 0) n += @min(@as(usize, @intCast(got)), room);
+            if (queue_from == n) break;
+            parent = out[queue_from];
+            queue_from += 1;
+        }
+        return n;
+    }
+    // Linux: every process's parent, from /proc/<pid>/stat, then breadth first.
+    const pids = std.heap.c_allocator.alloc(c.pid_t, 16384) catch return 0;
+    defer std.heap.c_allocator.free(pids);
+    const parents = std.heap.c_allocator.alloc(c.pid_t, 16384) catch return 0;
+    defer std.heap.c_allocator.free(parents);
+    var count: usize = 0;
+    const dir = c.opendir("/proc") orelse return 0;
+    defer _ = c.closedir(dir);
+    while (readdir(dir)) |entry| {
+        const name = std.mem.sliceTo(&entry.name, 0);
+        const p = std.fmt.parseInt(c.pid_t, name, 10) catch continue;
+        if (count == pids.len) break;
+        pids[count] = p;
+        parents[count] = parentOf(p) orelse continue;
+        count += 1;
+    }
+    var queue_from: usize = 0;
+    var parent = pid;
+    while (true) {
+        for (0..count) |i| {
+            if (parents[i] == parent and n < out.len) {
+                out[n] = pids[i];
+                n += 1;
+            }
+        }
+        if (queue_from == n) break;
+        parent = out[queue_from];
+        queue_from += 1;
+    }
+    return n;
+}
+
+/// A process's parent, from /proc/<pid>/stat on Linux ("pid (name) state ppid ..."; the
+/// name may hold spaces and parentheses, so the fields after its last ')').
+fn parentOf(pid: c.pid_t) ?c.pid_t {
+    var path_buf: [64]u8 = undefined;
+    const printed = std.fmt.bufPrint(path_buf[0 .. path_buf.len - 1], "/proc/{d}/stat", .{pid}) catch return null;
+    path_buf[printed.len] = 0;
+    const path: [:0]const u8 = path_buf[0..printed.len :0];
+    const fd = c.open(path, .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return null;
+    defer _ = c.close(fd);
+    var buf: [1024]u8 = undefined;
+    const got = c.read(fd, &buf, buf.len);
+    if (got <= 0) return null;
+    const text = buf[0..@intCast(got)];
+    const close = std.mem.lastIndexOfScalar(u8, text, ')') orelse return null;
+    var fields = std.mem.tokenizeScalar(u8, text[close + 1 ..], ' ');
+    _ = fields.next() orelse return null; // the state
+    return std.fmt.parseInt(c.pid_t, fields.next() orelse return null, 10) catch null;
 }
 
 /// A pipe, [read end, write end], which programs started later don't inherit (a

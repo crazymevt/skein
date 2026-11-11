@@ -12,7 +12,8 @@ or :extra-env, added to this program's; and :in, :out and :err, each :pipe (the 
 string :in is text written to the program's stdin, which is then closed, and :err :out
 sends the error output where the output goes. Programs are found on the PATH and run
 without a shell. Native only."
-  (:require [skein.io :as io]))
+  (:require [skein.io :as io]
+            [skein.system :as system]))
 
 (defclass subprocess []
   "A program that process started (D-103): its :cmd, :pid and streams, and its :exit
@@ -98,12 +99,15 @@ skein.io/io-error if it can't be started."
 (def ^:private signals {:interrupt 0 :terminate 1 :kill 2})
 
 (defn signal!
-  "Signal the program by intent: :interrupt (SIGINT; Ctrl-Break on Windows), :terminate
-(SIGTERM) or :kill (SIGKILL; on Windows both end it). Does nothing once it has ended.
-Returns p."
+  "Signal the program by intent: :interrupt (SIGINT; not yet on Windows, where it's an
+error), :terminate (SIGTERM) or :kill (SIGKILL); on Windows both end it. Does nothing once
+it has ended. Returns p."
   [p kind]
   (let [k (or (get signals kind)
               (error (str "signal! needs :interrupt, :terminate or :kill, not " (pr-str kind))))]
+    (when (and (= kind :interrupt) (= :windows (system/os)))
+      (error (str "signal! can't interrupt a program on Windows yet: a Ctrl-Break event "
+                  "reaches only a program started in a console process group of its own")))
     (%process-signal (check p "signal!") k false)
     p))
 
@@ -115,7 +119,8 @@ Returns p."
 
 (defn destroy-tree!
   "End the program and the programs it started: its process group on Unix, its job
-object on Windows. Returns p."
+object on Windows; once the program has ended, the ones it started that still run.
+Returns p."
   [p]
   (%process-signal (check p "destroy-tree!") 1 true)
   p)
