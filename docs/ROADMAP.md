@@ -430,8 +430,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - It is a port of the design of Jessie's Common Lisp toolkit (LGT), written for Skein rather than translated line by line, with LGT's whole widget set except the web view (D-097).
 - Settled (D-097): its own repository; LGT's widgets but the web view; properties as cell slots; `on` handlers and `handle-event` methods; skein-ui's CI checks out Skein's main branch and bootstraps it; headless first, then one backend at a time.
 - Steps, in order (D-097), in skein-ui:
-  1. The repository: a library `project.skn`, CI on the three platforms that checks out Skein's main and runs `skein test`; the core: the widget class, properties as cell slots with `property-changed`, events (`on`, `off`, `handle-event`, vetoes), the backend protocol, the headless backend, and `ui` to build trees of widgets.
-  2. Layout (boxes and grids: expansion, alignment, margins, spacing) and the simple controls (labels, buttons, toggles and checks, radio buttons, entries, sliders, spin buttons, progress bars and spinners, combo boxes, images, frames), on the headless backend.
+  1. ✅ The repository: a library `project.skn`, CI on the three platforms that checks out Skein's main and runs `skein test`; the core: the widget class, properties as cell slots with `property-changed`, events (`on`, `off`, `handle-event`, vetoes), the backend protocol, the headless backend, and `ui` to build trees of widgets.
+  2. ✅ Layout (boxes and grids: expansion, alignment, margins, spacing) and the simple controls (labels, buttons, toggles and checks, radio buttons, entries, sliders, spin buttons, progress bars and spinners, combo boxes, images, frames), on the headless backend.
   3. The rest of the widgets on the headless backend: the text view, list boxes, sortable tables, trees, color and date pickers, tabs, split panes, scrolled windows, the canvas and drawing; menus, alerts, file choosers, timers and the clipboard.
   4. The Cocoa backend (AppKit through the Objective-C runtime, with M2.13's by-value structs and `objc_msgSend` shapes), and calls from any fiber handed to the main thread.
   5. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
@@ -453,6 +453,7 @@ Sealing; inlining across namespaces; escape analysis and arena inference; SIMD f
 ## Notes for later
 Ideas and follow-ups noticed during work, kept here so they don't derail the current milestone.
 
+- skein-ui step 2 showed three small gaps in Skein itself, left for a decision: Skein's `declare` is the type declaration, so there is no Clojure-style forward declaration of a var defined later in the file (code is ordered to avoid it); `skein.math/round`, `floor` and `ceil` return floats for floats, where Clojure's `clojure.math/round` returns an integer (callers write `(int (math/round x))`); and nothing reads a number from bytes (a big-endian `u32` from a `u8` array, as for a PNG header), which binary file formats in games will want.
 - Phase 2: decide VS Code support for the native runtime's Swank server (a Swank-speaking extension or an LSP server); check SLY/Slynk compatibility (D-018).
 - Phase 2: decide whether FFI calls run on the fiber stack or the worker thread's native stack (D-024).
 - Phase 1: the seq library is written in CL for Phase 0 speed (D-032); port it to Skein (`lib/skein/core.skn`) with the front end, or reimplement it in the Zig runtime.
