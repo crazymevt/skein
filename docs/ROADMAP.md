@@ -436,8 +436,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   4. ✅ The Cocoa backend (AppKit through the Objective-C runtime, with M2.13's by-value structs and `objc_msgSend` shapes), and calls from any fiber handed to the main thread.
   5. The GTK 4 backend, in Linux CI under Xvfb (before Win32, since GTK 4 also runs on macOS, where it is developed; D-097).
   6. The rest of LGT, the web view included, on the headless, Cocoa and GTK 4 backends, then LGT's examples and widget explorer, ported to skein-ui's `examples/` with a launcher, each built by a test on the headless backend (Jessie's: the missing parts first, so the examples are faithful). In parts:
-     - A. Every widget's font, context menu, focus and input events (keys, text input, mouse), labels' text and background colors, user data; windows' position, size limits, resizability, `:closed`, hiding, centering, modal runs and snapshots; the application's name, version, icon, menu bar and quitting when the last window closes; blocking handlers.
-     - B. Appearance (light, dark, inherited), color palettes, control sizes and surface roles.
+     - ✅ A. Every widget's font, context menu, focus and input events (keys, text input, mouse), labels' text and background colors, user data; windows' position, size limits, resizability, `:closed`, hiding, centering, modal runs and snapshots; the application's name, version, icon, menu bar and quitting when the last window closes; blocking handlers.
+     - ✅ B. Appearance (light, dark, inherited), color palettes, control sizes and surface roles.
      - C. Stacks (with a page list or sidebar) and tabbed panes (closable, reorderable and draggable tabs, accessories).
      - D. Surfaces: popovers, completion popups and custom dialogs (`run-dialog`, `respond`).
      - E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
