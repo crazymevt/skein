@@ -384,8 +384,8 @@ be debugged). Requests Emacs sends for thread n arrive on its inbox."
         nil))
 
 (defn- restart-info [restarts]
-  (map (fn [r] (let [nm (name (restart-name r))] (list nm (or (restart-report r) nm))))
-       restarts))
+  ;; Made here, in the failing fiber, whose binding restart-label reads.
+  (apply list (map (fn [r] (list (name (restart-name r)) (dev/restart-label r))) restarts)))
 
 (defn- frame-info
   "Frames start to end (nil for all) of the backtrace, as SLDB shows them."
@@ -405,7 +405,7 @@ signaled. Returns (on-close) if the connection ends before a restart is invoked.
   (let [fresh (nil? *thread*)
         thread (or *thread* (new-thread! c))
         level (inc (if *sldb* (:level *sldb*) 0))
-        restarts (vec (compute-restarts e))
+        restarts (dev/debugger-restarts e)
         frames (vec (dev/user-frames frames))]
     (dev/record-error! e)
     (binding [*thread* thread
@@ -744,17 +744,18 @@ indexes parts."
   (when (and *sldb* (= level (:level *sldb*)))
     (let [restarts (:restarts *sldb*)]
       (if (and (integer? n) (< -1 n (count restarts)))
-        (invoke-restart (nth restarts n))
+        (dev/invoke-debugger-restart (nth restarts n))
         (fail "no restart " n)))))
 
 (defn- sldb-abort [c pkg args]
-  (when-let [r (restart-named (:restarts *sldb*) "abort")] (invoke-restart r)))
+  (when-let [r (restart-named (:restarts *sldb*) "abort")] (dev/invoke-debugger-restart r)))
 
 (defn- sldb-continue [c pkg args]
-  (when-let [r (restart-named (:restarts *sldb*) "continue")] (invoke-restart r)))
+  (when-let [r (restart-named (:restarts *sldb*) "continue")] (dev/invoke-debugger-restart r)))
 
 (defn- throw-to-toplevel [c pkg args]
-  (when-let [r (restart-named (reverse (:restarts *sldb*)) "abort")] (invoke-restart r)))
+  (when-let [r (restart-named (reverse (:restarts *sldb*)) "abort")]
+    (dev/invoke-debugger-restart r)))
 
 (defn- backtrace-request [c pkg [start end]]
   (frame-info (:frames *sldb*) (or start 0) end))

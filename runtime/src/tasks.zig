@@ -57,6 +57,13 @@ const t_fiber = 8;
 const t_bindings = 9;
 /// Under :restart-fiber, the times (monotonic nanoseconds) it was restarted, or nil.
 const t_restarts = 10;
+/// With a task runner installed (skein dev), a nursery's task records the restarts active
+/// in its spawner when it was spawned, as [restarts spawned-on-the-main-thread?], so its
+/// debugger can offer them (D-101); nil otherwise.
+const t_spawner_restarts = 11;
+/// The spawner's restart chosen in the task's debugger, which its nursery invokes in the
+/// spawner once its tasks have finished; nil if none was (D-101).
+const t_chosen = 12;
 
 const State = enum(i64) { pending, running, done, failed, cancelled };
 
@@ -72,6 +79,8 @@ const n_policy = 5;
 /// Under :restart-fiber, how many restarts a task may have within n_within nanoseconds.
 const n_max_restarts = 6;
 const n_within = 7;
+/// The first spawner's restart chosen in a child's debugger, invoked when the nursery ends.
+const n_chosen = 8;
 
 const Policy = enum(i64) { cancel_siblings, ignore, crash, restart_fiber };
 
@@ -383,7 +392,7 @@ fn currentScopes() Value {
 // Tasks
 
 fn makeTask(f: Value, nursery: Value, scopes: Value) Value {
-    return coll.make(.task, &.{ f, Value.fromFixnum(@intFromEnum(State.pending)), Value.nil, Value.nil, Value.nil, nursery, scopes, identity(), Value.nil, dynamic.capture(), Value.nil });
+    return coll.make(.task, &.{ f, Value.fromFixnum(@intFromEnum(State.pending)), Value.nil, Value.nil, Value.nil, nursery, scopes, identity(), Value.nil, dynamic.capture(), Value.nil, Value.nil, Value.nil });
 }
 
 fn stateOf(t: Value) State {
@@ -409,11 +418,17 @@ fn finishTask(t: Value, state: State, v: Value) void {
         .done => set(t, t_result, v),
         .failed => {
             set(t, t_condition, v);
-            // Under :ignore a task fails alone.
-            if (n != Value.nil and policyOf(t) != .ignore and get(n, n_failure) == Value.nil) {
+            const chosen = get(t, t_chosen);
+            // Under :ignore a task fails alone, unless it failed for a restart of its
+            // spawner, which the nursery invokes whatever its policy (D-101).
+            if (n != Value.nil and (policyOf(t) != .ignore or chosen != Value.nil) and
+                get(n, n_failure) == Value.nil)
+            {
                 set(n, n_failure, v);
                 first_failure = true;
             }
+            if (n != Value.nil and chosen != Value.nil and get(n, n_chosen) == Value.nil)
+                set(n, n_chosen, chosen);
         },
         else => {},
     }
@@ -425,8 +440,9 @@ fn finishTask(t: Value, state: State, v: Value) void {
 }
 
 /// [the task runner]: nil, or a function that every task's function is called through,
-/// (runner f), in the task's fiber: skein.dev's, which gives an error that no handler in
-/// the task handles to the debugger before the task fails (M2.8, D-088).
+/// (runner f task), in the task's fiber: skein.dev's, which gives an error that no handler
+/// in the task handles to the debugger before the task fails (M2.8, D-088), and offers
+/// the spawner's restarts there (D-101).
 var task_runner: [1]Value = .{Value.nil};
 var task_runner_ready = false;
 
@@ -447,7 +463,7 @@ fn taskBody(self: Value, argc: u32, argv: [*]const Value) callconv(.c) Value {
     _ = argc;
     checkCancelled();
     const runner = @atomicLoad(Value, &task_runner[0], .acquire);
-    if (runner != Value.nil) return func.call(runner, 1, argv);
+    if (runner != Value.nil) return func.call(runner, 2, argv);
     return func.call(argv[0], 0, argv);
 }
 
@@ -476,11 +492,12 @@ fn runTask(t: Value) void {
     var bindings: cond.Frame = undefined;
     const bound = dynamic.pushCopy(&bindings, get(t, t_bindings));
     const types = [_]Value{ cond.builtinType(.cancelled), cond.builtinType(.@"error") };
-    var r = tryCall(func.make(taskBody, "task"), &.{get(t, t_fn)}, &types);
-    // :restart-fiber: run the function again from the start, while the limit allows.
-    while (r[0] > 0 and policyOf(t) == .restart_fiber and mayRestart(t)) {
+    var r = tryCall(func.make(taskBody, "task"), &.{ get(t, t_fn), t }, &types);
+    // :restart-fiber: run the function again from the start, while the limit allows; not
+    // a task failed for a restart of its spawner (D-101).
+    while (r[0] > 0 and get(t, t_chosen) == Value.nil and policyOf(t) == .restart_fiber and mayRestart(t)) {
         reportTaskError("error in task (restarting it): ", r[1]);
-        r = tryCall(func.make(taskBody, "task"), &.{get(t, t_fn)}, &types);
+        r = tryCall(func.make(taskBody, "task"), &.{ get(t, t_fn), t }, &types);
     }
     if (bound) cond.popFrame(&bindings);
     cond.popFrame(&own);
@@ -489,10 +506,12 @@ fn runTask(t: Value) void {
         -1 => finishTask(t, .done, r[1]),
         0 => finishTask(t, .cancelled, Value.nil),
         else => {
-            switch (policyOf(t)) {
-                .crash => cond.reportAndExit(r[1]),
-                .ignore => reportTaskError("error in task (ignored): ", r[1]),
-                else => {},
+            if (get(t, t_chosen) == Value.nil) {
+                switch (policyOf(t)) {
+                    .crash => cond.reportAndExit(r[1]),
+                    .ignore => reportTaskError("error in task (ignored): ", r[1]),
+                    else => {},
+                }
             }
             finishTask(t, .failed, r[1]);
         },
@@ -725,10 +744,16 @@ fn awaitTask(t: Value, deadline: ?u64) ?Value {
     const state = stateOf(t);
     const result = get(t, t_result);
     const c = get(t, t_condition);
+    const chosen = get(t, t_chosen);
     unlock();
     return switch (state) {
         .done => result,
-        .failed => cond.signalError(c),
+        // Failed for a restart of its spawner: its nursery is being cancelled, and invokes
+        // the restart once it ends; a second debugger here would be in the way (D-101).
+        .failed => if (chosen != Value.nil)
+            cond.signalError(cond.makeBuiltin(.cancelled, "the task was failed for a restart of its spawner"))
+        else
+            cond.signalError(c),
         else => rt.raise(.task_cancelled_error, "the task was cancelled", .{}),
     };
 }
@@ -841,6 +866,9 @@ fn cancelNursery(n: Value) void {
 fn spawnIn(n: Value, f: Value) Value {
     if (!isNursery(n)) rt.raise(.@"error", "spawn needs a nursery, not {s}", .{readable(n)});
     const t = makeTask(f, n, currentScopes());
+    // For the task's debugger (D-101): only skein dev installs a task runner.
+    if (@atomicLoad(Value, &task_runner[0], .acquire) != Value.nil)
+        set(t, t_spawner_restarts, coll.vectorOf(&.{ cond.computeRestarts(), Value.fromBool(onMainThreadNow()) }));
     lock();
     set(n, n_children, coll.vectorConj(get(n, n_children), t));
     unlock();
@@ -934,7 +962,7 @@ fn policyNamed(p: Value) Policy {
 /// and re-signal its error.
 fn withNursery(opts: Value, body: Value) Value {
     const policy = nurseryOptions(opts);
-    const n = coll.make(.nursery, &.{ Value.nil, Value.nil, coll.vectorOf(&.{}), identity(), fiberValue(), policy[0], policy[1], policy[2] });
+    const n = coll.make(.nursery, &.{ Value.nil, Value.nil, coll.vectorOf(&.{}), identity(), fiberValue(), policy[0], policy[1], policy[2], Value.nil });
     var frame: cond.Frame = undefined;
     pushScope(&frame, n, scope_one);
     const r = tryCall(body, &.{n}, &.{ cond.builtinType(.cancelled), cond.builtinType(.@"error") });
@@ -952,8 +980,13 @@ fn withNursery(opts: Value, body: Value) Value {
     if (problem == Value.nil) problem = interruption;
     lock();
     const failure = get(n, n_failure);
+    const chosen = get(n, n_chosen);
     set(n, n_owner, Value.nil);
     unlock();
+    // A child failed for a restart of this fiber's, chosen in its debugger: invoke it now
+    // that every task has finished, if it's still active (D-101).
+    if (chosen != Value.nil and cond.findRestart(chosen) != Value.nil)
+        return cond.invokeRestart(chosen, &.{});
     if (failure != Value.nil) cond.signalError(failure);
     if (problem != Value.nil) cond.signalError(problem);
     return r[1];
@@ -1267,7 +1300,27 @@ pub const entries = [_]Entry{
             return Value.fromBool(a[0].isObjectOf(.delay));
         }
     }.f),
-    // (%install-task-runner! f): call every task's function as (f task-fn) (D-088).
+    // (%task-spawner-restarts task): [restarts main-thread?] of the task's spawner when it
+    // was spawned, or nil (D-101).
+    e("%task-spawner-restarts", 1, 1, struct {
+        fn f(a: Args) Value {
+            if (!isTask(a[0])) rt.raise(.type_error, "%task-spawner-restarts needs a task, not {s}", .{readable(a[0])});
+            return get(a[0], t_spawner_restarts);
+        }
+    }.f),
+    // (%choose-spawner-restart! task restart): the task is failing so that its nursery
+    // invokes restart, one of its spawner's, in the spawner (D-101).
+    e("%choose-spawner-restart!", 2, 2, struct {
+        fn f(a: Args) Value {
+            if (!isTask(a[0])) rt.raise(.type_error, "%choose-spawner-restart! needs a task, not {s}", .{readable(a[0])});
+            if (!cond.isRestart(a[1])) rt.raise(.type_error, "%choose-spawner-restart! needs a restart, not {s}", .{readable(a[1])});
+            lock();
+            set(a[0], t_chosen, a[1]);
+            unlock();
+            return Value.nil;
+        }
+    }.f),
+    // (%install-task-runner! f): call every task's function as (f task-fn task) (D-088).
     e("%install-task-runner!", 1, 1, struct {
         fn f(a: Args) Value {
             installTaskRunner(a[0]);

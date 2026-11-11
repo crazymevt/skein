@@ -201,6 +201,15 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore f))
   nil)
 
+(defcore "%task-spawner-restarts" (task)
+  ;; Phase 0's tasks don't record their spawner's restarts (D-101).
+  (declare (ignore task))
+  nil)
+
+(defcore "%choose-spawner-restart!" (task restart)
+  (declare (ignore task restart))
+  nil)
+
 (defcore "%set-output-var!" (var)
   ;; Phase 0's REPL binds *standard-output* instead.
   (declare (ignore var))

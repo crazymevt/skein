@@ -698,8 +698,8 @@ is the Lisp backend's list."
     "%tcp-close" "%set-output-var!" "%exit" "%main-thread?" "%run-attached"
     ;; Swank (M2.7, D-082)
     "%utf8-length" "%utf8-split" "%absolute-path"
-    ;; Supervisors (M2.8, D-088)
-    "%install-task-runner!"
+    ;; Supervisors (M2.8, D-088), and the spawner's restarts in a task's debugger (D-101)
+    "%install-task-runner!" "%task-spawner-restarts" "%choose-spawner-restart!"
     ;; Hot reload (M2.9, D-091)
     "%load-module" "%evaluated?"
     ;; STM (M2.10, D-092)

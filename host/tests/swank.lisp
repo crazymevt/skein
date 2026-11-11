@@ -397,6 +397,42 @@ SKEIN_DEV=none and Swank on a free port, and run BODY with STREAM connected to i
     (is (swank-has (swank-until s "(:return (:abort \"division by zero\") 5)")
                    "(:debug-return 4 1 nil)"))))
 
+(test swank-spawner-restarts
+  ;; M2.15 step 2 (D-101): SLDB for a task offers its spawner's restarts; choosing one fails
+  ;; the task and runs that restart in the spawner.
+  (with-swank-program (s dir (("serve.skn" "(ns serve (:require [skein.game :as game]))
+(defonce go? (atom false))
+(defonce broken? (atom true))
+(defonce frames (atom []))
+(defn rules [n] (if @broken? (error \"bad rules\") n))
+(defn -main [& args]
+  (loop [] (when-not @go? (sleep 0.02) (recur)))
+  (game/with-frame-restarts
+    (with-nursery [n] (swap! frames conj @(spawn n (rules (count @frames))))))
+  (sleep 60))
+")))
+    (is (swank-has (swank-request s "(swank:interactive-eval \"(reset! go? true)\")" "\"serve\""
+                                  "t" 1)
+                   "(:return (:ok \"=> true\") 1)"))
+    (let ((m (swank-until s "(:debug-activate")))
+      (is (swank-has m "(:debug 2 1 (\"bad rules\""
+                     "((\"retry-frame\" \"Run this frame again (in main thread)\") "
+                     "(\"skip-frame\" \"Skip the rest of this frame (in main thread)\") "
+                     "(\"abort\" \"Fail the task\"))")
+          "~S" m))
+    ;; Fixed from SLDB's thread, then the frame again.
+    (is (swank-has (swank-request s "(swank:interactive-eval \"(reset! broken? false)\")"
+                                  "\"serve\"" "2" 2)
+                   "(:return (:ok \"=> false\") 2)"))
+    (swank-send s "(:emacs-rex (swank:invoke-nth-restart-for-emacs 1 0) \"serve\" 2 3)")
+    (is (swank-has (swank-until s "(:debug-return") "(:debug-return 2 1 nil)"))
+    (loop repeat 100
+          until (search "[0]" (car (last (swank-request s "(swank:interactive-eval \"@frames\")"
+                                                        "\"serve\"" "t" 4))))
+          do (sleep 0.05))
+    (is (swank-has (swank-request s "(swank:interactive-eval \"@frames\")" "\"serve\"" "t" 5)
+                   "(:return (:ok \"=> [0]\") 5)"))))
+
 (test swank-policy-after-the-debugger
   ;; In skein dev the debugger comes first; failing the task applies its nursery's policy
   ;; (M2.8 step 2, D-088): under :ignore the program goes on.

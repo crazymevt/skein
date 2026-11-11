@@ -611,6 +611,116 @@ executable's native path."
               (sb-ext:process-kill process 9))
             (sb-ext:process-wait process))))))
 
+;;; M2.15 step 2 (D-101): a task's debugger offers its spawner's restarts, so a crash in a
+;;; job is fixed and its frame retried from one debugger.
+
+(test dev-task-offers-spawner-restarts
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("jobframe.skn" "(ns jobframe
+  (:require [skein.game :as game]
+            [skein.jobs :as jobs :refer [job]]))
+(defonce broken? (atom true))
+(defonce frames (atom 0))
+(defn rules [n] (if @broken? (error \"bad rules in frame\" n) (* n 10)))
+(defn -main [& args]
+  (dotimes [_ 3]
+    (game/with-frame-restarts
+      (let [n (swap! frames inc)
+            r (jobs/graph {:move (job n)
+                           :rules (job {:after [:move]} (rules n))})]
+        (println \"frame\" n \"rules\" (:rules r)))))
+  (println \"done\"))
+"))
+        (let* ((exe (native-dev-build dir "jobframe.skn"))
+               (process (sb-ext:run-program exe '() :wait nil :input :stream
+                                                    :output :stream :error :output
+                                                    :directory (uiop:native-namestring dir)
+                                                    :environment
+                                                    (cons "SKEIN_DEV=none"
+                                                          (sb-ext:posix-environ))))
+               (buffer (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+               (lock (sb-thread:make-mutex))
+               (input (sb-ext:process-input process)))
+          (collect-output (sb-ext:process-output process) buffer lock)
+          (unwind-protect
+               (block scenario
+                 (flet ((wait (text &optional (start 0))
+                          (or (wait-for-output buffer lock text :start start)
+                              (progn (fail "timed out waiting for ~S in:~%~A" text buffer)
+                                     (return-from scenario))))
+                        (say (line)
+                          (format input "~A~%" line)
+                          (finish-output input)))
+                   (let ((pos (wait "error in thread task: bad rules in frame 1")))
+                     ;; The job's own restarts, its spawner's (but abort), then its abort.
+                     (wait "0: retry-frame  Run this frame again (in main thread)" pos)
+                     (wait "1: skip-frame  Skip the rest of this frame (in main thread)" pos)
+                     (setf pos (wait "2: abort  Fail the task" pos))
+                     (say "(reset! broken? false)")
+                     (setf pos (wait "false" pos))
+                     (say "0")
+                     ;; The frame runs again in the main thread, with no debugger there.
+                     (setf pos (wait "frame 2 rules 20" pos))
+                     (setf pos (wait "done" pos))
+                     (is (not (search "error in thread main thread" buffer))
+                         "a second debugger opened:~%~A" buffer)
+                     (say ":quit")
+                     (loop repeat 600 while (sb-ext:process-alive-p process) do (sleep 0.05))
+                     (is (not (sb-ext:process-alive-p process))
+                         "skein dev did not exit after :quit"))))
+            (when (sb-ext:process-alive-p process)
+              (sb-ext:process-kill process 9))
+            (sb-ext:process-wait process))))))
+
+(test dev-spawner-restart-no-longer-active
+  ;; A restart established inside the nursery's body ends when the body is cancelled: the
+  ;; task's error then goes to the spawner as it would have (D-101).
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("inside.skn" "(ns inside)
+(defn -main [& args]
+  (with-nursery [n]
+    (restart-case (do (spawn n (error \"bad task\")) (sleep 30))
+      (inner [] :report \"Inner restart\" (println \"inner ran\"))))
+  (println \"not reached\"))
+"))
+        (let* ((exe (native-dev-build dir "inside.skn"))
+               (process (sb-ext:run-program exe '() :wait nil :input :stream
+                                                    :output :stream :error :output
+                                                    :directory (uiop:native-namestring dir)
+                                                    :environment
+                                                    (cons "SKEIN_DEV=none"
+                                                          (sb-ext:posix-environ))))
+               (buffer (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+               (lock (sb-thread:make-mutex))
+               (input (sb-ext:process-input process)))
+          (collect-output (sb-ext:process-output process) buffer lock)
+          (unwind-protect
+               (block scenario
+                 (flet ((wait (text &optional (start 0))
+                          (or (wait-for-output buffer lock text :start start)
+                              (progn (fail "timed out waiting for ~S in:~%~A" text buffer)
+                                     (return-from scenario))))
+                        (say (line)
+                          (format input "~A~%" line)
+                          (finish-output input)))
+                   (let ((pos (wait "error in thread task: bad task")))
+                     (setf pos (wait "0: inner  Inner restart (in main thread)" pos))
+                     (say "0")
+                     (setf pos (wait "error in thread main thread: bad task" pos))
+                     (setf pos (wait "0: abort  Stop the program" pos))
+                     (is (not (search "inner ran" buffer)) "the restart ran:~%~A" buffer)
+                     (say "0")
+                     (setf pos (wait "the REPL is still running" pos))
+                     (say ":quit")
+                     (loop repeat 600 while (sb-ext:process-alive-p process) do (sleep 0.05))
+                     (is (not (sb-ext:process-alive-p process))
+                         "skein dev did not exit after :quit"))))
+            (when (sb-ext:process-alive-p process)
+              (sb-ext:process-kill process 9))
+            (sb-ext:process-wait process))))))
+
 ;;; M2.9 step 2 (D-091): skein dev evaluates a saved file at once, then compiles it in the
 ;;; background and swaps the compiled code in; (reload 'ns) does the same.
 

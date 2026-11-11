@@ -36,6 +36,47 @@ that code spawns."
 true for the program's, false for the REPL's and Swank's own (service)."
   true)
 
+(def ^:dynamic *task-restarts*
+  "In a task's fiber, when its errors go to the debugger: {:task :spawner :main? :fail},
+the task, the restarts active in its spawner when it was spawned (and whether that was
+the main thread), and an atom of its own abort restart, Fail the task (D-101); else nil."
+  nil)
+
+(defn- abort? [r] (= "abort" (name (restart-name r))))
+
+(defn- spawner-restart? [r]
+  (when-let [{:keys [spawner]} *task-restarts*]
+    (some (fn [x] (identical? x r)) spawner)))
+
+(defn debugger-restarts
+  "The restarts a debugger offers for the error c here, innermost first: in a task, its own,
+then its spawner's (but abort, which the spawner's own debugger offers), then Fail the
+task (D-101)."
+  [c]
+  (let [own (vec (compute-restarts c))
+        spawner (remove abort? (:spawner *task-restarts*))]
+    (if (and (seq own) (seq spawner))
+      (vec (concat (pop own) spawner [(peek own)]))
+      own)))
+
+(defn restart-label
+  "The restart's report as a debugger shows it; a spawner's says where it runs (D-101)."
+  [r]
+  (let [report (or (restart-report r) (name (restart-name r)))]
+    (if (spawner-restart? r)
+      (str report (if (:main? *task-restarts*) " (in main thread)" " (in the spawning task)"))
+      report)))
+
+(defn invoke-debugger-restart
+  "Invoke the restart r chosen in a debugger. A spawner's fails the task, and its nursery
+invokes r in the spawner once its tasks have finished (D-101)."
+  [r]
+  (if (spawner-restart? r)
+    (let [{:keys [task fail]} *task-restarts*]
+      (%choose-spawner-restart! task r)
+      (invoke-restart @fail))
+    (invoke-restart r)))
+
 (defmacro service
   "Like future, for a task of the REPL's or Swank's own: its errors don't go to the
 debugger, and it has no \"Fail the task\" restart, nor have the tasks it starts. Code it
@@ -259,14 +300,16 @@ for an error no handler in it handles."
 ;;; ------------------------------------------------------------------------------------
 ;;; The debugger
 
-(defn- describe-error [console c restarts where]
+(defn- describe-error
+  "Print the error c and its restarts; labels are theirs (restart-label), made in the
+fiber where c was signaled, or nil to make them here."
+  [console c restarts labels where]
   (fresh-line! console)
   (write! console "error" where ": " (condition-message c) "\n")
   (when (seq restarts)
     (write! console "restarts (type a number to choose one):\n")
-    (doseq [[i r] (map-indexed vector restarts)]
-      (write! console "  " i ": " (restart-name r)
-              (if-let [report (restart-report r)] (str "  " report) "") "\n")))
+    (doseq [[i r label] (map vector (range) restarts (or labels (map restart-label restarts)))]
+      (write! console "  " i ": " (restart-name r) "  " label "\n")))
   (write! console "Also: :bt for a backtrace, or any form to evaluate it here.\n"))
 
 (defn user-frames
@@ -302,7 +345,7 @@ from where it was signaled."
     (set-core-var! "*e" c)
     (let [restarts (vec (compute-restarts c))
           prefix (str "debug[" *level* "] ")]
-      (describe-error console c restarts "")
+      (describe-error console c restarts nil "")
       (loop []
         (prompt console prefix)
         (let [[kind x] (next-message console)]
@@ -350,7 +393,7 @@ from where it was signaled."
         ;; Sessions offered meanwhile, for the console's prompt once this one ends (kept
         ;; apart, since next-message would hand deferred ones straight back).
         later (atom [])]
-    (describe-error console (:condition session) (:restarts session)
+    (describe-error console (:condition session) (:restarts session) (:labels session)
                     (str " in thread " (:thread session)))
     (try
       (loop [show-prompt true]
@@ -385,11 +428,11 @@ from where it was signaled."
         k (keyword-name form)]
     (try
       (cond (and n (< -1 n (count restarts))) (do (answer :resumed)
-                                                  (invoke-restart (nth restarts n)))
+                                                  (invoke-debugger-restart (nth restarts n)))
             n (answer :message (str "no restart " n "\n"))
             (= k "bt") (answer :message (backtrace-text (:frames session)))
             (= k "quit") (do (answer :resumed)
-                             (when-let [a (outermost-abort restarts)] (invoke-restart a)))
+                             (when-let [a (outermost-abort (:own session))] (invoke-restart a)))
             :else (let [result (try (let [v (eval-in console form)]
                                       (record-value! v)
                                       [:value (show v)])
@@ -403,13 +446,15 @@ from where it was signaled."
 backtrace from where it was signaled: SLDB in a connected Emacs, else wait for a console to
 attach and evaluate what it sends in this fiber, where the restarts are."
   [c frames]
-  (let [restarts (vec (compute-restarts c))
+  (let [own (vec (compute-restarts c))
+        restarts (debugger-restarts c)
         thread (if (%main-thread?) "main thread" "task")
-        session {:condition c :restarts restarts :frames frames :thread thread
+        session {:condition c :restarts restarts :own own :frames frames :thread thread
+                 :labels (mapv restart-label restarts)
                  :inbox (chan) :console (atom nil) :finished (atom false)}
         give-up (fn []
                   (println (str "error in thread " thread ": " (condition-message c)))
-                  (if-let [a (outermost-abort restarts)] (invoke-restart a) (%exit 1)))]
+                  (if-let [a (outermost-abort own)] (invoke-restart a) (%exit 1)))]
     (set-core-var! "*e" c)
     ;; SLDB in a connected Emacs first (D-082); it returns if there's none, or if Emacs
     ;; disconnects before a restart is chosen.
@@ -445,17 +490,24 @@ attach and evaluate what it sends in this fiber, where the restarts are."
 (defn- run-task
   "How every task's function f runs in a program with the debugger (D-088): an error that
 no handler in the task handles goes to the debugger in the task's fiber, before the task
-fails; its abort restart fails the task, as the error would have without the debugger."
-  [f]
+fails; its abort restart fails the task, as the error would have without the debugger.
+The debugger also offers the restarts of the task's spawner (D-101)."
+  [f task]
   (if-not *debug-tasks*
-    (f)
-    (let [failure (atom nil)]
-      (restart-case
-       (handler-bind [error (fn task-debugger [c]
-                              (reset! failure c)
-                              (debug-program-error c (rest (%backtrace))))]
-         (f))
-       (abort [] :report "Fail the task" (error @failure))))))
+    (binding [*task-restarts* nil] (f))
+    (let [failure (atom nil)
+          [spawner main?] (%task-spawner-restarts task)
+          fail (atom nil)]
+      ;; Bound outside a function named run-task, where backtraces end (user-frames).
+      (binding [*task-restarts* {:task task :spawner (vec spawner) :main? main? :fail fail}]
+        ((fn run-task []
+           (restart-case
+            (do (reset! fail (find-restart 'abort))
+                (handler-bind [error (fn task-debugger [c]
+                                       (reset! failure c)
+                                       (debug-program-error c (rest (%backtrace))))]
+                  (f)))
+            (abort [] :report "Fail the task" (error @failure)))))))))
 
 (defn console-loop
   "Run the console's read-eval-print loop in this fiber until its input ends or :quit."
