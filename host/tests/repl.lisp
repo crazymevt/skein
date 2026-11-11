@@ -596,9 +596,8 @@ executable's native path."
                      ;; The second task fails while the console debugs the first.
                      (sleep 1)
                      (say "0")
-                     (setf pos (wait "; resumed" pos))
-                     ;; The main fiber's line and the second task's debugger print in
-                     ;; either order.
+                     ;; The main fiber's line, "; resumed" and the second task's debugger
+                     ;; print in any order.
                      (setf pos (max (wait "first gave 10" pos) (wait "0: use-ten  Use ten" pos)))
                      (say "0")
                      (setf pos (wait "second gave 10" pos))
