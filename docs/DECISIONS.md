@@ -1338,3 +1338,10 @@ Date: 2026-11-11 · Status: Accepted
 - **Decision** (Jessie's): a new namespace, `skein.system`, for facts about the system a program runs on. Its first function is `(system/os)`, which returns `:macos`, `:linux` or `:windows`, the keys `deflibrary` takes. It reads the target the runtime was built for, natively and on the Phase 0 host.
 - **Alternatives:** `skein.io/os` (the first draft; io is about files and streams); `skein.os` with `(os/name)`; `skein.platform`.
 - **Consequences:** `skein.system` is where environment variables, exiting, the CPU count and the home directory go when programs need them.
+
+## D-099: `index-of` in `skein.core`
+Date: 2026-11-11 · Status: Accepted
+- **Context:** finding where an item is in a vector (a page in a notebook, a row in a list) is common in UI and game code. Clojure programs call Java's `.indexOf` for it; Skein has no host interop, and each library wrote its own `keep-indexed` loop (skein-ui did, M2.14).
+- **Decision** (Jessie asked for the function; the name and argument order follow `.indexOf`): `(index-of coll x)` in `skein.core` returns the index of the first element of `coll` that is `=` to `x`, or `nil`; it takes any collection, a seq or a string (whose elements are characters), the collection first, as `.indexOf` does. Phase 0 and the native runtime have it.
+- **Alternatives:** a library helper in each project; the name `position`; the item first.
+- **Consequences:** `skein.string/index-of`, which finds a substring, keeps its name: a namespace's own var comes before `skein.core`'s, so code that refers or aliases `skein.string` is unchanged. Instances compare by identity under `=`, so `index-of` finds a widget among widgets.

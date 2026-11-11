@@ -522,6 +522,14 @@ dropped."
   [coll]
   (persistent! (reduce (fn [t x] (assoc! t x (inc (get t x 0)))) (transient {}) coll)))
 
+(defn index-of
+  "The index of the first element of coll that is = to x, or nil."
+  [coll x]
+  (loop [s (seq coll) i 0]
+    (cond (nil? s) nil
+          (= x (first s)) i
+          :else (recur (next s) (inc i)))))
+
 (defn group-by
   "A map from each (f x) to the vector of elements that gave it."
   [f coll]

@@ -693,6 +693,13 @@ REDUCED; returns the unwrapped result."
     (do-seq (x coll) (tmap-assoc tm x (1+ (tmap-get tm x 0))))
     (tmap-persistent tm)))
 
+(defcore "index-of" (coll x)
+  ;; The index of the first element of COLL that is = to X, or nil (M2.14, D-099).
+  (let ((i 0))
+    (do-seq (e coll nil)
+      (when (equiv e x) (return i))
+      (incf i))))
+
 (defcore "group-by" (f coll)
   (let ((tm (map-transient +empty-map+)))
     (do-seq (x coll)

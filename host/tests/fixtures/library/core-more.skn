@@ -72,4 +72,16 @@
     (is (= [4 4 9] [(slow 2) (slow 2) (slow 3)]))
     (is (= 2 @calls))))
 
+(deftest index-of-finds-elements
+  ;; D-099 (M2.14)
+  (are [x y] (= x y)
+    1 (index-of [:a :b :c :b] :b)
+    nil (index-of [1 2] 3)
+    nil (index-of nil 1)
+    1 (index-of '(1 [2]) [2])
+    2 (index-of "abc" \c)
+    5 (index-of (range) 5))
+  (let [a (atom 1) b (atom 1)]
+    (is (= 1 (index-of [a b] b)) "instances by identity")))
+
 (prn (select-keys (run-tests 'core-more) [:test :fail :error]))
