@@ -439,7 +439,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
      - ✅ A. Every widget's font, context menu, focus and input events (keys, text input, mouse), labels' text and background colors, user data; windows' position, size limits, resizability, `:closed`, hiding, centering, modal runs and snapshots; the application's name, version, icon, menu bar and quitting when the last window closes; blocking handlers.
      - ✅ B. Appearance (light, dark, inherited), color palettes, control sizes and surface roles.
      - ✅ C. Stacks (with a page list or sidebar) and tabbed panes (closable, reorderable and draggable tabs, accessories).
-     - D. Surfaces: popovers, completion popups and custom dialogs (`run-dialog`, `respond`).
+     - ✅ D. Surfaces: popovers, completion popups and custom dialogs (`run-dialog`, `respond`).
      - E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
      - F. Images from bytes, system and glyph images, font families and font files, and icons in lists, tables and trees.
      - G. Window state: saving and restoring a window's frame.
