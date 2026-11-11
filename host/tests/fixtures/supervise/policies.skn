@@ -10,11 +10,16 @@
 
 ;; :cancel-siblings, the default, given explicitly: the first failure cancels the other
 ;; task and is re-signaled where the nursery joins.
-(let [cancelled (atom false)]
+(let [started (atom false)
+      cancelled (atom false)]
   (prn (message-of (fn []
                      (with-nursery [n {:on-error :cancel-siblings}]
-                       (spawn n (try (sleep 5) (finally (reset! cancelled true))))
-                       (spawn n (error "first")))))
+                       (spawn n (try (reset! started true)
+                                     (sleep 5)
+                                     (finally (reset! cancelled true))))
+                       ;; Fail once the other task is inside its try.
+                       (spawn n (loop [] (when-not @started (sleep 0.005) (recur)))
+                              (error "first")))))
        @cancelled))
 
 ;; :ignore: the task fails alone, with a line on stderr; its deref still re-signals.
