@@ -434,9 +434,10 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   2. ✅ Layout (boxes and grids: expansion, alignment, margins, spacing) and the simple controls (labels, buttons, toggles and checks, radio buttons, entries, sliders, spin buttons, progress bars and spinners, combo boxes, images, frames), on the headless backend.
   3. ✅ The rest of the widgets on the headless backend: the text view, list boxes, sortable tables, trees, color and date pickers, tabs, split panes, scrolled windows, the canvas and drawing; menus, alerts, file choosers, timers and the clipboard.
   4. ✅ The Cocoa backend (AppKit through the Objective-C runtime, with M2.13's by-value structs and `objc_msgSend` shapes), and calls from any fiber handed to the main thread.
-  5. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
-  6. The GTK 4 backend, in Linux CI under Xvfb.
-  7. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
+  5. The GTK 4 backend, in Linux CI under Xvfb (before Win32, since GTK 4 also runs on macOS, where it is developed; D-097).
+  6. LGT's examples and its widget explorer, ported to skein-ui's `examples/` (all but the web view and the code editor, whose widgets skein-ui doesn't have): a launcher runs them on Cocoa or GTK 4, and a test builds each on the headless backend.
+  7. The Win32 backend (Common Controls, GDI+ drawing, task dialogs and the modern file dialogs).
+  8. The demo (a window with a form, a list, a menu and a dialog) on all three backends in CI, and changed live from SLIME.
 
 **Exit:** the core's tests pass on the headless backend on all three platforms, and one demo program (a window with a form, a list, a menu and a dialog) runs on Cocoa, Win32 and GTK 4 in skein-ui's CI (under Xvfb on Linux), and is changed live from SLIME.
 
