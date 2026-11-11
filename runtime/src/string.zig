@@ -88,6 +88,131 @@ pub fn substring(v: Value, start: usize, end: usize) Value {
     return make(copy);
 }
 
+/// A copy of bytes [a, z) of `v` as a new string.
+fn sliceBytes(v: Value, a: usize, z: usize) Value {
+    var buf: [256]u8 = undefined;
+    if (z - a <= buf.len) {
+        @memcpy(buf[0 .. z - a], bytes(v)[a..z]);
+        return make(buf[0 .. z - a]);
+    }
+    const copy = rt.scratch.dupe(u8, bytes(v)[a..z]) catch rt.fatal("out of memory", .{});
+    defer rt.scratch.free(copy);
+    return make(copy);
+}
+
+// ---------------------------------------------------------------------------------------
+// Cursors (D-019, M2.11): positions in a string as byte offsets, which skein.string walks
+// non-ASCII text with in O(1) a step. Each cursor must be at the start of a character.
+
+fn checkString(v: Value, what: []const u8) void {
+    if (!isString(v)) rt.raise(.type_error, "{s} needs a string", .{what});
+}
+
+fn cursorOf(s: Value, c: Value, what: []const u8) usize {
+    const b = bytes(s);
+    if (!c.isFixnum() or c.toFixnum() < 0 or c.toFixnum() > b.len)
+        rt.raise(.@"error", "{s}: not a cursor of the string", .{what});
+    const i: usize = @intCast(c.toFixnum());
+    if (i < b.len and b[i] & 0xC0 == 0x80) rt.raise(.@"error", "{s}: the cursor is inside a character", .{what});
+    return i;
+}
+
+fn seqLen(b: u8) usize {
+    return std.unicode.utf8ByteSequenceLength(b) catch 1;
+}
+
+const Args = []const Value;
+const Entry = @import("compiler.zig").Entry;
+
+pub const entries = [_]Entry{
+    // (%string-end s): the cursor after the last character.
+    .{ .name = "%string-end", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            checkString(a[0], "%string-end");
+            return Value.fromFixnum(@intCast(bytes(a[0]).len));
+        }
+    }.f },
+    // (%string-char-at s c): the character at cursor c, or nil at the end.
+    .{ .name = "%string-char-at", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            checkString(a[0], "%string-char-at");
+            const i = cursorOf(a[0], a[1], "%string-char-at");
+            const b = bytes(a[0]);
+            if (i == b.len) return Value.nil;
+            const n = @min(seqLen(b[i]), b.len - i);
+            return Value.fromChar(std.unicode.utf8Decode(b[i .. i + n]) catch 0xFFFD);
+        }
+    }.f },
+    // (%string-next s c): the cursor after the character at c (c itself at the end).
+    .{ .name = "%string-next", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            checkString(a[0], "%string-next");
+            const i = cursorOf(a[0], a[1], "%string-next");
+            const b = bytes(a[0]);
+            if (i == b.len) return a[1];
+            return Value.fromFixnum(@intCast(@min(i + seqLen(b[i]), b.len)));
+        }
+    }.f },
+    // (%string-slice s from to): the characters from cursor from up to cursor to.
+    .{ .name = "%string-slice", .min = 3, .max = 3, .impl = struct {
+        fn f(a: Args) Value {
+            checkString(a[0], "%string-slice");
+            const from = cursorOf(a[0], a[1], "%string-slice");
+            const to = cursorOf(a[0], a[2], "%string-slice");
+            if (to < from) rt.raise(.@"error", "%string-slice: the end is before the start", .{});
+            return sliceBytes(a[0], from, to);
+        }
+    }.f },
+    // (%string-find s part from): the cursor of the first part at or after cursor from, or
+    // nil; (%string-find s part nil true): of the last.
+    .{ .name = "%string-find", .min = 3, .max = 4, .impl = struct {
+        fn f(a: Args) Value {
+            checkString(a[0], "%string-find");
+            checkString(a[1], "%string-find");
+            const b = bytes(a[0]);
+            const part = bytes(a[1]);
+            const found = if (a.len == 4 and a[3] != Value.nil and a[3] != Value.false)
+                std.mem.lastIndexOf(u8, b, part)
+            else
+                std.mem.indexOfPos(u8, b, cursorOf(a[0], a[2], "%string-find"), part);
+            return if (found) |i| Value.fromFixnum(@intCast(i)) else Value.nil;
+        }
+    }.f },
+    // (%string-cursor->index s c): the index (in characters) of cursor c.
+    .{ .name = "%string-cursor->index", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            checkString(a[0], "%string-cursor->index");
+            const i = cursorOf(a[0], a[1], "%string-cursor->index");
+            if (isAscii(a[0])) return Value.fromFixnum(@intCast(i));
+            var n: usize = 0;
+            for (bytes(a[0])[0..i]) |byte| {
+                if (byte & 0xC0 != 0x80) n += 1;
+            }
+            return Value.fromFixnum(@intCast(n));
+        }
+    }.f },
+    // (%string-index->cursor s i): the cursor of the character at index i (or the end).
+    .{ .name = "%string-index->cursor", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            checkString(a[0], "%string-index->cursor");
+            if (!a[1].isFixnum() or a[1].toFixnum() < 0 or a[1].toFixnum() > count(a[0]))
+                rt.raise(.@"error", "%string-index->cursor: no index {d} in the string", .{a[1].toFixnum()});
+            return Value.fromFixnum(@intCast(byteOffset(a[0], @intCast(a[1].toFixnum()))));
+        }
+    }.f },
+    // (%string-ascii-case s upper?): s with its ASCII letters upper- or lower-cased.
+    .{ .name = "%string-ascii-case", .min = 2, .max = 2, .impl = struct {
+        fn f(a: Args) Value {
+            checkString(a[0], "%string-ascii-case");
+            const upper = a[1] != Value.nil and a[1] != Value.false;
+            const copy = rt.scratch.dupe(u8, bytes(a[0])) catch rt.fatal("out of memory", .{});
+            defer rt.scratch.free(copy);
+            for (copy) |*byte| byte.* = if (upper) std.ascii.toUpper(byte.*) else std.ascii.toLower(byte.*);
+            return make(copy);
+        }
+    }.f },
+};
+
 test "strings hold their bytes and count characters" {
     const s = make("héllo, wörld");
     try std.testing.expect(isString(s));

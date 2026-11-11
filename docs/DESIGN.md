@@ -229,7 +229,7 @@ Functions are first-class closures with multiple arities and variadic arguments.
 Strings are immutable UTF-8. String operations (`nth`, `count`, `subs`, `seq`) work in **code points** (D-019).
 - `count` is O(1): the code-point count is recorded when the string is created.
 - Indexing is O(1) for pure-ASCII strings (also recorded at creation) and O(n) otherwise.
-- `skein.string` provides byte-offset cursors (`string/cursor`, `string/next`, …) for walking non-ASCII text quickly, e.g. in parsers.
+- `skein.string` provides byte-offset cursors (`string/cursor`, `string/next`, …) for walking non-ASCII text quickly, e.g. in parsers. As built (M2.11, D-093): `(cursor s)` and `(cursor s i)`, `(next s c)`, `(char-at s c)` (nil at the end), `(end s)`, `(end? s c)`, `(slice s from to?)` and `(cursor->index s c)`; a cursor is opaque (natively a byte offset, in Phase 0 a character index). The Skein reader and the Swank server read by cursors.
 
 ## 7. Equality, hashing and sequences
 
@@ -935,7 +935,7 @@ As built (M2.11, D-093): `(deftest name body...)` defines a function of no argum
 | Namespace | Contents | Phase |
 |---|---|---|
 | `skein.core` | special-form wrappers, core macros, collections, seqs, transducers, atoms, numbers, strings basics | 0 |
-| `skein.string` | string operations, builders, formatting | 0 (M2.11, D-089) |
+| `skein.string` | string operations, cursors, builders (D-019) | 2 (M2.11, D-093) |
 | `skein.math` | scalar math; `vec2/3/4`, `quat`, `mat3/4` value structs; lerp, clamp, noise | 0 |
 | `skein.conc` | nurseries, futures, channels, timeouts, job graphs | 0 |
 | `skein.ffi` | FFI | 0 |

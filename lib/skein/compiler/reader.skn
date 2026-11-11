@@ -38,11 +38,14 @@ compiler can be built natively without the rest of it (M1.9).")
 alias name to a namespace name or nil (for ::alias/kw)."
   ([text] (make-reader text {}))
   ([text opts]
-   (let [n (count text)]
+   ;; :pos is a cursor (D-019): reading non-ASCII text takes O(1) a character.
+   (let [n (%string-end text)]
      {:text text
       :n n
       ;; Skip a UTF-8 byte order mark at the start of the input.
-      :pos (atom (if (and (pos? n) (= (nth text 0) (char 0xFEFF))) 1 0))
+      :pos (atom (if (= (%string-char-at text 0) (char 0xFEFF)) (%string-next text 0) 0))
+      ;; The cursor of the character next-char returned last.
+      :last (atom 0)
       :line (atom 1)
       :column (atom 1)
       :file (:file opts)
@@ -62,14 +65,14 @@ alias name to a namespace name or nil (for ::alias/kw)."
   (reset! (:namespace r) ns))
 
 (defn- peek-char [r]
-  (let [p @(:pos r)]
-    (when (< p (:n r)) (nth (:text r) p))))
+  (%string-char-at (:text r) @(:pos r)))
 
 (defn- next-char [r]
   (let [p @(:pos r)]
     (when (< p (:n r))
-      (let [c (nth (:text r) p)]
-        (reset! (:pos r) (inc p))
+      (let [c (%string-char-at (:text r) p)]
+        (reset! (:last r) p)
+        (reset! (:pos r) (%string-next (:text r) p))
         (if (= c \newline)
           (do (swap! (:line r) inc) (reset! (:column r) 1))
           (swap! (:column r) inc))
@@ -178,12 +181,12 @@ printed as ^{...} prefixes only when print-meta? is true."
 (defn- read-token-text
   "first plus the characters up to the next delimiter."
   [r first]
-  (let [start (dec @(:pos r))]
+  (let [start @(:last r)]
     (loop []
       (when-not (token-end? (peek-char r))
         (next-char r)
         (recur)))
-    (subs (:text r) start @(:pos r))))
+    (%string-slice (:text r) start @(:pos r))))
 
 (defn- index-of [s c from]
   (loop [i from]

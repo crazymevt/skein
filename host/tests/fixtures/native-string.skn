@@ -1,0 +1,87 @@
+(ns native-string
+  (:require [skein.string :as s]
+            [skein.test :refer [deftest is are testing run-tests]]))
+
+;; skein.string (M2.11 step 2, D-093), natively and in Phase 0: its functions on ASCII and
+;; non-ASCII text, the cursors, and randomized checks against simple models.
+
+(deftest looking
+  (are [x y] (= x y)
+    true (s/starts-with? "héllo" "hé")
+    false (s/starts-with? "héllo" "e")
+    true (s/ends-with? "héllo wörld" "wörld")
+    false (s/ends-with? "héllo" "hé")
+    true (s/ends-with? "aa" "a")
+    true (s/includes? "naïve café" "ïve")
+    true (s/includes? "naïve café" \é)
+    false (s/includes? "abc" "d")
+    1 (s/index-of "héllo" \é)
+    8 (s/index-of "héllo, héllo" "é" 2)
+    nil (s/index-of "héllo" "z")
+    9 (s/last-index-of "héllo, héllo" "llo")
+    true (s/blank? nil)
+    true (s/blank? " \t\n")
+    false (s/blank? " x ")))
+
+(deftest making
+  (are [x y] (= x y)
+    "HÉLLO WORLD" (s/upper-case "hÉllo world")
+    "héllo" (s/lower-case "HéLLO")
+    "élan" (s/capitalize "élAN")
+    "Abc" (s/capitalize "aBC")
+    "a, b, c" (s/join ", " ["a" "b" "c"])
+    "12" (s/join [1 2 nil])
+    "ünïcode" (s/trim "  ünïcode \n")
+    "x  " (s/triml "  x  ")
+    "  x" (s/trimr "  x  ")
+    "line" (s/trim-newline "line\r\n\n")
+    "étaÿ" (s/reverse "ÿaté")
+    "a-b-c" (s/replace "a b c" " " "-")
+    "a-b c" (s/replace-first "a b c" \space "-")
+    "çaaç" (s/replace "çabç" "b" "a")
+    ["a" "b" "" "c"] (s/split "a,b,,c,," ",")
+    ["a" "b,,c,,"] (s/split "a,b,,c,," \, 2)
+    ["é" "à"] (s/split "é→à" "→")
+    ["one" "two" "three"] (s/split-lines "one\ntwo\r\nthree")
+    "a&lt;b" (s/escape "a<b" {\< "&lt;"})))
+
+(deftest cursors
+  (let [text "añb🎲c"]
+    (testing "walking"
+      (is (= [\a \ñ \b \🎲 \c]
+             (loop [c (s/cursor text) out []]
+               (if (s/end? text c) out (recur (s/next text c) (conj out (s/char-at text c))))))))
+    (testing "slices and indexes"
+      (let [c (s/cursor text 3)]
+        (is (= \🎲 (s/char-at text c)))
+        (is (= 3 (s/cursor->index text c)))
+        (is (= "añb" (s/slice text (s/cursor text) c)))
+        (is (= "🎲c" (s/slice text c)))
+        (is (nil? (s/char-at text (s/end text))))))
+    (is (thrown? error (s/cursor text 9))))
+  (let [b (s/builder)]
+    (s/append! b "x" 1 \y nil)
+    (s/append! b "ü")
+    (is (= "x1yü" (s/build b)))))
+
+(def alphabet "ab,é ")
+
+(defn random-text []
+  (apply str (repeatedly (rand-int 12) (fn [] (nth alphabet (rand-int (count alphabet)))))))
+
+(defn keep-indexed* [t]
+  (keep (fn [[i ch]] (when (= ch \é) i)) (map-indexed vector t)))
+
+(deftest against-models
+  ;; split's parts joined again give the text back; index-of finds what subs finds.
+  (dotimes [_ 500]
+    (let [t (random-text)]
+      (is (= t (s/join "," (s/split t "," -1))))
+      (is (= (s/upper-case t)
+             (apply str (map (fn [ch] (if (= ch \é) ch (first (s/upper-case (str ch))))) t))))
+      (let [i (s/index-of t "é")]
+        (is (= i (first (keep-indexed* t)))))
+      (is (= (s/trim t) (s/triml (s/trimr t)))))))
+
+(let [r (run-tests 'native-string)]
+  (prn (select-keys r [:fail :error])))

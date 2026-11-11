@@ -1,0 +1,246 @@
+(ns skein.string
+  "String functions, after clojure.string (DESIGN §21, M2.11, D-093), and the cursors of
+D-019. Skein has no regular expressions: split, replace and the rest take a string or a
+character to match. Case functions change ASCII letters only.
+
+A cursor is a position in a string, at the start of a character or at its end: (cursor s)
+is the start, (next s c) the cursor after the character at c, (char-at s c) that
+character, (slice s from to) the text between two cursors. Walking a string by cursors
+takes O(1) a step even where it isn't ASCII, where nth takes O(n). Cursors are opaque:
+natively a byte offset, in Phase 0 a character index.")
+
+;;; ------------------------------------------------------------------------------------
+;;; Cursors
+
+(defn cursor
+  "The cursor at the start of s, or before the character at index i."
+  ([s] (if (string? s) 0 (error "cursor needs a string, not" (pr-str s))))
+  ([s i] (%string-index->cursor s i)))
+
+(defn end
+  "The cursor at the end of s."
+  [s]
+  (%string-end s))
+
+(defn end?
+  "True if the cursor c is at the end of s."
+  [s c]
+  (= c (%string-end s)))
+
+(defn next
+  "The cursor after the character at the cursor c of s (c itself at the end)."
+  [s c]
+  (%string-next s c))
+
+(defn char-at
+  "The character at the cursor c of s, or nil at the end."
+  [s c]
+  (%string-char-at s c))
+
+(defn slice
+  "The text of s from the cursor from to the cursor to (or to the end)."
+  ([s from] (%string-slice s from (%string-end s)))
+  ([s from to] (%string-slice s from to)))
+
+(defn cursor->index
+  "The index of the character at the cursor c of s."
+  [s c]
+  (%string-cursor->index s c))
+
+;;; ------------------------------------------------------------------------------------
+;;; Building strings
+
+(defn builder
+  "A string builder: append! adds text to it, and build gives the string."
+  []
+  {::parts (atom [])})
+
+(defn append!
+  "Add the text of each of xs (as str prints it) to the builder b; returns b."
+  [b & xs]
+  (swap! (::parts b) into (map str xs))
+  b)
+
+(defn build
+  "The text added to the builder b so far."
+  [b]
+  (apply str @(::parts b)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Looking at strings
+
+(defn- text-of
+  "The string a string or character x matches."
+  [x what]
+  (cond (string? x) x
+        (char? x) (str x)
+        :else (error (str what " needs a string or a character to match, not " (pr-str x)))))
+
+(defn starts-with?
+  "True if s starts with the string prefix."
+  [s prefix]
+  (= 0 (%string-find s prefix 0)))
+
+(defn ends-with?
+  "True if s ends with the string suffix."
+  [s suffix]
+  ;; Its last occurrence starts where a suffix would.
+  (let [at (%string-find s suffix nil true)]
+    (and (some? at) (= at (- (%string-end s) (%string-end suffix))))))
+
+(defn includes?
+  "True if s contains the string or character part."
+  [s part]
+  (some? (%string-find s (text-of part "includes?") 0)))
+
+(defn index-of
+  "The index of the first part (a string or character) in s, at or after the index from,
+or nil."
+  ([s part] (index-of s part 0))
+  ([s part from]
+   (when-let [c (%string-find s (text-of part "index-of") (%string-index->cursor s from))]
+     (%string-cursor->index s c))))
+
+(defn last-index-of
+  "The index of the last part (a string or character) in s, or nil."
+  [s part]
+  (when-let [c (%string-find s (text-of part "last-index-of") nil true)]
+    (%string-cursor->index s c)))
+
+(defn- whitespace? [ch]
+  (contains? #{\space \tab \newline \return \formfeed (char 11)} ch))
+
+(defn blank?
+  "True if s is nil, empty, or only whitespace."
+  [s]
+  (or (nil? s)
+      (loop [c 0]
+        (cond (end? s c) true
+              (whitespace? (char-at s c)) (recur (next s c))
+              :else false))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Making strings
+
+(defn upper-case
+  "s with its ASCII letters in upper case."
+  [s]
+  (%string-ascii-case s true))
+
+(defn lower-case
+  "s with its ASCII letters in lower case."
+  [s]
+  (%string-ascii-case s false))
+
+(defn capitalize
+  "s with its first character in upper case and the rest in lower case (ASCII letters)."
+  [s]
+  (if (end? s 0)
+    s
+    (let [c (next s 0)]
+      (str (upper-case (slice s 0 c)) (lower-case (slice s c))))))
+
+(defn join
+  "The strings of the elements of coll (as str prints them), with separator between them."
+  ([coll] (apply str coll))
+  ([separator coll] (apply str (interpose separator coll))))
+
+(defn- first-non-blank [s]
+  (loop [c 0]
+    (if (and (not (end? s c)) (whitespace? (char-at s c))) (recur (next s c)) c)))
+
+(defn- after-last-non-blank [s]
+  (loop [c 0 after 0]
+    (cond (end? s c) after
+          (whitespace? (char-at s c)) (recur (next s c) after)
+          :else (let [n (next s c)] (recur n n)))))
+
+(defn triml
+  "s without the whitespace at its start."
+  [s]
+  (slice s (first-non-blank s)))
+
+(defn trimr
+  "s without the whitespace at its end."
+  [s]
+  (slice s 0 (after-last-non-blank s)))
+
+(defn trim
+  "s without the whitespace at either end."
+  [s]
+  (let [start (first-non-blank s)]
+    (if (end? s start) "" (slice s start (after-last-non-blank s)))))
+
+(defn trim-newline
+  "s without the newlines and carriage returns at its end."
+  [s]
+  (loop [c 0 after 0]
+    (cond (end? s c) (slice s 0 after)
+          (contains? #{\newline \return} (char-at s c)) (recur (next s c) after)
+          :else (let [n (next s c)] (recur n n)))))
+
+(defn reverse
+  "The characters of s in the opposite order."
+  [s]
+  (loop [c 0 out ()]
+    (if (end? s c) (apply str out) (recur (next s c) (cons (char-at s c) out)))))
+
+(defn- replace-all [s match replacement first-only?]
+  (let [match (text-of match "replace")
+        replacement (str replacement)
+        b (builder)]
+    (when (= "" match) (error "replace needs something to match, not an empty string"))
+    (loop [from 0]
+      (let [at (%string-find s match from)]
+        (if (nil? at)
+          (do (append! b (slice s from)) (build b))
+          (let [after (+ at (%string-end match))]
+            (append! b (slice s from at) replacement)
+            (if first-only?
+              (do (append! b (slice s after)) (build b))
+              (recur after))))))))
+
+(defn replace
+  "s with every match (a string or character) replaced by replacement."
+  [s match replacement]
+  (replace-all s match replacement false))
+
+(defn replace-first
+  "s with the first match (a string or character) replaced by replacement."
+  [s match replacement]
+  (replace-all s match replacement true))
+
+(defn split
+  "The parts of s between the separators (a string or character), as a vector. Empty
+parts at the end are dropped, as Clojure's split drops them, unless limit is given: then
+at most limit parts, the last holding the rest of s."
+  ([s separator]
+   (let [parts (split s separator 0)]
+     (loop [parts parts]
+       (if (and (seq parts) (= "" (peek parts))) (recur (pop parts)) parts))))
+  ([s separator limit]
+   (let [sep (text-of separator "split")]
+     (when (= "" sep) (error "split needs a separator, not an empty string"))
+     (loop [from 0 parts []]
+       (let [at (when (or (<= limit 0) (< (inc (count parts)) limit))
+                  (%string-find s sep from))]
+         (if (nil? at)
+           (conj parts (slice s from))
+           (recur (+ at (%string-end sep)) (conj parts (slice s from at)))))))))
+
+(defn split-lines
+  "The lines of s, split at newlines (and a carriage return before one)."
+  [s]
+  (mapv (fn [line] (if (ends-with? line "\r") (slice line 0 (- (end line) 1)) line))
+        (split s \newline)))
+
+(defn escape
+  "s with each character that the map cmap has a key for replaced by (str (cmap ch))."
+  [s cmap]
+  (let [b (builder)]
+    (loop [c 0]
+      (if (end? s c)
+        (build b)
+        (let [ch (char-at s c)]
+          (append! b (if-let [r (get cmap ch)] r ch))
+          (recur (next s c)))))))

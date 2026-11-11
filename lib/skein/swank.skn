@@ -75,10 +75,13 @@ skein dev starts the server: this namespace gives it start-server when it's load
   [e]
   (if (= (condition-type e) swank-error) (swank-error-message e) (condition-message e)))
 
-(defn- peek-at [st]
-  (let [p @(:pos st)] (when (< p (:n st)) (nth (:text st) p))))
+;; :pos is a cursor (D-019), so reading a message with non-ASCII text takes O(1) a
+;; character.
 
-(defn- advance! [st] (swap! (:pos st) inc))
+(defn- peek-at [st]
+  (%string-char-at (:text st) @(:pos st)))
+
+(defn- advance! [st] (swap! (:pos st) (fn [p] (%string-next (:text st) p))))
 
 (defn- blank? [c] (<= (int c) 32))
 
@@ -112,17 +115,19 @@ skein dev starts the server: this namespace gives it start-server when it's load
   "A string, which Emacs writes with \\\" and \\\\ escaped (and \\n and the like)."
   [st]
   (advance! st)
-  (let [text (:text st)]
+  (let [text (:text st)
+        next-of (fn [i] (%string-next text i))]
     (loop [i @(:pos st) start i parts []]
       (when (>= i (:n st)) (fail "the message ends inside a string"))
-      (let [c (nth text i)]
-        (cond (= c \") (do (reset! (:pos st) (inc i))
-                           (apply str (conj parts (subs text start i))))
+      (let [c (%string-char-at text i)]
+        (cond (= c \") (do (reset! (:pos st) (next-of i))
+                           (apply str (conj parts (%string-slice text start i))))
               (= c \\)
-              (do (when (>= (inc i) (:n st)) (fail "the message ends inside a string"))
-                  (let [e (nth text (inc i))
-                        parts (conj parts (subs text start i))]
-                    (recur (+ i 2) (+ i 2)
+              (do (when (>= (next-of i) (:n st)) (fail "the message ends inside a string"))
+                  (let [e (%string-char-at text (next-of i))
+                        after (next-of (next-of i))
+                        parts (conj parts (%string-slice text start i))]
+                    (recur after after
                            (case e
                              \n (conj parts "\n")
                              \t (conj parts "\t")
@@ -130,7 +135,7 @@ skein dev starts the server: this namespace gives it start-server when it's load
                              ;; A backslash before a line break continues the line.
                              \newline parts
                              (conj parts (str e))))))
-              :else (recur (inc i) start parts))))))
+              :else (recur (next-of i) start parts))))))
 
 (defn- token->datum
   "What a symbol or number token means."
@@ -155,7 +160,7 @@ skein dev starts the server: this namespace gives it start-server when it's load
     (loop []
       (let [c (peek-at st)]
         (when (and c (not (delimiter? c))) (advance! st) (recur))))
-    (subs (:text st) start @(:pos st))))
+    (%string-slice (:text st) start @(:pos st))))
 
 (defn- read-datum* [st]
   (skip-blank! st)
@@ -176,7 +181,7 @@ skein dev starts the server: this namespace gives it start-server when it's load
 (defn read-data
   "The datum the Lisp data text gives (as the namespace docstring says)."
   [text]
-  (let [st {:text text :n (count text) :pos (atom 0)}
+  (let [st {:text text :n (%string-end text) :pos (atom 0)}
         datum (read-datum st)]
     (skip-blank! st)
     (when (peek-at st) (fail "more than one datum in a message"))

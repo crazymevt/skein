@@ -770,3 +770,28 @@ REDUCED; returns the unwrapped result."
 (defun core-fn (name)
   "Return the CL function in the skein.core var NAME."
   (var-value (find-own-var +core+ name)))
+
+;;; String cursors (D-019, M2.11): natively byte offsets; Phase 0's strings index
+;;; characters in O(1), so here a cursor is a character index. skein.string treats cursors
+;;; as opaque, so both give the same results.
+
+(defcore "%string-end" (s) (length s))
+(defcore "%string-char-at" (s c) (if (< c (length s)) (char s c) nil))
+(defcore "%string-next" (s c) (min (1+ c) (length s)))
+(defcore "%string-slice" (s from to) (subseq s from to))
+(defcore "%string-find" (s part from &optional last)
+  (if (truthy-p last)
+      (search part s :from-end t)
+      (search part s :start2 from)))
+(defcore "%string-cursor->index" (s c) (declare (ignore s)) c)
+(defcore "%string-index->cursor" (s i)
+  (unless (<= 0 i (length s))
+    (skein-error 'skein-error nil "%string-index->cursor: no index ~D in the string" i))
+  i)
+(defcore "%string-ascii-case" (s upper)
+  ;; ASCII letters only, as natively.
+  (map 'string (lambda (ch)
+                 (cond ((and (truthy-p upper) (char<= #\a ch #\z)) (char-upcase ch))
+                       ((and (not (truthy-p upper)) (char<= #\A ch #\Z)) (char-downcase ch))
+                       (t ch)))
+       s))

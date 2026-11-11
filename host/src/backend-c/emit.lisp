@@ -376,6 +376,9 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%load-module" "%evaluated?"
     ;; STM (M2.10, D-092)
     "ref" "ref?" "%dosync" "%in-transaction?" "ref-set" "alter" "commute" "ensure"
+    ;; String cursors (M2.11, D-019, D-093)
+    "%string-end" "%string-char-at" "%string-next" "%string-slice" "%string-find"
+    "%string-cursor->index" "%string-index->cursor" "%string-ascii-case"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"
