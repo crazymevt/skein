@@ -1,0 +1,535 @@
+(ns skein.core.docs
+  "Docstrings and argument lists for the functions the runtime implements in Zig (M2.11,
+D-093): skein.core's, and skein.ffi's, skein.math's and skein.time's that are built in.
+Programs built with --eval, and skeinc, give them to these functions' vars, so describe and
+autodoc in SLIME (D-086) show them as they show a function written in Skein. A test checks
+that every runtime function has an entry.")
+
+(def entries
+  "[name arglists docstring] for each function, name qualified outside skein.core."
+  [["+" "([] [x] [x y & more])"
+    "The sum of the numbers; 0 with none. Integer sums past the fixnum range become bignums."]
+   ["-" "([x] [x y & more])"
+    "x negated, or x minus the rest."]
+   ["*" "([] [x] [x y & more])"
+    "The product of the numbers; 1 with none."]
+   ["/" "([x y])"
+    "x divided by y, a float (two integers give an f64; quot divides integers). Dividing by zero
+is an arithmetic-error."]
+   ["<" "([x] [x y & more])"
+    "True if the numbers increase."]
+   ["<=" "([x] [x y & more])"
+    "True if the numbers never decrease."]
+   [">" "([x] [x y & more])"
+    "True if the numbers decrease."]
+   [">=" "([x] [x y & more])"
+    "True if the numbers never increase."]
+   ["=" "([x] [x y & more])"
+    "True if the values are equal: numbers of the same kind by value (1 and 1.0 aren't =),
+collections by their elements, instances by identity unless equiv is specialized."]
+   ["==" "([x] [x y & more])"
+    "True if the numbers are equal by value, across integers and floats."]
+   ["not=" "([x] [x y & more])"
+    "(not (= x y ...))."]
+   ["inc" "([x])"
+    "x + 1."]
+   ["dec" "([x])"
+    "x - 1."]
+   ["abs" "([x])"
+    "The absolute value of x."]
+   ["max" "([x & more])"
+    "The largest number."]
+   ["min" "([x & more])"
+    "The smallest number."]
+   ["quot" "([n d])"
+    "n divided by d, rounded toward zero."]
+   ["rem" "([n d])"
+    "The remainder of (quot n d), with n's sign."]
+   ["mod" "([n d])"
+    "n modulo d, with d's sign."]
+   ["sqrt" "([x])"
+    "The square root of x, a float."]
+   ["zero?" "([x])"
+    "True if the number x is zero."]
+   ["pos?" "([x])"
+    "True if the number x is greater than zero."]
+   ["neg?" "([x])"
+    "True if the number x is less than zero."]
+   ["even?" "([n])"
+    "True if the integer n is even."]
+   ["odd?" "([n])"
+    "True if the integer n is odd."]
+   ["number?" "([x])"
+    "True if x is a number."]
+   ["integer?" "([x])"
+    "True if x is an integer (a fixnum or a bignum)."]
+   ["float?" "([x])"
+    "True if x is a float (f32 or f64)."]
+   ["double?" "([x])"
+    "True if x is an f64."]
+   ["f32" "([x])"
+    "The number x as an f32."]
+   ["f64" "([x])"
+    "The number x as an f64."]
+   ["int" "([x])"
+    "The number x as an integer, truncated toward zero; for a character, its code point."]
+   ["char" "([n])"
+    "The character with code point n."]
+   ["rand" "([] [n])"
+    "A random f64 from 0 (inclusive) to 1, or to n."]
+   ["rand-int" "([n])"
+    "A random integer from 0 (inclusive) to n."]
+   ["parse-long" "([s])"
+    "The integer that the string s writes (an optional sign and decimal digits), or nil."]
+   ["parse-double" "([s])"
+    "The f64 that the string s writes (digits, a point, an exponent, Infinity or NaN), or nil."]
+   ["compare" "([x y])"
+    "-1, 0 or 1 as x comes before, with or after y: numbers, strings, characters, booleans,
+keywords, symbols and vectors (by length, then elements). nil comes first."]
+   ["bit-and" "([x y & more])"
+    "The bitwise and of the fixnums."]
+   ["bit-or" "([x y & more])"
+    "The bitwise or of the fixnums."]
+   ["bit-xor" "([x y & more])"
+    "The bitwise exclusive or of the fixnums."]
+   ["bit-and-not" "([x y & more])"
+    "x with the bits of the others cleared."]
+   ["bit-not" "([x])"
+    "The bitwise complement of the fixnum x."]
+   ["bit-shift-left" "([x n])"
+    "x shifted left n bits; past the fixnum range, a bignum."]
+   ["bit-shift-right" "([x n])"
+    "x shifted right n bits, keeping its sign."]
+   ["unsigned-bit-shift-right" "([x n])"
+    "x, as 64 unsigned bits, shifted right n bits."]
+   ["bit-test" "([x n])"
+    "True if bit n of x is set."]
+   ["bit-set" "([x n])"
+    "x with bit n set."]
+   ["bit-clear" "([x n])"
+    "x with bit n cleared."]
+   ["bit-flip" "([x n])"
+    "x with bit n flipped."]
+   ["nil?" "([x])"
+    "True if x is nil."]
+   ["some?" "([x])"
+    "True if x is not nil."]
+   ["true?" "([x])"
+    "True if x is true."]
+   ["false?" "([x])"
+    "True if x is false."]
+   ["not" "([x])"
+    "True if x is nil or false."]
+   ["boolean" "([x])"
+    "false for nil and false, else true."]
+   ["boolean?" "([x])"
+    "True if x is true or false."]
+   ["identical?" "([x y])"
+    "True if x and y are the same object."]
+   ["identity" "([x])"
+    "x."]
+   ["constantly" "([x])"
+    "A function that takes any arguments and returns x."]
+   ["string?" "([x])"
+    "True if x is a string."]
+   ["char?" "([x])"
+    "True if x is a character."]
+   ["keyword?" "([x])"
+    "True if x is a keyword."]
+   ["symbol?" "([x])"
+    "True if x is a symbol."]
+   ["fn?" "([x])"
+    "True if x is a function."]
+   ["ifn?" "([x])"
+    "True if x can be called: a function, keyword, map, set or vector."]
+   ["str" "([& xs])"
+    "The texts of xs joined: strings and characters as they are, nil as nothing, anything else as
+print writes it."]
+   ["subs" "([s start] [s start end])"
+    "The part of the string s from index start to end (its end), counting characters."]
+   ["name" "([x])"
+    "The name of a keyword or symbol (without its namespace), or a string itself."]
+   ["namespace" "([x])"
+    "The namespace of a keyword or symbol, or nil."]
+   ["keyword" "([name] [ns name])"
+    "The keyword with name (and namespace ns)."]
+   ["symbol" "([name] [ns name])"
+    "The symbol with name (and namespace ns)."]
+   ["gensym" "([] [prefix])"
+    "A new symbol, unlike any other: prefix (G__) and a number."]
+   ["pr" "([& xs])"
+    "Print xs readably (strings quoted), separated by spaces."]
+   ["prn" "([& xs])"
+    "pr, then a newline."]
+   ["print" "([& xs])"
+    "Print xs for people (strings and characters as they are), separated by spaces."]
+   ["println" "([& xs])"
+    "print, then a newline."]
+   ["pr-str" "([& xs])"
+    "What pr prints of xs, as a string."]
+   ["read-string" "([s])"
+    "The first form of the string s, as data. In programs built with --eval."]
+   ["list" "([& xs])"
+    "A list of xs."]
+   ["vector" "([& xs])"
+    "A vector of xs."]
+   ["vec" "([coll])"
+    "A vector of the elements of coll."]
+   ["hash-map" "([& kvs])"
+    "A map of the keys and values, in pairs."]
+   ["hash-set" "([& xs])"
+    "A set of xs."]
+   ["sorted-map" "([& kvs])"
+    "A sorted map of the keys and values, ordered by compare."]
+   ["sorted-map-by" "([comparator & kvs])"
+    "A sorted map ordered by comparator: a function of two keys returning a negative, zero or
+positive number, or true when the first comes first (as >)."]
+   ["sorted-set" "([& xs])"
+    "A sorted set of xs, ordered by compare."]
+   ["sorted-set-by" "([comparator & xs])"
+    "A sorted set of xs ordered by comparator (as sorted-map-by's)."]
+   ["sorted?" "([x])"
+    "True if x is a sorted map or set."]
+   ["cons" "([x coll])"
+    "A seq of x followed by the elements of coll."]
+   ["conj" "([] [coll] [coll x & xs])"
+    "coll with xs added where that kind of collection adds them: lists at the front, vectors at
+the end, maps take [k v] entries (or maps); nil gives a list."]
+   ["assoc" "([m k v & kvs])"
+    "The map m with k mapped to v (and the rest), or the vector m with index k set to v."]
+   ["dissoc" "([m & ks])"
+    "The map m without the keys ks."]
+   ["disj" "([s & xs])"
+    "The set s without xs."]
+   ["get" "([coll k] [coll k not-found])"
+    "The value at key k of a map, index k of a vector or string, element k of a set, or slot k of
+an instance; not-found (nil) if there's none."]
+   ["contains?" "([coll k])"
+    "True if the map or set coll has the key k, or the vector the index k."]
+   ["count" "([coll])"
+    "The number of elements of coll (nil: 0); walks a seq."]
+   ["empty?" "([coll])"
+    "True if coll has no elements."]
+   ["nth" "([coll i] [coll i not-found])"
+    "The element at index i of a vector, list, seq, string or array; an index-error past the end
+unless not-found is given."]
+   ["first" "([coll])"
+    "The first element of coll, or nil."]
+   ["rest" "([coll])"
+    "A seq of the elements after the first (empty, never nil)."]
+   ["next" "([coll])"
+    "A seq of the elements after the first, or nil."]
+   ["seq" "([coll])"
+    "A seq of coll's elements (a map's [k v] entries), or nil if it's empty."]
+   ["peek" "([coll])"
+    "The last element of a vector, or the first of a list."]
+   ["pop" "([coll])"
+    "A vector without its last element, or a list without its first."]
+   ["keys" "([m])"
+    "A seq of the map m's keys (an instance's slot names), or nil."]
+   ["vals" "([m])"
+    "A seq of the map m's values, or nil."]
+   ["reduce" "([f coll] [f init coll])"
+    "Combine the elements of coll with f, from init (or the first element); (reduced x) stops
+early with x."]
+   ["reduced" "([x])"
+    "x wrapped so that reduce stops and returns it."]
+   ["reduced?" "([x])"
+    "True if x is wrapped by reduced."]
+   ["unreduced" "([x])"
+    "x unwrapped if reduced wraps it."]
+   ["ensure-reduced" "([x])"
+    "x wrapped by reduced, unless it is already."]
+   ["apply" "([f args] [f x & more])"
+    "Call f with the arguments, the last of them a collection whose elements are passed one by
+one."]
+   ["map?" "([x])"
+    "True if x is a map."]
+   ["set?" "([x])"
+    "True if x is a set."]
+   ["vector?" "([x])"
+    "True if x is a vector."]
+   ["list?" "([x])"
+    "True if x is a list."]
+   ["seq?" "([x])"
+    "True if x is a seq (lists among them)."]
+   ["coll?" "([x])"
+    "True if x is a collection: a list, vector, map, set or seq."]
+   ["sequential?" "([x])"
+    "True if x is a list, vector or seq."]
+   ["associative?" "([x])"
+    "True if x is a map or vector."]
+   ["counted?" "([x])"
+    "True if count of x takes constant time."]
+   ["realized?" "([x])"
+    "True if the lazy seq, promise or delay x has its value."]
+   ["meta" "([x])"
+    "The metadata map of a collection or symbol, or nil."]
+   ["with-meta" "([x m])"
+    "The collection or symbol x with the metadata map m (nil: none)."]
+   ["transient" "([coll])"
+    "A transient copy of a vector, map or set, changed in place by conj!, assoc!, dissoc!, disj!
+and pop!, and owned by this fiber."]
+   ["persistent!" "([t])"
+    "The transient t as a persistent collection; t can't be used after."]
+   ["conj!" "([t x])"
+    "Add x to the transient t; returns t."]
+   ["assoc!" "([t k v])"
+    "Map k to v in the transient map or vector t; returns t."]
+   ["dissoc!" "([t k])"
+    "Remove k from the transient map t; returns t."]
+   ["disj!" "([t x])"
+    "Remove x from the transient set t; returns t."]
+   ["pop!" "([t])"
+    "Remove the last element of the transient vector t; returns t."]
+   ["make" "([class & initargs])"
+    "A new instance of class (a class or its name), its slots set from the keyword initargs or
+their :init."]
+   ["with" "([x & kvs])"
+    "A copy of the instance or struct x with the slots or fields changed; :fresh-cells true gives
+a copy's cell slots new cells."]
+   ["slot" "([x name] [x name not-found])"
+    "The value of slot name (a keyword) of the instance x; a cell slot's current value."]
+   ["set-slot!" "([x name value])"
+    "Set the cell or unsynchronized slot name of the instance x; returns value."]
+   ["update-slot!" "([x name f & args])"
+    "Set slot name of x to (f old args...): atomically for an :atom cell. Returns the new value."]
+   ["cell" "([x name])"
+    "The cell object (an atom or ref) behind slot name of the instance x."]
+   ["class-of" "([x])"
+    "The class of x."]
+   ["class-name" "([class])"
+    "The name of class, a symbol."]
+   ["class-slots" "([class])"
+    "The slots of class, inherited ones too, as a vector of keywords."]
+   ["class-precedence-list" "([class])"
+    "class and its superclasses, most specific first."]
+   ["instance?" "([class x])"
+    "True if x is an instance of class or of a class below it."]
+   ["generic-methods" "([f])"
+    "The methods of the generic function f."]
+   ["struct?" "([x])"
+    "True if x is a struct value."]
+   ["array?" "([x])"
+    "True if x is an array or a view of one."]
+   ["aget" "([array i])"
+    "The element at index i of array."]
+   ["aset!" "([array i value])"
+    "Set the element at index i of array; returns value."]
+   ["update!" "([array i f & args] [array i field f & args])"
+    "Set element i of array to (f old args...), or for an array of structs its field."]
+   ["view" "([array start] [array start end])"
+    "A slice of the primitive array from start to end that shares its memory."]
+   ["as-bytes" "([array])"
+    "A byte view of the numeric array, for C or GPU APIs; count is its size in bytes."]
+   ["atom" "([x & options])"
+    "An atom holding x; :validator f checks each new value."]
+   ["atom?" "([x])"
+    "True if x is an atom."]
+   ["deref" "([ref] [ref seconds timeout-value])"
+    "The value of an atom, ref, volatile, promise, delay or task (@x), waiting for a promise or
+task, at most seconds when given."]
+   ["reset!" "([a x])"
+    "Set the atom a to x; returns x."]
+   ["reset-vals!" "([a x])"
+    "Set the atom a to x; returns [old new]."]
+   ["swap!" "([a f & args])"
+    "Set the atom a to (f old args...), retrying if another fiber changed it first; returns the
+new value."]
+   ["swap-vals!" "([a f & args])"
+    "swap!, returning [old new]."]
+   ["compare-and-set!" "([a old new])"
+    "Set the atom a to new if it holds old (identical); true if it did."]
+   ["add-watch" "([reference key f])"
+    "Call (f key reference old new) after each change of the atom or ref; a watch with the same
+key is replaced."]
+   ["remove-watch" "([reference key])"
+    "Remove the watch with key."]
+   ["set-validator!" "([reference f])"
+    "Check each new value of the atom or ref with f, which must accept the current one; nil
+removes it."]
+   ["get-validator" "([reference])"
+    "The validator of the atom or ref, or nil."]
+   ["ref" "([x & options])"
+    "A ref holding x, changed in dosync transactions; :validator f checks each committed value."]
+   ["ref?" "([x])"
+    "True if x is a ref."]
+   ["ref-set" "([r x])"
+    "Set the ref r to x in the running transaction."]
+   ["alter" "([r f & args])"
+    "Set the ref r to (f value args...) in the running transaction; returns the new value."]
+   ["commute" "([r f & args])"
+    "Like alter, but f is applied again to the latest value at commit, so commuting transactions
+don't conflict."]
+   ["ensure" "([r])"
+    "The value of the ref r, which no other transaction may change until this one commits."]
+   ["volatile!" "([x])"
+    "A volatile holding x: a box with no synchronization, for one fiber."]
+   ["volatile?" "([x])"
+    "True if x is a volatile."]
+   ["vreset!" "([v x])"
+    "Set the volatile v to x; returns x."]
+   ["vswap!" "([v f & args])"
+    "Set the volatile v to (f old args...); returns it."]
+   ["promise" "([])"
+    "A promise: deliver gives it a value once, and deref waits for it."]
+   ["deliver" "([p x])"
+    "Give the promise p the value x, waking what waits; p, or nil if it had one."]
+   ["delay?" "([x])"
+    "True if x is a delay."]
+   ["equiv" "([a b])"
+    "The generic function = uses for instances: identity unless a method says otherwise
+(specialize hash-of with it)."]
+   ["hash-of" "([x])"
+    "x's hash, consistent with =: a generic function that classes specializing equiv specialize
+too."]
+   ["initialize" "([instance])"
+    "A generic function make calls on each new instance, after its slots are set; methods set up
+more."]
+   ["update-instance-for-redefined-class" "([instance added discarded old-values])"
+    "A generic function called on an instance whose class was redefined: added and discarded slot
+names, and the old values."]
+   ["close" "([x])"
+    "Close x: a generic function, which skein.io's streams specialize, and with-open calls."]
+   ["error" "([x & args])"
+    "Signal an error: a condition, a condition type with keyword initargs, or a message string
+joined from args as println does; unhandled, it enters the debugger or ends the fiber."]
+   ["signal" "([x & args])"
+    "Signal a condition (as error takes it); nil if no handler unwinds."]
+   ["warn" "([x & args])"
+    "Signal a warning (as error takes it), printed if nothing handles it; returns nil."]
+   ["make-condition" "([type & initargs])"
+    "A condition of type with the slots from the keyword initargs."]
+   ["condition?" "([x])"
+    "True if x is a condition."]
+   ["error?" "([x])"
+    "True if x is a condition of the type error or below."]
+   ["condition-message" "([c])"
+    "The message of the condition c, as its report writes it."]
+   ["condition-type" "([c])"
+    "The condition type of c."]
+   ["condition-type-name" "([type])"
+    "The qualified name of a condition type, a symbol."]
+   ["ex-info" "([message data] [message data cause])"
+    "An error of type ex-info carrying the map data (and the condition cause); signal it with
+error."]
+   ["ex-data" "([x])"
+    "The data map of an ex-info, or nil."]
+   ["ex-cause" "([x])"
+    "The cause of a condition, or nil."]
+   ["ex-message" "([x])"
+    "The message of a condition, or nil."]
+   ["invoke-restart" "([restart & args])"
+    "Transfer control to the restart (or the active restart with that name), passing args."]
+   ["find-restart" "([name] [name condition])"
+    "The active restart with name, or nil."]
+   ["compute-restarts" "([] [condition])"
+    "The active restarts, innermost first."]
+   ["restart-name" "([restart])"
+    "The name of restart, a symbol."]
+   ["restart-report" "([restart])"
+    "The description of restart."]
+   ["chan" "([] [n])"
+    "A channel: unbuffered, or with a buffer of n values."]
+   ["chan?" "([x])"
+    "True if x is a channel."]
+   ["<!" "([ch])"
+    "Take a value from the channel ch, waiting for one; nil once it is closed and empty."]
+   [">!" "([ch x])"
+    "Put x (not nil) on the channel ch, waiting for room; false if it is closed."]
+   ["alts!" "([ops])"
+    "Wait for the first of the operations to complete: channels to take from, [channel value] to
+put; returns [value channel]."]
+   ["close!" "([ch])"
+    "Close the channel ch: puts fail, and takes return nil once it is empty."]
+   ["timeout-chan" "([seconds])"
+    "A channel that closes after seconds."]
+   ["task?" "([x])"
+    "True if x is a task (a future or a spawned fiber)."]
+   ["done?" "([task])"
+    "True if the task has finished, failed or been cancelled."]
+   ["cancelled?" "([task])"
+    "True if the task was cancelled."]
+   ["cancel!" "([task])"
+    "Ask the task to stop: it signals cancelled at its next cancellation point."]
+   ["check-cancelled" "([])"
+    "A cancellation point: signal cancelled if this task or a scope around it was cancelled, or a
+timeout passed."]
+   ["sleep" "([seconds])"
+    "Wait seconds (parking the fiber); a cancellation point."]
+   ["cpu-count" "([])"
+    "The number of CPUs the parallel functions use."]
+   ["drain-main-thread!" "([])"
+    "On the main thread, run the work queued for it (on-main-thread, spawn-pinned :main)."]
+   ["eval" "([form])"
+    "Evaluate form (data) in the current namespace. In programs built with --eval."]
+   ["load-file" "([path])"
+    "Evaluate the forms of the file at path; the last value. In programs built with --eval."]
+   ["reload" "([ns])"
+    "Load the namespace ns again from its file (hot reload). In programs built with --eval."]
+   ["macroexpand-1" "([form])"
+    "form expanded once if it is a macro call. In programs built with --eval."]
+   ["macroexpand" "([form])"
+    "form expanded until its head is not a macro. In programs built with --eval."]
+   ["macroexpand-all" "([form])"
+    "form with every macro call in it expanded. In programs built with --eval."]
+   ["skein.ffi/load-library" "([name])"
+    "Load the C library name (found next to the program, then as the system finds it)."]
+   ["skein.ffi/null" "([])"
+    "The C null pointer."]
+   ["skein.ffi/null?" "([p])"
+    "True if p is a null pointer or nil."]
+   ["skein.ffi/ptr?" "([x])"
+    "True if x is a C pointer."]
+   ["skein.ffi/ptr+" "([p n])"
+    "The pointer p moved n bytes."]
+   ["skein.ffi/address" "([p])"
+    "The address of the pointer p, an integer."]
+   ["skein.ffi/own" "([p])"
+    "The pointer p, owned by Skein: freed when it is unreachable, unless freed first."]
+   ["skein.ffi/free" "([p])"
+    "Free C memory from alloc (or own)."]
+   ["skein.ffi/c-string" "([p])"
+    "The NUL-terminated UTF-8 string at the pointer p."]
+   ["skein.ffi/enum-value" "([enum x])"
+    "The integer for x in the C enum: a key, a collection of keys ORed together, or an integer."]
+   ["skein.ffi/handle" "([x])"
+    "A stable integer token for the Skein value x, which C can hold and give back."]
+   ["skein.ffi/handle-value" "([h])"
+    "The value the handle h stands for."]
+   ["skein.ffi/free-handle" "([h])"
+    "Release the handle h, so its value can be collected."]
+   ["skein.math/sin" "([x])"
+    "The sine of x (radians)."]
+   ["skein.math/cos" "([x])"
+    "The cosine of x (radians)."]
+   ["skein.math/tan" "([x])"
+    "The tangent of x (radians)."]
+   ["skein.math/asin" "([x])"
+    "The arc sine of x, in radians."]
+   ["skein.math/acos" "([x])"
+    "The arc cosine of x, in radians."]
+   ["skein.math/atan" "([x])"
+    "The arc tangent of x, in radians."]
+   ["skein.math/atan2" "([y x])"
+    "The angle of the point (x, y), in radians from -pi to pi."]
+   ["skein.math/exp" "([x])"
+    "e to the power x."]
+   ["skein.math/log" "([x])"
+    "The natural logarithm of x."]
+   ["skein.math/pow" "([x y])"
+    "x to the power y."]
+   ["skein.math/floor" "([x])"
+    "The largest integral value not above x, of x's float type."]
+   ["skein.math/ceil" "([x])"
+    "The smallest integral value not below x."]
+   ["skein.math/round" "([x])"
+    "x rounded to the nearest integral value, halves away from zero."]
+   ["skein.math/trunc" "([x])"
+    "x rounded toward zero."]
+   ["skein.math/noise" "([x y] [x y z])"
+    "Perlin noise at the point, from -1 to 1."]
+   ["skein.time/now" "([])"
+    "Monotonic time in seconds, an f64, for measuring durations."]
+   ["skein.time/now-ns" "([])"
+    "Monotonic time in nanoseconds, an integer."]])

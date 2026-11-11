@@ -1,0 +1,35 @@
+;; build: --eval
+(ns runtime-docs
+  (:require [skein.test :refer [deftest is run-tests]]
+            [skein.core.docs :as docs]))
+
+;; Docstrings and argument lists for the runtime's functions (M2.11 step 8, D-093),
+;; compared with runtime-docs.expected: the table covers every public runtime function,
+;; and a program built with --eval gives them to the vars that describe and autodoc read.
+
+(defn- public? [nm]
+  (let [plain (if-let [i (some (fn [[i c]] (when (= c \/) i)) (map-indexed vector nm))]
+                (subs nm (inc i))
+                nm)]
+    (not= \% (first plain))))
+
+(deftest the-table-covers-the-runtime
+  (let [runtime (set (filter public? (%core-function-names)))
+        documented (set (map first docs/entries))]
+    (is (= #{} (set (remove documented runtime))) "runtime functions without docs")
+    (is (= #{} (set (remove runtime documented))) "docs of no runtime function")
+    (is (= (count docs/entries) (count documented)) "a name twice")
+    (is (every? (fn [[_ arglists doc]] (and (string? arglists) (string? doc)))
+                docs/entries))))
+
+(defn- info [ns-name nm]
+  (%var-info (%find-own-var (%find-namespace ns-name) nm)))
+
+(deftest vars-have-them
+  (is (= "([] [x] [x y & more])" (:arglists (info "skein.core" "+"))))
+  (is (= "The sum of the numbers; 0 with none."
+         (subs (:doc (info "skein.core" "+")) 0 36)))
+  (is (= "([x])" (:arglists (info "skein.math" "sin"))))
+  (is (string? (:doc (info "skein.core" "close")))))
+
+(prn (select-keys (run-tests 'runtime-docs) [:test :fail :error]))

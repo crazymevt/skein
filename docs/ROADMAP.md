@@ -397,7 +397,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   5. ✅ References and collections: `delay`/`force`, `promise`/`deliver`, `volatile!`, watches and validators on atoms and refs, `swap-vals!`, `reset-vals!`, and sorted maps and sets (randomized tests against a model).
   6. ✅ Metadata on collections and symbols, and `ex-info`, `ex-data` and `ex-message`.
   7. ✅ `skein.io` (directories, paths, bytes, streams) and `skein.log`.
-  8. Docstrings and argument lists for the runtime's Zig functions, which `--eval` builds register for SLIME and describe.
+  8. ✅ Docstrings and argument lists for the runtime's Zig functions, which `--eval` builds register for SLIME and describe.
 
 **Exit:** every function and macro above exists natively with tests (randomized against a model where it fits), the Phase 0 host has the ones that fixtures compare with it, and `skein test` runs a project's tests on all three platforms.
 
