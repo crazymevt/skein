@@ -1701,7 +1701,8 @@ const base_table = [_]Entry{
 const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(watch.entries) ++ entriesOf(@import("files.zig").entries) ++ entriesOf(io.entries) ++
     entriesOf(compiler.entries) ++ entriesOf(ffi.entries) ++ entriesOf(mathtime.entries) ++
     entriesOf(evaluate.entries) ++ entriesOf(devio.entries) ++
-    entriesOf(@import("stm.zig").entries) ++ entriesOf(string.entries);
+    entriesOf(@import("stm.zig").entries) ++ entriesOf(string.entries) ++
+    entriesOf(@import("process.zig").entries);
 
 fn entriesOf(comptime from: anytype) [from.len]Entry {
     var t: [from.len]Entry = undefined;

@@ -201,6 +201,33 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore f))
   nil)
 
+;; skein.process (M3.1, D-103) is native only.
+(defcore "%process-start" (argv dir env in out err)
+  (declare (ignore argv dir env in out err))
+  (error "skein.process is native only (D-103)"))
+
+(defcore "%process-stream" (h i)
+  (declare (ignore h i))
+  (error "skein.process is native only (D-103)"))
+
+(defcore "%process-pid" (h)
+  (declare (ignore h))
+  (error "skein.process is native only (D-103)"))
+
+(defcore "%process-exit" (h)
+  (declare (ignore h))
+  (error "skein.process is native only (D-103)"))
+
+(defcore "%process-wait" (h seconds)
+  (declare (ignore h seconds))
+  (error "skein.process is native only (D-103)"))
+
+(defcore "%environment" ()
+  (error "skein.process is native only (D-103)"))
+
+(defcore "%executable-path" ()
+  (error "skein.process is native only (D-103)"))
+
 (defcore "%task-spawner-restarts" (task)
   ;; Phase 0's tasks don't record their spawner's restarts (D-101).
   (declare (ignore task))

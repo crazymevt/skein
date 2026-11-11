@@ -1,0 +1,12 @@
+echoed: [got a got b got c]
+exit: 0
+a pid: true
+the counter ran meanwhile: true
+its environment: hello
+its directory: true
+exit status: 7 7
+within 0.1 s: nil nil
+then: 0
+stderr in a file: "to stderr\n"
+no stdout stream: true
+missing program: nil

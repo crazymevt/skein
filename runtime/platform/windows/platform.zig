@@ -390,3 +390,37 @@ pub fn switchFiber(from: *FiberContext, to: *FiberContext) void {
     _ = from;
     SwitchToFiber(to.handle.?);
 }
+
+// ---------------------------------------------------------------------------------------
+// Processes (skein.process, M3.1, D-103)
+
+extern "kernel32" fn CreateJobObjectW(attributes: ?*anyopaque, name: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn AssignProcessToJobObject(job: *anyopaque, process: *anyopaque) callconv(.winapi) i32;
+extern "kernel32" fn ResumeThread(thread: *anyopaque) callconv(.winapi) u32;
+extern "kernel32" fn GetProcessId(process: *anyopaque) callconv(.winapi) u32;
+
+pub fn prepareForProcesses() void {}
+
+/// Every program starts suspended, so that it joins its job object (startedProcess)
+/// before it can start programs of its own.
+pub fn processGroupOptions(options: *std.process.SpawnOptions, own_group: bool) void {
+    _ = own_group;
+    options.start_suspended = true;
+}
+
+/// Put the program in a job object of its own, which reaches what it starts, and let it
+/// run. The job, or null if one couldn't be made.
+pub fn startedProcess(child: *std.process.Child) ?*anyopaque {
+    const job = CreateJobObjectW(null, null);
+    if (job) |j| _ = AssignProcessToJobObject(j, child.id.?);
+    _ = ResumeThread(child.thread_handle);
+    return job;
+}
+
+pub fn releaseProcessJob(job: ?*anyopaque) void {
+    if (job) |j| _ = CloseHandle(j);
+}
+
+pub fn childProcessId(child: *const std.process.Child) i64 {
+    return GetProcessId(child.id.?);
+}

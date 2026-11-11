@@ -385,3 +385,37 @@ fn initialFrame(high: usize, entry: FiberEntry, arg: ?*anyopaque) usize {
 
 /// The first code a new fiber runs (fibers.c): it calls `entry(arg)`.
 extern fn sk_fiber_start() callconv(.c) void;
+
+// ---------------------------------------------------------------------------------------
+// Processes (skein.process, M3.1, D-103)
+
+var pipes_prepared = std.atomic.Value(bool).init(false);
+
+/// Before the first program starts: ignore SIGPIPE, so that writing to a pipe whose reader
+/// has gone fails rather than ending the program (as Python and Rust do). Children inherit
+/// it ignored.
+pub fn prepareForProcesses() void {
+    if (pipes_prepared.swap(true, .acq_rel)) return;
+    var act: posix.Sigaction = .{ .handler = .{ .handler = posix.SIG.IGN }, .mask = posix.sigemptyset(), .flags = 0 };
+    posix.sigaction(posix.SIG.PIPE, &act, null);
+}
+
+/// A program in a process group of its own, so that it and what it starts can be signaled
+/// together; not when it reads the terminal, which a background group can't.
+pub fn processGroupOptions(options: *std.process.SpawnOptions, own_group: bool) void {
+    if (own_group) options.pgid = 0;
+}
+
+/// After it starts: Windows puts the program in a job object; nothing here.
+pub fn startedProcess(child: *std.process.Child) ?*anyopaque {
+    _ = child;
+    return null;
+}
+
+pub fn releaseProcessJob(job: ?*anyopaque) void {
+    _ = job;
+}
+
+pub fn childProcessId(child: *const std.process.Child) i64 {
+    return child.id.?;
+}

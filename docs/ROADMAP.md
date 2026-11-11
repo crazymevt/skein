@@ -504,7 +504,7 @@ Steps 4 and 5 wait for their first CI runs (GitHub Actions was down when they we
 
 - Settled (D-103): a new namespace, `skein.process`, in babashka.process's style: `(process [program arg...] opts)` returns a process whose `:in`, `:out` and `:err` are `skein.io` streams, `@p` waits and gives `{:exit n}`, with `alive?`, `pid`, `destroy!`, `destroy-tree!` and `(signal! p :interrupt|:terminate|:kill)`; options `:dir`, `:env`, `:extra-env`, and `:in`/`:out`/`:err` as `:pipe`, `:inherit`, `:discard` or a file, with `:err :out`. Native only. `skein.io/run-process` stays.
 - Steps, in order (D-103):
-  1. The runtime: starting a program with pipes on Unix (in a process group of its own) and Windows (in a job object), found on the `PATH`, with its directory and environment; its pipes as `skein.io` streams; waiting for it as a blocking call that parks the fiber; its pid and whether it's alive. Native tests with a small Skein program as the child, so they need nothing installed.
+  1. ✅ The runtime: starting a program with pipes on Unix (in a process group of its own) and Windows (in a job object), found on the `PATH`, with its directory and environment; its pipes as `skein.io` streams; waiting for it as a blocking call that parks the fiber; its pid and whether it's alive. Native tests with a small Skein program as the child, so they need nothing installed.
   2. `skein.process`: `process` with its options and redirections, `deref` with a timeout, `alive?`, `pid`, `destroy!`; DESIGN §21 and the docstrings.
   3. Signals and trees: `signal!` by intent and `destroy-tree!` on the three platforms, tested with a child that starts children of its own.
   4. Many at once: fibers that talk to several programs while others run, a stress test, and a check that nothing leaks (pipes, handles, zombies).
@@ -589,6 +589,8 @@ Steps 4 and 5 wait for their first CI runs (GitHub Actions was down when they we
 
 ## Notes for later
 Ideas and follow-ups noticed during work, kept here so they don't derail the current milestone.
+
+- Programs can't read their own standard input through a public API: the REPL reads the terminal through `%stdin` and `%read-text`. `skein.io` could give stdin, stdout and stderr as streams (`*in*`, or `(io/stdin)`), which a child program of `skein.process` would want; the names need Jessie's OK (M3.1).
 
 - skein-ui step 2 showed two small gaps in Skein itself, left for a decision (a var is declared before its definition with `(def name)`, as Clojure's `declare` does): `skein.math/round`, `floor` and `ceil` return floats for floats, where Clojure's `clojure.math/round` returns an integer (callers write `(int (math/round x))`); and nothing reads a number from bytes (a big-endian `u32` from a `u8` array, as for a PNG header), which binary file formats in games will want. Step 4 showed two more: `skein.core` has no `flush` (Clojure's, for `*out*`) and no `*err*`, so a program can't flush standard output or write to standard error without `skein.log`.
 - skein-ui part F (M2.14): Skein's finalizers only free foreign memory (`ffi/own`); a finalizer that runs Skein code (on the UI thread, queued) when an object is collected would let images release their native images by themselves, as LGT's do with trivial-garbage, rather than only through `free-image!`.

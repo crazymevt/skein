@@ -372,6 +372,9 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%utf8-length" "%utf8-split" "%absolute-path"
     ;; Supervisors (M2.8, D-088), and the spawner's restarts in a task's debugger (D-101)
     "%install-task-runner!" "%task-spawner-restarts" "%choose-spawner-restart!"
+    ;; Processes (M3.1, D-103)
+    "%process-start" "%process-stream" "%process-pid" "%process-exit" "%process-wait"
+    "%environment" "%executable-path"
     ;; Hot reload (M2.9, D-091)
     "%load-module" "%evaluated?"
     ;; STM (M2.10, D-092)

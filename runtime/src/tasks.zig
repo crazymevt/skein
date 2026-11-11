@@ -758,6 +758,43 @@ fn awaitTask(t: Value, deadline: ?u64) ?Value {
     };
 }
 
+// ---------------------------------------------------------------------------------------
+// Waiting for something else (process.zig's exits, D-103)
+
+const KeyWait = struct {
+    key: u64,
+    ready_fn: *const fn (?*anyopaque) bool,
+    arg: ?*anyopaque,
+    fn ready(w: *const KeyWait) bool {
+        return w.ready_fn(w.arg);
+    }
+    fn keys(w: *const KeyWait, out: []u64) usize {
+        out[0] = w.key;
+        return 1;
+    }
+    fn abort(_: *const KeyWait) void {}
+};
+
+/// Wait until `ready_fn(arg)` (asked under the scheduler's lock) is true, parking a fiber
+/// rather than its worker, at most `seconds` (nil: no limit); true if it became ready.
+/// Whatever makes it ready calls `notifyFromAnyThread(key)` afterwards. Cancellation
+/// points apply, as in any wait.
+pub fn waitForKey(key: u64, ready_fn: *const fn (?*anyopaque) bool, arg: ?*anyopaque, seconds: Value) bool {
+    const w: KeyWait = .{ .key = key, .ready_fn = ready_fn, .arg = arg };
+    const deadline: ?u64 = if (seconds == Value.nil) null else nanosFromNow(seconds);
+    if (!waitFor(&w, deadline)) return false;
+    unlock();
+    return true;
+}
+
+/// Wake the waiters of `key`, from any thread, including one the runtime doesn't know
+/// (which mustn't take the lock through gc.blocking).
+pub fn notifyFromAnyThread(key: u64) void {
+    sched_lock.lock();
+    wait.notifyAll(key);
+    sched_lock.unlock();
+}
+
 /// deref of a task: (deref task) or (deref task seconds timeout-value).
 pub fn deref(a: []const Value) Value {
     const deadline: ?u64 = if (a.len >= 2) nanosFromNow(a[1]) else null;

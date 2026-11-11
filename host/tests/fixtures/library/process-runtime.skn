@@ -1,0 +1,84 @@
+;; skein.process's runtime (M3.1 step 1, D-103), natively: this program starts itself as a
+;; child (its first argument says what the child does), talks to it over pipes from
+;; fibers while another runs, and checks its environment, directory, exit status and
+;; redirections, and waiting with a time limit.
+(ns process-runtime
+  (:require [skein.system :as system]
+            [skein.io :as io]
+            [skein.string :as string]))
+
+;;; The child
+
+(defn- stdin-lines
+  "This program's standard input, as lines (the REPL's primitives read it)."
+  []
+  (let [in (%stdin)]
+    (loop [pending "" lines []]
+      (if-let [text (%read-text in)]
+        ;; With a limit, split keeps the empty part after a final newline.
+        (let [s (str pending text)
+              parts (string/split s "\n" (inc (count s)))]
+          ;; The last part has no newline yet.
+          (recur (last parts) (into lines (butlast parts))))
+        (if (empty? pending) lines (conj lines pending))))))
+
+(defn- child [mode]
+  (case mode
+    "echo" (doseq [line (stdin-lines)] (println (str "got " line)))
+    "env" (do (println (system/getenv "SKEIN_PROCESS_TEST"))
+              (println (io/absolute-path ".")))
+    "exit" (%exit 7)
+    "stderr" (%write-stderr "to stderr\n")
+    "sleep" (sleep 2)))
+
+;;; The parent
+
+(defn- start [mode opts]
+  (%process-start [(%executable-path) mode] (:dir opts) (:env opts)
+                  (or (:in opts) :pipe) (or (:out opts) :pipe) (or (:err opts) :pipe)))
+
+(defn- out-lines [h]
+  (let [out (%process-stream h 1)]
+    (loop [lines []]
+      (if-let [line (%stream-read-line out)] (recur (conj lines line)) lines))))
+
+(defn- parent []
+  ;; Talking to it from fibers: one writes, one reads, and another counts meanwhile.
+  (let [h (start "echo" {})
+        in (%process-stream h 0)
+        writer (future (doseq [x ["a" "b" "c"]] (%stream-write in (str x "\n") nil nil)
+                         (%stream-flush in) (sleep 0.05))
+                       (%stream-close in))
+        reader (future (out-lines h))
+        ticks (atom 0)
+        counter (future (dotimes [_ 5] (swap! ticks inc) (sleep 0.01)))]
+    @writer @counter
+    (println "echoed:" @reader)
+    (println "exit:" (%process-wait h nil))
+    (println "a pid:" (pos? (%process-pid h)))
+    (println "the counter ran meanwhile:" (= 5 @ticks)))
+  ;; Its environment and directory.
+  (let [dir (io/absolute-path "build")
+        h (start "env" {:dir dir :env (assoc (%environment) "SKEIN_PROCESS_TEST" "hello")})
+        [value cwd] (out-lines h)]
+    (%process-wait h nil)
+    (println "its environment:" value)
+    (println "its directory:" (= (string/lower-case cwd) (string/lower-case dir))))
+  ;; Its exit status.
+  (let [h (start "exit" {})]
+    (println "exit status:" (%process-wait h nil) (%process-exit h)))
+  ;; Waiting with a time limit.
+  (let [h (start "sleep" {})]
+    (println "within 0.1 s:" (%process-wait h 0.1) (%process-exit h))
+    (println "then:" (%process-wait h nil)))
+  ;; Redirections: stderr to a file, stdout discarded, so no stream.
+  (let [file "build/examples/process-runtime-err.txt"
+        h (start "stderr" {:out :discard :err file})]
+    (%process-wait h nil)
+    (println "stderr in a file:" (pr-str (io/read-file file)))
+    (println "no stdout stream:" (nil? (%process-stream h 1))))
+  ;; A program that isn't there.
+  (println "missing program:" (%process-start ["skein-no-such-program"] nil nil :pipe :pipe :pipe)))
+
+(defn -main [& args]
+  (if (seq args) (child (first args)) (parent)))

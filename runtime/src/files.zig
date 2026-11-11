@@ -159,6 +159,9 @@ const Stream = struct {
     /// Write: bytes not yet written.
     pending: std.ArrayList(u8) = .empty,
     failed: bool = false,
+    /// A pipe (a process's stdin, stdout or stderr, D-103): read and written in sequence,
+    /// with no offset.
+    pipe: bool = false,
 };
 
 var lock: platform.Mutex = .{};
@@ -199,6 +202,17 @@ fn open(path: Value, mode: Value) Value {
     const file = call.file orelse return Value.nil;
     const s = alloc.create(Stream) catch rt.fatal("out of memory", .{});
     s.* = .{ .file = file, .offset = call.offset };
+    return register(s);
+}
+
+/// A stream handle for a process's pipe (process.zig, D-103), which the stream now owns.
+pub fn registerPipe(file: std.Io.File) Value {
+    const s = alloc.create(Stream) catch rt.fatal("out of memory", .{});
+    s.* = .{ .file = file, .offset = 0, .pipe = true };
+    return register(s);
+}
+
+fn register(s: *Stream) Value {
     lock.lock();
     defer lock.unlock();
     for (table.items, 0..) |slot, i| {
@@ -214,8 +228,12 @@ fn open(path: Value, mode: Value) Value {
 fn fillBlocking(arg: ?*anyopaque) void {
     const s: *Stream = @ptrCast(@alignCast(arg));
     const sio = io.stdIo();
-    const n = s.file.readPositional(sio, &.{s.buf[0..]}, s.offset) catch {
-        s.failed = true;
+    const n = (if (s.pipe)
+        s.file.readStreaming(sio, &.{s.buf[0..]})
+    else
+        s.file.readPositional(sio, &.{s.buf[0..]}, s.offset)) catch |err| {
+        // A pipe's end, when the program closes its side, is the end of the stream.
+        if (err != error.EndOfStream) s.failed = true;
         s.eof = true;
         return;
     };
@@ -296,7 +314,11 @@ fn readInto(h: Value, array: Value, start: Value, n: Value) Value {
 
 fn flushBlocking(arg: ?*anyopaque) void {
     const s: *Stream = @ptrCast(@alignCast(arg));
-    s.file.writePositionalAll(io.stdIo(), s.pending.items, s.offset) catch {
+    // A pipe whose reader has gone fails (the runtime ignores SIGPIPE, process.zig).
+    (if (s.pipe)
+        s.file.writeStreamingAll(io.stdIo(), s.pending.items)
+    else
+        s.file.writePositionalAll(io.stdIo(), s.pending.items, s.offset)) catch {
         s.failed = true;
         return;
     };
