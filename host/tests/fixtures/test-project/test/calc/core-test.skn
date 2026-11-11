@@ -1,0 +1,8 @@
+(ns calc.core-test
+  (:require [calc.core :as c]
+            [skein.test :refer [deftest is testing]]))
+
+(deftest adds
+  (is (= 3 (c/add 1 2)))
+  (testing "negative numbers"
+    (is (= -1 (c/add 1 -2)))))

@@ -1,0 +1,247 @@
+(ns skein.test
+  "Unit tests in the style of clojure.test (DESIGN §20.3, M2.11, D-093).
+
+  (deftest addition
+    (testing \"small numbers\"
+      (is (= 4 (+ 2 2)))
+      (is (thrown? arithmetic-error (/ 1 0)))))
+
+  (run-tests 'my.ns)
+
+deftest defines a function of no arguments that runs its body as a test and registers it
+with its namespace; run-tests runs the tests of namespaces, in the order they were
+defined, with the namespace's fixtures (use-fixtures), and prints a report. is checks that
+a form is true: for a call of a function, a failure reports the arguments' values;
+(thrown? type body...) checks that the body signals a condition of the type, and
+(thrown-with-msg? type text body...) also that its message contains text. `skein test`
+runs a project's tests natively.")
+
+(def ^:dynamic *counters*
+  "The counts of the run going on: an atom of {:test :pass :fail :error}, or nil."
+  nil)
+
+(def ^:dynamic *testing-names*
+  "The names of the tests running, outermost first."
+  [])
+
+(def ^:dynamic *testing-contexts*
+  "The descriptions of the testing forms around the assertion running, outermost first."
+  [])
+
+(def ^:private registry
+  "Namespace name -> [[test name, function] ...], in the order the tests were defined."
+  (atom {}))
+
+(def ^:private fixtures
+  "Namespace name -> {:each [fixture ...] :once [fixture ...]}."
+  (atom {}))
+
+;;; ------------------------------------------------------------------------------------
+;;; Reporting
+
+(defn- count! [k]
+  (when *counters* (swap! *counters* update k inc)))
+
+(defn- where []
+  (str "(" (apply str (interpose " " *testing-names*)) ")"))
+
+(defn- contexts []
+  (when (seq *testing-contexts*)
+    (str (apply str (interpose " " *testing-contexts*)) "\n")))
+
+(defn report-pass
+  "Count a passing assertion (is calls this)."
+  []
+  (count! :pass))
+
+(defn report-fail
+  "Report a failing assertion of form (is calls this): its message, if any, what was
+expected and what it was."
+  [message expected actual]
+  (count! :fail)
+  (println (str "\nFAIL in " (where)))
+  (when-let [c (contexts)] (print c))
+  (when message (println message))
+  (println (str "expected: " (pr-str expected)))
+  (println (str "  actual: " (pr-str actual))))
+
+(defn report-error
+  "Report an error signaled by an assertion or a test, the condition c."
+  [message expected c]
+  (count! :error)
+  (println (str "\nERROR in " (where)))
+  (when-let [cs (contexts)] (print cs))
+  (when message (println message))
+  (when expected (println (str "expected: " (pr-str expected))))
+  (println (str "  actual: " (condition-message c))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Assertions
+
+(defn message-has?
+  "True if the string message contains part (thrown-with-msg? uses this)."
+  [message part]
+  (let [n (count part)]
+    (loop [i 0]
+      (cond (> (+ i n) (count message)) false
+            (= part (subs message i (+ i n))) true
+            :else (recur (inc i))))))
+
+(defmacro is
+  "Check that form is true, counting the assertion; return its value. A failure reports
+form, message (if given) and what form was; an error signaled while checking is reported
+as an error. (is (thrown? type body...)) checks that body signals a condition of type, and
+(is (thrown-with-msg? type text body...)) also that its message contains text."
+  ([form] `(is ~form nil))
+  ([form message]
+   ;; The helpers live here, at compile time: a call of a function is told apart from a
+   ;; macro or special form by the namespace's vars.
+   (let [named? (fn [x nm] (and (symbol? x) (= nm (name x))))
+         function-call? (fn [form]
+                          (and (seq? form) (symbol? (first form)) (nil? (namespace (first form)))
+                               (let [var (%resolve-var (%current-namespace) (name (first form)))]
+                                 (and var (nil? (%var-macro var))))))
+         check (cond
+                 (and (seq? form) (named? (first form) "thrown?"))
+                 (let [[_ type & body] form]
+                   `(try (do ~@body)
+                         (report-fail ~message '~form "nothing was signaled")
+                         false
+                         (catch ~type e# (report-pass) e#)))
+
+                 (and (seq? form) (named? (first form) "thrown-with-msg?"))
+                 (let [[_ type text & body] form]
+                   `(try (do ~@body)
+                         (report-fail ~message '~form "nothing was signaled")
+                         false
+                         (catch ~type e#
+                           (if (message-has? (condition-message e#) ~text)
+                             (do (report-pass) e#)
+                             (do (report-fail ~message '~form (condition-message e#)) false)))))
+
+                 (function-call? form)
+                 `(let [args# (list ~@(rest form))
+                        result# (apply ~(first form) args#)]
+                    (if result#
+                      (report-pass)
+                      (report-fail ~message '~form (list '~'not (cons '~(first form) args#))))
+                    result#)
+
+                 :else
+                 `(let [result# ~form]
+                    (if result# (report-pass) (report-fail ~message '~form result#))
+                    result#))]
+     `(try ~check
+           (catch error e# (report-error ~message '~form e#) false)))))
+
+(defmacro testing
+  "Run the body with description added to the context that failures report."
+  [description & body]
+  `(binding [*testing-contexts* (conj *testing-contexts* ~description)]
+     ~@body))
+
+(defn- substitute
+  "form with each symbol of bindings (a map of symbol to value) replaced."
+  [form bindings]
+  (cond (and (symbol? form) (contains? bindings form)) (get bindings form)
+        (seq? form) (apply list (map (fn [x] (substitute x bindings)) form))
+        (vector? form) (mapv (fn [x] (substitute x bindings)) form)
+        (map? form) (into {} (map (fn [[k v]] [(substitute k bindings) (substitute v bindings)])
+                                  form))
+        :else form))
+
+(defmacro are
+  "(are [x y] (= x y) 1 1, 2 2): an is of expr for each group of values, with the symbols
+of argv replaced by them."
+  [argv expr & values]
+  (when-not (and (vector? argv) (seq argv) (zero? (mod (count values) (count argv))))
+    (error "are needs a vector of names and values in groups of that many"))
+  `(do ~@(map (fn [group] `(is ~(substitute expr (zipmap argv group))))
+              (partition (count argv) values))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Tests and fixtures
+
+(defn- keep-indexed* [f coll]
+  (keep identity (map-indexed f coll)))
+
+(defn register-test!
+  "Register the test function f, called test-name, in the namespace ns-name (deftest
+calls this). A test defined again keeps its place."
+  [ns-name test-name f]
+  (swap! registry update ns-name
+         (fn [tests]
+           (let [tests (or tests [])
+                 i (first (keep-indexed* (fn [k [nm]] (when (= nm test-name) k)) tests))]
+             (if i (assoc tests i [test-name f]) (conj tests [test-name f]))))))
+
+(defn run-test-body
+  "Run the body of the test called test-name: count it, and report an error it signals
+(deftest's functions call this)."
+  [test-name body]
+  (binding [*testing-names* (conj *testing-names* test-name)]
+    (count! :test)
+    (try (body) (catch error e (report-error "uncaught error in the test" nil e)))
+    nil))
+
+(defmacro deftest
+  "Define test-name as a function of no arguments that runs the body as a test, and
+register it with this namespace for run-tests. Returns the name."
+  [test-name & body]
+  `(do (defn ~test-name [] (run-test-body '~test-name (fn [] ~@body)))
+       (register-test! ~(%current-namespace-name) '~test-name ~test-name)
+       '~test-name))
+
+(defn set-fixtures!
+  "Make fixtures the namespace ns-name's fixtures of kind (:each or :once); use-fixtures
+calls this."
+  [ns-name kind fs]
+  (when-not (contains? #{:each :once} kind)
+    (error "use-fixtures takes :each or :once, not" (pr-str kind)))
+  (swap! fixtures assoc-in [ns-name kind] (vec fs)))
+
+(defmacro use-fixtures
+  "Run each test of this namespace (:each) or all of them (:once) inside the fixtures:
+functions of a function of no arguments, which they call to run the tests."
+  [kind & fs]
+  `(set-fixtures! ~(%current-namespace-name) ~kind [~@fs]))
+
+(defn- around
+  "f run inside the fixtures fs, the first outermost."
+  [fs f]
+  (reduce (fn [inner fixture] (fn [] (fixture inner))) f (reverse fs)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Running
+
+(defn- ns-name-of [x]
+  (cond (string? x) x
+        (symbol? x) (name x)
+        :else (error "run-tests takes namespace names, not" (pr-str x))))
+
+(defn test-ns
+  "Run the tests of the namespace ns-name (a string), in order, inside its fixtures."
+  [ns-name]
+  (let [{:keys [each once]} (get @fixtures ns-name)]
+    ((around once (fn []
+                    (doseq [[_ f] (get @registry ns-name)]
+                      ((around each f))))))))
+
+(defn run-tests
+  "Run the tests of the namespaces given by name (symbols or strings) and print a report;
+return the counts, {:test :pass :fail :error}."
+  [& namespaces]
+  (binding [*counters* (atom {:test 0 :pass 0 :fail 0 :error 0})]
+    (doseq [ns namespaces]
+      (let [nm (ns-name-of ns)]
+        (println (str "\nTesting " nm))
+        (test-ns nm)))
+    (let [{:keys [test pass fail error] :as counts} @*counters*]
+      (println (str "\nRan " test " tests containing " (+ pass fail error) " assertions."))
+      (println (str fail " failures, " error " errors."))
+      counts)))
+
+(defn successful?
+  "True if run-tests' counts have no failures and no errors."
+  [counts]
+  (and (zero? (:fail counts)) (zero? (:error counts))))

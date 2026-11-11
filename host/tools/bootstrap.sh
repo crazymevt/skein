@@ -61,6 +61,20 @@ test_compiler() {
     fi
     echo "skeinc: hello for $target ok"
   done
+  # skein test (M2.11, D-093): a project's test/ passes, and failing/ fails with status 1.
+  tested=$(cd host/tests/fixtures/test-project && "$OLDPWD/$skeinc" test | tr -d '\r')
+  if [[ "$tested" != *"Ran 1 tests containing 2 assertions."*"0 failures, 0 errors."* ]]; then
+    echo "skeinc: skein test printed: $tested"
+    exit 1
+  fi
+  status=0
+  tested=$(cd host/tests/fixtures/test-project && "$OLDPWD/$skeinc" test failing | tr -d '\r') \
+    || status=$?
+  if [ "$status" != 1 ] || [[ "$tested" != *"FAIL in (adds-wrongly)"* ]]; then
+    echo "skeinc: skein test failing exited with $status and printed: $tested"
+    exit 1
+  fi
+  echo "skeinc: skein test ok"
   # A project (M1.11): with no file, skeinc builds the project.skn in the current directory,
   # into it, beside the assets that skein.io/resource-dir finds (D-073). It runs from
   # another directory.

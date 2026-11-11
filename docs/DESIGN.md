@@ -900,7 +900,7 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
 | `skein run <file-or-ns>` | run a program |
 | `skein dev` | run with file watching, hot reload and a REPL server (§15) |
 | `skein host run\|dev\|repl ...` | the same on the Phase 0 SBCL host, as a reference (Phase 2, D-081) |
-| `skein test` | run tests |
+| `skein test [path...]` | run the tests of the namespaces in the paths (default: the project's `:test-paths`, else `test/`) natively; exits with 1 if one fails (M2.11, D-093) |
 | `skein build [--target T] [--profile P]` | compile a native executable (Phase 1: `skein build [file.skn] [-o FILE] [--target T] [--profile dev\|release]`, by skeinc; with no file, the project in the current directory; D-069) |
 | `skein package` | create distributables |
 | `skein bindgen` | generate FFI bindings from C headers |
@@ -923,10 +923,12 @@ Phase 1 (D-069): `dist/<target>/<name>/` holds the executable, the target's `:na
  :targets [:aarch64-macos :x86_64-windows-gnu :x86_64-linux-gnu]}
 ```
 
-`:paths` lists where namespaces are found (default `["src"]`); `:assets` lists directories copied into a package as they are; `:main` is the function called with the command-line arguments. The file is read as data, and `skein build` with no file builds the project in the current directory (D-069). `:deps` names libraries from git repositories (GitHub's included, pinned to a tag or a commit) and from local files and folders (M2.12, D-085). A package registry is deferred.
+`:paths` lists where namespaces are found (default `["src"]`); `:test-paths` where `skein test` finds tests (default `["test"]`); `:assets` lists directories copied into a package as they are; `:main` is the function called with the command-line arguments. The file is read as data, and `skein build` with no file builds the project in the current directory (D-069). `:deps` names libraries from git repositories (GitHub's included, pinned to a tag or a commit) and from local files and folders (M2.12, D-085). A package registry is deferred.
 
 ### 20.3 Testing
 `skein.test` follows the style of `clojure.test`: `deftest`, `is`, `testing`, fixtures. There is also property-based testing with `skein.test.check` (Deferred).
+
+As built (M2.11, D-093): `(deftest name body...)` defines a function of no arguments and registers it with its namespace; `run-tests` takes namespace names, runs their tests in the order they were defined inside the namespaces' fixtures (`(use-fixtures :each f ...)`, `(use-fixtures :once f ...)`), prints a report and returns `{:test :pass :fail :error}`, which `successful?` checks. `(is form message?)` counts an assertion: for a call of a function a failure shows `expected: (= 5 (+ 2 2))` and `actual: (not (= 5 4))`; `(is (thrown? type body...))` and `(is (thrown-with-msg? type text body...))` check for a condition (its message containing `text`, as Skein has no regular expressions); an error inside `is` or a test is reported as an error. `testing` adds context and `are` repeats an `is` over groups of values. `skein test` writes a runner that requires the test namespaces and calls `run-tests`, and builds and runs it natively.
 
 ## 21. Standard library outline
 

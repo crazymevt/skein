@@ -82,6 +82,7 @@ These are defined in M0.1; update this section if they change.
 | `build/skeinc package [--target T] [--profile P]` | package the project in the current directory: `dist/<target>/<name>/`, or `<name>.app` for macOS |
 | `build/skeinc run\|dev\|repl ...`, `build/skeinc current` | what `./skein run`, `dev` and `repl` run; `current` exits with 0 if skeinc is newer than its sources (the launcher bootstraps it otherwise) |
 | `./skein dev [--port N \| --no-server] [--swank-port N \| --no-swank] <file.skn> [args]` | run natively with file reloading, a REPL (terminal and localhost:5555) and Swank for SLIME (localhost:4005) |
+| `./skein test [path...]` | run a project's skein.test tests natively (default: its `:test-paths`, else `test/`); exits with 1 on a failure |
 | `make bench` | run the benchmarks in `bench/` |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |
 | `make sdl3-bindings` | regenerate `lib/sdl3/raw.skn` |

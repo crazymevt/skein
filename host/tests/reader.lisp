@@ -700,8 +700,10 @@ which are data."
   (let ((root (truename (asdf:system-relative-pathname "skein" "../"))))
     (sort (remove-if (lambda (p)
                        (let ((s (namestring p)))
+                         ;; test-project is a project, whose namespaces are found through
+                         ;; its project.skn (skein test, M2.11).
                          (or (search ".skein-cache" s) (search "/build/" s)
-                             (search "/dist/" s))))
+                             (search "/dist/" s) (search "/test-project/" s))))
                      (directory (merge-pathnames "**/*.skn" root)))
           #'string< :key #'namestring)))
 

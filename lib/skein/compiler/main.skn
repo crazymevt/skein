@@ -599,8 +599,9 @@ function to call). Returns the executable's path."
 
 (defn read-project
   "The project that the project.skn file at path describes, read as data (nothing in it
-runs). Returns its map, with :paths (default [\"src\"]) and :assets as directories of the
-project ending with /. The keys builds use are checked: :name, :main (a qualified symbol,
+runs). Returns its map, with :paths (default [\"src\"]), :test-paths (default
+[\"test\"], what `skein test` runs) and :assets as directories of the project ending
+with /. The keys builds use are checked: :name, :main (a qualified symbol,
 like game.main/-main), :paths and :assets."
   [path]
   (let [bad (fn [& parts] (fail path ": " (apply str parts)))
@@ -630,7 +631,8 @@ like game.main/-main), :paths and :assets."
                              libs))
         (bad ":native must look like {:libs {:macos [\"vendor/libfoo.dylib\"] :windows "
              "[\"vendor/foo.dll\"] :linux [\"vendor/libfoo.so\"]}}")))
-    (assoc project :paths (dirs :paths ["src"]) :assets (dirs :assets []))))
+    (assoc project :paths (dirs :paths ["src"]) :test-paths (dirs :test-paths ["test"])
+           :assets (dirs :assets []))))
 
 (defn build-project
   "Compile the project whose project.skn is at path: its :main namespace, found in its
@@ -821,6 +823,42 @@ Swank server and the file watcher (skein.dev, skein.swank)."
                   :else []))
           (or (%list-directory dir) [])))
 
+(defn- test-command
+  "skein test [path...]: run the tests (skein.test, M2.11, D-093) of the namespaces in
+the .skn files at the paths (directories are searched), natively: by default the
+project's :test-paths, or test/. It builds a runner that requires them and calls
+skein.test/run-tests, and exits with 1 if a test failed."
+  [args]
+  (let [project (when (io/file-exists? "project.skn") (read-project "project.skn"))
+        paths (or (seq args) (:test-paths project) ["test/"])
+        files (vec (distinct
+                    (mapcat (fn [p]
+                              (cond (and (>= (count p) 4) (= ".skn" (subs p (- (count p) 4))))
+                                    (if (io/file-exists? p) [p] (fail "skein test: no file " p))
+                                    (%list-directory p)
+                                    (sort (source-files (if (= (last p) \/) p (str p "/"))
+                                                        [".skn"]))
+                                    :else (fail "skein test: no directory " p)))
+                            paths)))
+        namespaces (vec (keep declared-namespace files))
+        home (find-home)
+        runner (str home ".skein-cache/test/runner-" (path-hash (apply str files)) ".skn")]
+    (when (empty? namespaces)
+      (fail "skein test: no namespaces to test in " (apply str (interpose ", " paths))))
+    (make-directories! (directory-of runner))
+    (io/write-file runner
+                   (str "(ns skein-test-runner\n  (:require [skein.test :as t]"
+                        (apply str (map (fn [nm] (str "\n            [" nm "]")) namespaces))
+                        "))\n\n(defn -main [& args]\n  (%exit (if (t/successful? (t/run-tests"
+                        (apply str (map (fn [nm] (str " '" nm)) namespaces))
+                        ")) 0 1)))\n"))
+    (run-program runner
+                 {:profile "dev"
+                  :source-paths (vec (distinct
+                                      (concat (keep namespace-root files) (map directory-of files)
+                                              (:paths project) [""])))}
+                 [] nil)))
+
 (defn- compiler-current?
   "True if build/skeinc is newer than every file it's built from (as the launcher's
 bootstrap checks: lib/'s Skein and the runtime's Zig, C and headers)."
@@ -841,12 +879,15 @@ bootstrap checks: lib/'s Skein and the runtime's Zig, C and headers)."
        " [--release] [--keep-c] [--eval]\n"
        "       skeinc package [--target T] [--profile dev|release]\n"
        "       skeinc run [--release] <file.skn> [args...]\n"
-       "       skeinc dev [--port N | --no-server] <file.skn> [args...]\n"
+       "       skeinc dev [--port N | --no-server] [--swank-port N | --no-swank] <file.skn>"
+       " [args...]\n"
        "       skeinc repl\n"
+       "       skeinc test [path...]\n"
        "       skeinc current\n"
        "With no file, build builds the project that ./project.skn describes; package puts it"
        " in dist/. run, dev and repl build the program (cached in .skein-cache/run/) and run"
-       " it; current exits with 0 if skeinc is newer than its sources."))
+       " it; test runs the tests in the paths (default: the project's :test-paths, or test/);"
+       " current exits with 0 if skeinc is newer than its sources."))
 
 (defn- parse-build-args [args]
   (loop [args (seq args) opts {}]
@@ -877,6 +918,7 @@ current, which exits with 0 if skeinc is newer than its sources."
       "run" (run-command more)
       "dev" (dev-command more)
       "repl" (repl-command)
+      "test" (test-command more)
       "current" (%exit (if (compiler-current? (find-home)) 0 1))
       nil)
     (when-not (contains? #{"build" "package"} command) (fail usage))

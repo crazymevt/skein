@@ -1,0 +1,6 @@
+(ns calc.core
+  "A project whose tests skein test runs (M2.11 step 1, D-093).")
+
+(defn add [a b] (+ a b))
+
+(defn -main [& args] (println (add 1 2)))

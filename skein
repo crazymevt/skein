@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The `skein` command line (D-081). build, package, run, dev and repl run natively,
+# The `skein` command line (D-081). build, package, run, dev, repl and test run natively,
 # through build/skeinc, which the Phase 0 SBCL host bootstraps when it's missing or older
 # than its sources. `skein host run|dev|repl ...` runs Phase 0 itself, as a reference;
 # everything else (bootstrap, bindgen, help, version) runs on SBCL too.
@@ -13,7 +13,7 @@ on_sbcl() {
 }
 
 case "${1:-}" in
-  build|package|run|dev|repl)
+  build|package|run|dev|repl|test)
     exe=""
     home="$here"
     if [ "${OS:-}" = "Windows_NT" ]; then

@@ -58,12 +58,13 @@ interpreter; the forms of a (do ...) expansion are top-level forms."
 
 (defun interpreted-programs ()
   "The native test programs, without the typed one: the interpreter doesn't check
-declared types, and that fixture tests their errors. Nor the dynamic and eval ones: the
-interpreter has no binding yet (D-077). Nor the reload one, which changes the namespaces
-of the image it runs in, after skein run has run it there."
+declared types, and that fixture tests their errors. Nor the dynamic and eval ones, or
+skein.test's, which binds its counters: the interpreter has no binding yet (D-077). Nor
+the reload one, which changes the namespaces of the image it runs in, after skein run has
+run it there."
   (remove-if (lambda (p) (member (pathname-name p) '("native-typed" "main" "native-io"
                                                       "native-dynamic" "native-eval"
-                                                      "native-reload")
+                                                      "native-reload" "native-skein-test")
                                  :test #'string=))
              (native-programs)))
 

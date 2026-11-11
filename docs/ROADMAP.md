@@ -40,7 +40,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.8 Supervisors | ✅ |
 | M2.9 Hot reload of compiled code | ⬜ |
 | M2.10 STM | 🟨 |
-| M2.11 Standard library | ⬜ |
+| M2.11 Standard library | 🟨 |
 | M2.12 Package management | ⬜ |
 | M2.13 FFI additions | ⬜ |
 | M2.14 UI library | ⬜ |
@@ -390,7 +390,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   - **`skein.test`:** `deftest`, `is`, `testing` and fixtures (DESIGN §20.3), and a `skein test` command.
 - Settled (D-093): collections and symbols carry metadata (`meta`, `with-meta`, `vary-meta`); `ex-info`, `ex-data` and `ex-message` over conditions; docstrings and argument lists for the runtime's Zig functions from a table in Skein.
 - Steps, in order (D-093):
-  1. `skein.test` (`deftest`, `is`, `testing`, `are`, fixtures, reports) and `skein test`, which runs a project's tests natively; the later steps' tests use it.
+  1. ✅ `skein.test` (`deftest`, `is`, `testing`, `are`, fixtures, reports) and `skein test`, which runs a project's tests natively; the later steps' tests use it.
   2. `skein.string`, with D-019's byte-offset cursors and a string builder; the reader and the Swank server use the cursors (the note on non-ASCII text).
   3. `skein.core`'s macros and seq and function helpers: `cond->` ... `with-out-str`, `partition-by` ... `distinct?`, `some-fn` ... `min-key`.
   4. Numbers and printing: parsing, predicates, `hash`, `random-uuid`, the `bit-` operations, `format`, `prn-str`, `print-str`, `read-string`, `slurp`, `spit`, and `*print-length*`.

@@ -1,0 +1,6 @@
+(ns failing
+  "A failing test, which skein test failing must report with status 1."
+  (:require [calc.core :as c]
+            [skein.test :refer [deftest is]]))
+
+(deftest adds-wrongly (is (= 5 (c/add 2 2))))
