@@ -198,7 +198,7 @@ as (:form syntax), (:read-error message) or (:eof)."
         (*current-namespace* (ensure-namespace *initial-namespace*))
         (*standard-output* (console-out console))
         (*error-output* (console-out console)))
-    (sb-thread:with-mutex (**consoles-lock**) (push console **consoles**))
+    (sb-thread:with-mutex (**consoles-lock**) (pushnew console **consoles**))
     (start-reader console)
     (unwind-protect
          (loop
@@ -652,6 +652,9 @@ localhost:PORT. Returns once the program has finished and the terminal REPL has 
                (setf *initial-namespace* (namespace-name namespace)
                      stop-watcher (start-watcher source-paths)
                      terminal-started t)
+               ;; A console before the program runs: an error it signals before the
+               ;; console's thread starts still opens the debugger there.
+               (sb-thread:with-mutex (**consoles-lock**) (pushnew terminal **consoles**))
                (sb-thread:make-thread (lambda ()
                                         (skein.runtime:ensure-float-modes)
                                         (let ((*source-paths* source-paths))

@@ -444,7 +444,7 @@ fails; its abort restart fails the task, as the error would have without the deb
 (defn console-loop
   "Run the console's read-eval-print loop in this fiber until its input ends or :quit."
   [console]
-  (swap! consoles conj console)
+  (swap! consoles (fn [cs] (if (some (fn [c] (identical? c console)) cs) cs (conj cs console))))
   (service (read-forms console))
   (try
     (loop []
@@ -648,6 +648,9 @@ Returns 0, or 1 if an error stopped the program."
     (println (str "; skein dev: reloading changed files"
                   (if server (str "; REPL on localhost:" (%tcp-port server)) "")
                   (if swank (str "; Swank on localhost:" (%tcp-port swank)) "")))
+    ;; The terminal is a console before the program starts: an error the program signals
+    ;; before the console's fiber runs still opens the debugger there.
+    (swap! consoles conj terminal)
     (let [stop-watcher (start-watcher)]
       (service (console-loop terminal)
                (reset! terminal-done true)
