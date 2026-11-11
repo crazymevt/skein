@@ -172,9 +172,18 @@ jobs:
           "SDL3_DLL=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Run tests
-        # About 30 minutes on each platform; a hang fails here rather than after 6 hours.
+        # About 15-25 minutes on each platform; a hang fails here rather than after 6 hours.
         timeout-minutes: 75
         run: make test
+
+      # Each part's whole log (host/tools/test-all.sh), when a test failed.
+      - name: Upload the test logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-logs-${{ matrix.os }}
+          path: build/test-logs/
+          retention-days: 7
 
       - name: Launcher (bash)
         run: ./skein --version

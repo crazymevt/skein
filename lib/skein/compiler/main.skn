@@ -420,6 +420,13 @@ a file name."
   [path]
   (reduce (fn [h c] (mod (+ (* h 31) (int c)) 4294967296)) 7 path))
 
+(defn- file-hash
+  "path-hash of the absolute path of the file at path, so that the same relative path in
+different directories (every serve.skn, main.skn) names different cache files. (Phase 0
+has no %absolute-path, and uses path as given.)"
+  [path]
+  (path-hash (or (try (%absolute-path path) (catch error e nil)) path)))
+
 (def targets
   "The zig target triples skeinc builds for (DESIGN §19.1); the first three are P0."
   ["aarch64-macos" "x86_64-windows-gnu" "x86_64-linux-gnu" "x86_64-macos" "aarch64-linux-gnu"
@@ -563,7 +570,7 @@ function to call). Returns the executable's path."
         ;; name (every main.skn) keep their own (D-073).
         c-file (if keep-c
                  (str (directory-of output) (stem output) ".c")
-                 (str home ".skein-cache/" (stem path) "-" (path-hash path) ".c"))]
+                 (str home ".skein-cache/" (stem path) "-" (file-hash path) ".c"))]
     (io/write-file c-file c-source)
     (let [def-file (when (and (:eval opts) (= os :windows))
                      (windows-exports! c-file (str prefix "include")))]
@@ -1079,7 +1086,8 @@ skeinc's."
 it was built from has changed since, else built now."
   [home path opts]
   (let [kind (if (:eval opts) "dev" (:profile opts))
-        exe (str home ".skein-cache/run/" (stem path) "-" (path-hash path) "-" kind (exe-suffix))
+        exe (str home ".skein-cache/run/" (stem path) "-" (file-hash path) "-" kind
+                 (exe-suffix))
         manifest (str exe ".sources")
         skeinc-date (%file-mtime (skeinc-path home))]
     (when-not (built-from-current? exe manifest skeinc-date)
