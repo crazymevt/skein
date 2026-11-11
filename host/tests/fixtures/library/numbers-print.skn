@@ -88,7 +88,7 @@
   (is (thrown-with-msg? error "--eval" (read-string "(1 2)"))))
 
 (deftest files
-  (let [path ".skein-numbers-print-test"]
+  (let [path "build/examples/numbers-print-test.txt"]
     (spit path "one\n")
     (spit path 2 :append true)
     (is (= "one\n2" (slurp path)))
