@@ -438,7 +438,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   6. The rest of LGT, the web view included, on the headless, Cocoa and GTK 4 backends, then LGT's examples and widget explorer, ported to skein-ui's `examples/` with a launcher, each built by a test on the headless backend (Jessie's: the missing parts first, so the examples are faithful). In parts:
      - ✅ A. Every widget's font, context menu, focus and input events (keys, text input, mouse), labels' text and background colors, user data; windows' position, size limits, resizability, `:closed`, hiding, centering, modal runs and snapshots; the application's name, version, icon, menu bar and quitting when the last window closes; blocking handlers.
      - ✅ B. Appearance (light, dark, inherited), color palettes, control sizes and surface roles.
-     - C. Stacks (with a page list or sidebar) and tabbed panes (closable, reorderable and draggable tabs, accessories).
+     - ✅ C. Stacks (with a page list or sidebar) and tabbed panes (closable, reorderable and draggable tabs, accessories).
      - D. Surfaces: popovers, completion popups and custom dialogs (`run-dialog`, `respond`).
      - E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
      - F. Images from bytes, system and glyph images, font families and font files, and icons in lists, tables and trees.
