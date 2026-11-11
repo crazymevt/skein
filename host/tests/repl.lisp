@@ -720,6 +720,78 @@ executable's native path."
               (sb-ext:process-kill process 9))
             (sb-ext:process-wait process))))))
 
+;;; M2.15 step 3 (D-101): while a frame waits in the debugger, run-loop's :paused is called.
+
+(test dev-run-loop-paused
+  (if (not (zig-available-p))
+      (skip "zig is not installed")
+      (with-source-tree (dir ("pauser.skn" "(ns pauser
+  (:require [skein.game :as game]
+            [skein.jobs :as jobs :refer [job]]))
+(defonce broken (atom nil))
+(defonce paused (atom 0))
+(defonce frames (atom 0))
+(defn check [where] (when (= @broken where) (error (str \"broken \" (name where)))))
+(defn -main [& args]
+  (game/run-loop {:running? (fn [] (< @frames 40))
+                  :frame (fn []
+                           (check :frame)
+                           (:r (jobs/graph {:r (job (check :job) 1)}))
+                           (swap! frames inc)
+                           (sleep 0.01))
+                  :render (fn [_] nil)
+                  :paused (fn [] (swap! paused inc))})
+  (println \"done\" @frames))
+"))
+        (let* ((exe (native-dev-build dir "pauser.skn"))
+               (process (sb-ext:run-program exe '() :wait nil :input :stream
+                                                    :output :stream :error :output
+                                                    :directory (uiop:native-namestring dir)
+                                                    :environment
+                                                    (cons "SKEIN_DEV=none"
+                                                          (sb-ext:posix-environ))))
+               (buffer (make-array 0 :element-type 'character :adjustable t :fill-pointer 0))
+               (lock (sb-thread:make-mutex))
+               (input (sb-ext:process-input process)))
+          (collect-output (sb-ext:process-output process) buffer lock)
+          (unwind-protect
+               (block scenario
+                 (flet ((wait (text &optional (start 0))
+                          (or (wait-for-output buffer lock text :start start)
+                              (progn (fail "timed out waiting for ~S in:~%~A" text buffer)
+                                     (return-from scenario))))
+                        (say (line)
+                          (format input "~A~%" line)
+                          (finish-output input)))
+                   (let ((pos (wait "; skein dev")))
+                     ;; The frame's own error: the main thread waits in the debugger.
+                     (say "(reset! broken :frame)")
+                     (setf pos (wait "error in thread main thread: broken frame" pos))
+                     (setf pos (wait "0: retry-frame" pos))
+                     (sleep 1)
+                     (say "[:frame-paused (< 20 @paused)]")
+                     (setf pos (wait "[:frame-paused true]" pos))
+                     ;; A job's error: the main thread waits for the job.
+                     (say "(reset! broken :job)")
+                     (say "0")
+                     (setf pos (wait "error in thread task: broken job" pos))
+                     (setf pos (wait "0: retry-frame  Run this frame again (in main thread)"
+                                     pos))
+                     (say "(reset! paused 0)")
+                     (sleep 1)
+                     (say "[:job-paused (< 20 @paused)]")
+                     (setf pos (wait "[:job-paused true]" pos))
+                     (say "(reset! broken nil)")
+                     (say "0")
+                     (setf pos (wait "done 40" pos))
+                     (say ":quit")
+                     (loop repeat 600 while (sb-ext:process-alive-p process) do (sleep 0.05))
+                     (is (not (sb-ext:process-alive-p process))
+                         "skein dev did not exit after :quit"))))
+            (when (sb-ext:process-alive-p process)
+              (sb-ext:process-kill process 9))
+            (sb-ext:process-wait process))))))
+
 ;;; M2.9 step 2 (D-091): skein dev evaluates a saved file at once, then compiles it in the
 ;;; background and swaps the compiled code in; (reload 'ns) does the same.
 

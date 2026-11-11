@@ -441,10 +441,49 @@ from where it was signaled."
       ;; The form invoked a restart (or otherwise left): this fiber resumes.
       (finally (when-not @replied (>! reply [:resumed]))))))
 
+(def ^:private open-sessions
+  "How many errors in the program are in the debugger now."
+  (atom 0))
+
+(defn- game-loops
+  "skein.game's running loops that have :paused (D-101), or nil if it isn't loaded."
+  []
+  (when-let [ns (%find-namespace "skein.game")]
+    (when-let [var (%find-own-var ns "loops")]
+      (let [loops (%var-value var)]
+        (when (atom? loops) loops)))))
+
+(defn- pause-ticker
+  "While an error in the program is in the debugger, call the :paused of each skein.game
+loop whose frame has run for more than 0.1 s, about 60 times a second, through the main
+thread's queue if it runs there: so a game paused in the debugger keeps its window alive
+(D-101). A :paused that fails is reported and not called again."
+  []
+  (loop []
+    (sleep (/ 1.0 60.0))
+    (when (pos? @open-sessions)
+      (when-let [loops (game-loops)]
+        (doseq [[id {:keys [paused main? frame-start]}] @loops]
+          (when (> (- (skein.time/now) @frame-start) 0.1)
+            (try (if main? (on-main-thread (paused)) (paused))
+                 (catch error e
+                   (announce (str "; error in run-loop's :paused, which is no longer called: "
+                                  (condition-message e)))
+                   (swap! loops dissoc id)))))))
+    (recur)))
+
+(def ^:private debug-program-error*)
+
 (defn- debug-program-error
   "The debugger for an error c that no handler handles outside a console, with frames the
 backtrace from where it was signaled: SLDB in a connected Emacs, else wait for a console to
 attach and evaluate what it sends in this fiber, where the restarts are."
+  [c frames]
+  (swap! open-sessions inc)
+  (try (debug-program-error* c frames)
+       (finally (swap! open-sessions dec))))
+
+(defn- debug-program-error*
   [c frames]
   (let [own (vec (compute-restarts c))
         restarts (debugger-restarts c)
@@ -719,6 +758,7 @@ Returns 0, or 1 if an error stopped the program."
                   (if swank (str "; Swank on localhost:" (%tcp-port swank)) "")))
     ;; zig's first module is slow while its cache fills: do that before the first edit.
     (when (module/available?) (service (module/warm-up!)))
+    (service (pause-ticker))
     ;; The terminal is a console before the program starts: an error the program signals
     ;; before the console's fiber runs still opens the debugger there.
     (swap! consoles conj terminal)

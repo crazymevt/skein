@@ -114,6 +114,9 @@ budget (CI's live-edit check, host/tools/live-edit.lisp, looks for them)."
                                      (read-input keys)))
                      (when (:quit @input) (reset! quit true)))
             :update (fn [dt] (g/update! @input dt))
+            ;; While a frame waits in skein dev's debugger: handle the window's events, so
+            ;; the system doesn't mark it as not responding; a quit counts once resumed.
+            :paused (fn [] (when (quit-requested? event) (reset! quit true)))
             :render (fn [_]
                       (draw/world! renderer @g/world @fps)
                       (let [work (- (time/now) @work-start)]

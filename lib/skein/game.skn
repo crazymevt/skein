@@ -17,6 +17,10 @@ Returns the body's value, or nil if the frame was skipped."
          (recur)
          (second result#)))))
 
+;; The loops running now that have :paused, for skein dev's debugger (D-101): an id to
+;; {:paused :main? :frame-start}, :frame-start an atom of the time the current frame began.
+(defonce ^:private loops (atom {}))
+
 (defn run-loop
   "Run a game loop until (running?) returns false; returns nil. Options:
   :frame    (fn []) called once per frame first, e.g. to handle input events
@@ -27,10 +31,13 @@ Returns the body's value, or nil if the frame was skipped."
   :max-steps  the most updates per frame (default 5), so that a slow frame or a pause
             in the debugger doesn't make the game race to catch up
   :running? (fn []) the loop goes on while it returns true (default: always)
+  :paused   (fn []) called about 60 times a second while a frame waits in skein dev's
+            debugger (an error in it, or in a task it waits for), on the loop's thread, so
+            the game can keep its window alive, e.g. by handling its events (D-101)
 Each call of :frame, :update and :render runs with the retry-frame and skip-frame
 restarts; retry-frame runs that call again. Without :update, only :frame and :render are
 called, once per frame."
-  [{:keys [frame update render step max-steps running?]
+  [{:keys [frame update render step max-steps running? paused]
     :or {step (/ 1.0 60.0) max-steps 5 running? (constantly true)}}]
   (when-not (or frame update render)
     (error "run-loop needs a :frame, :update or :render function"))
@@ -38,19 +45,26 @@ called, once per frame."
     (error "run-loop's :step must be a positive number of seconds"))
   (let [step (f64 step)
         last-time (atom (skein.time/now))
-        lag (atom 0.0)]
-    (loop []
-      (when (running?)
-        (when frame (with-frame-restarts (frame)))
-        (let [now (skein.time/now)]
-          (swap! lag + (min (- now @last-time) (* step max-steps)))
-          (reset! last-time now))
-        (if update
-          (loop []
-            (when (>= @lag step)
-              (with-frame-restarts (update step))
-              (swap! lag - step)
-              (recur)))
-          (reset! lag 0.0))
-        (when render (with-frame-restarts (render (if update (/ @lag step) 1.0))))
-        (recur)))))
+        lag (atom 0.0)
+        id (gensym "loop")
+        frame-start (atom (skein.time/now))]
+    (when paused
+      (swap! loops assoc id {:paused paused :main? (%main-thread?) :frame-start frame-start}))
+    (try
+      (loop []
+        (when (running?)
+          (when paused (reset! frame-start (skein.time/now)))
+          (when frame (with-frame-restarts (frame)))
+          (let [now (skein.time/now)]
+            (swap! lag + (min (- now @last-time) (* step max-steps)))
+            (reset! last-time now))
+          (if update
+            (loop []
+              (when (>= @lag step)
+                (with-frame-restarts (update step))
+                (swap! lag - step)
+                (recur)))
+            (reset! lag 0.0))
+          (when render (with-frame-restarts (render (if update (/ @lag step) 1.0))))
+          (recur)))
+      (finally (when paused (swap! loops dissoc id))))))
