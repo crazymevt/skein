@@ -32,3 +32,13 @@ EXPORT frame frame_offset(frame f, float dx) { f.origin.x += dx; return f; }
 EXPORT float num_as_float(num n) { return n.f; }
 EXPORT num num_from_int(int32_t i) { num n; n.i = i; return n; }
 EXPORT int32_t triple_sum(triple t) { return t.v[0] + t.v[1] + t.v[2]; }
+
+/* Callbacks that take and return structs by value (step 2). */
+typedef vec2f (*vec2_fn)(vec2f v, float k);
+typedef rectd (*rect_fn)(rectd r);
+typedef int64_t (*mixed_fn)(mixed m);
+typedef color (*color_fn)(color c);
+EXPORT vec2f apply_vec2(vec2_fn f, vec2f v) { return f(v, 2.0f); }
+EXPORT rectd apply_rect(rect_fn f) { rectd r = {1.0, 2.0, 3.0, 4.0}; return f(r); }
+EXPORT int64_t apply_mixed(mixed_fn f) { mixed m = {7, 40000000000, 9}; return f(m) + 1; }
+EXPORT color apply_color(color_fn f, color c) { return f(c); }

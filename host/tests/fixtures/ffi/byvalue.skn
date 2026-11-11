@@ -1,10 +1,11 @@
 (ns byvalue
   (:require [skein.ffi :as ffi]))
 
-;; Structs and unions passed and returned by value (M2.13 step 1, D-096), natively, with
+;; Structs and unions passed and returned by value (M2.13 steps 1 and 2, D-096), natively, with
 ;; host/tests/fixtures/ffi/byvalue.c, which the bootstrap builds into build/examples/.
 ;; Arguments are maps of the fields (nested maps for nested structs) or pointers to a
-;; struct; results are owned pointers to a copy, read with ffi/field.
+;; struct; results are owned pointers to a copy, read with ffi/field. Callbacks get
+;; by-value parameters as owned pointers and return a map or a pointer.
 
 (ffi/deflibrary byvalue
   {:macos "libbyvalue.dylib" :linux "libbyvalue.so" :windows "byvalue.dll"})
@@ -27,6 +28,25 @@
 (ffi/defcfun num-as-float "num_as_float" f32 [n num])
 (ffi/defcfun num-from-int "num_from_int" num [i i32])
 (ffi/defcfun triple-sum "triple_sum" i32 [t triple])
+(ffi/defcfun apply-vec2 "apply_vec2" vec2f [f ptr, v vec2f])
+(ffi/defcfun apply-rect "apply_rect" rectd [f ptr])
+(ffi/defcfun apply-mixed "apply_mixed" i64 [f ptr])
+(ffi/defcfun apply-color "apply_color" color [f ptr, c color])
+
+(ffi/defcallback scale-vec2 vec2f [v vec2f, k f32]
+  {:x (* k (ffi/field v vec2f :x)) :y (* k (ffi/field v vec2f :y))})
+
+(ffi/defcallback swap-rect rectd [r rectd]
+  {:x (ffi/field r rectd :y) :y (ffi/field r rectd :x)
+   :w (ffi/field r rectd :h) :h (ffi/field r rectd :w)})
+
+(ffi/defcallback sum-mixed i64 [m mixed]
+  (+ (ffi/field m mixed :a) (ffi/field m mixed :b) (ffi/field m mixed :c)))
+
+;; Returns the struct it was given: a pointer works as a result too.
+(ffi/defcallback same-color color [c color] c)
+
+(ffi/defcallback bad-color color [c color] (error "no color"))
 
 (defn fields [p type ks] (mapv (fn [k] (ffi/field p type k)) ks))
 
@@ -52,6 +72,13 @@
     (dotimes [i 3] (ffi/put! (ffi/field t triple :v) i32 (* 10 (inc i)) i))
     (prn :triple-sum (triple-sum t))
     (ffi/free t))
+  (prn :callback-vec2 (fields (apply-vec2 scale-vec2 {:x 1.5 :y -2.0}) vec2f [:x :y]))
+  (prn :callback-rect (fields (apply-rect swap-rect) rectd [:x :y :w :h]))
+  (prn :callback-mixed (apply-mixed sum-mixed))
+  (prn :callback-pointer-result
+       (fields (apply-color same-color {:r 1 :g 2 :b 3 :a 4}) color [:r :g :b :a]))
+  (prn :callback-error (fields (apply-color bad-color {:r 1 :g 2 :b 3 :a 4}) color
+                               [:r :g :b :a]))
   (prn :not-a-struct (try (vec2-add 5 {:x 1.0 :y 1.0})
                           (catch error e (condition-message e))))
   (prn :no-such-field (try (vec2-add {:z 1.0} {:x 1.0 :y 1.0})

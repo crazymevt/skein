@@ -11,5 +11,10 @@
 :num-as-float 2.5f
 :num-from-int 42
 :triple-sum 60
+:callback-vec2 [3.0f -4.0f]
+:callback-rect [2.0 1.0 4.0 3.0]
+:callback-mixed 40000000017
+:callback-pointer-result [1 2 3 4]
+:callback-error [0 0 0 0]
 :not-a-struct "byvalue/vec2f by value needs a pointer to one or a map of its fields, not 5"
 :no-such-field "byvalue/vec2f has no field :z"

@@ -417,7 +417,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 - Settled (D-096): a by-value struct or union argument takes a pointer or a map of its fields, and a result is an owned pointer to a copy; `(ffi/defcfun-ptr name return [params])` calls a function pointer given as the first argument, and `defcfun` may bind one C symbol under several signatures (`objc_msgSend`); a variadic function is declared once per call shape, with `&` before the variadic parameters; native only, Phase 0 unchanged.
 - Steps, in order (D-096):
   1. ✅ Structs and unions by value as `defcfun` arguments (a pointer or a map, nested maps for nested structs) and results (an owned pointer to a copy), in the C backend; native fixtures with a small C library, including structs C passes in registers and ones it passes in memory.
-  2. By value in callbacks: `defcallback` parameters (as owned pointers) and results (a pointer or a map).
+  2. ✅ By value in callbacks: `defcallback` parameters (as owned pointers) and results (a pointer or a map).
   3. `defcfun-ptr`, and one C symbol under several names with different signatures.
   4. Variadic shapes with `&`, including floats and small integers that C promotes.
   5. `skein bindgen` emits by-value structs and variadic functions; skein-sdl3 is regenerated and tagged v0.2.0, and the examples' locks move to it; all of it on the three platforms in CI.

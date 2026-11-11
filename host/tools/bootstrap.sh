@@ -371,8 +371,9 @@ test_native_only() {
     fi
     echo "skeinc: $name ok"
   done
-  # Structs and unions by value (M2.13, D-096): host/tests/fixtures/ffi/byvalue.c, built
-  # beside the program, which loads it from its own directory.
+  # Structs and unions by value, in calls and callbacks (M2.13, D-096):
+  # host/tests/fixtures/ffi/byvalue.c, built beside the program, which loads it from its
+  # own directory.
   local bv_lib=libbyvalue.so
   case "$host" in
     *macos) bv_lib=libbyvalue.dylib ;;
@@ -381,11 +382,20 @@ test_native_only() {
   "${SKEIN_ZIG:-zig}" cc -shared -o "build/examples/$bv_lib" host/tests/fixtures/ffi/byvalue.c
   "$skeinc" build host/tests/fixtures/ffi/byvalue.skn -o "build/examples/ffi-byvalue$exe" \
     > /dev/null
+  "build/examples/ffi-byvalue$exe" > build/examples/ffi-byvalue.out \
+    2> build/examples/ffi-byvalue.err
   if ! diff --strip-trailing-cr host/tests/fixtures/ffi/byvalue.expected \
-       <("build/examples/ffi-byvalue$exe") > /dev/null; then
+       build/examples/ffi-byvalue.out > /dev/null; then
     echo "skeinc: ffi-byvalue differs from its .expected"
     diff --strip-trailing-cr host/tests/fixtures/ffi/byvalue.expected \
-      <("build/examples/ffi-byvalue$exe") | head -20
+      build/examples/ffi-byvalue.out | head -20
+    exit 1
+  fi
+  # A callback that fails warns and returns a zeroed struct (step 2).
+  if ! grep -q "callback byvalue/bad-color signaled no color; returning a zeroed struct" \
+       build/examples/ffi-byvalue.err; then
+    echo "skeinc: ffi-byvalue's failing callback didn't warn:"
+    cat build/examples/ffi-byvalue.err
     exit 1
   fi
   echo "skeinc: ffi-byvalue ok"
