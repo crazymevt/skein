@@ -441,7 +441,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
      - ✅ C. Stacks (with a page list or sidebar) and tabbed panes (closable, reorderable and draggable tabs, accessories).
      - ✅ D. Surfaces: popovers, completion popups and custom dialogs (`run-dialog`, `respond`).
      - ✅ E. Text buffers (undo, redo, positions) and code views (line numbers, styles, selections).
-     - F. Images from bytes, system and glyph images, font families and font files, and icons in lists, tables and trees.
+     - ✅ F. Images from bytes, system and glyph images, font families and font files, and icons in lists, tables and trees.
      - G. Window state: saving and restoring a window's frame.
      - H. The web view (Jessie's: a program of Jessie's needs it): WKWebView on Cocoa, WebKitGTK 6.0 on GTK 4 (Linux only: Homebrew has no WebKitGTK), and WebView2 with the Win32 backend; loading URLs and HTML, running scripts, messages between the page and Skein, and navigation events.
      - I. The examples and the widget explorer, all of LGT's.
@@ -464,6 +464,7 @@ Sealing; inlining across namespaces; escape analysis and arena inference; SIMD f
 Ideas and follow-ups noticed during work, kept here so they don't derail the current milestone.
 
 - skein-ui step 2 showed two small gaps in Skein itself, left for a decision (a var is declared before its definition with `(def name)`, as Clojure's `declare` does): `skein.math/round`, `floor` and `ceil` return floats for floats, where Clojure's `clojure.math/round` returns an integer (callers write `(int (math/round x))`); and nothing reads a number from bytes (a big-endian `u32` from a `u8` array, as for a PNG header), which binary file formats in games will want. Step 4 showed two more: `skein.core` has no `flush` (Clojure's, for `*out*`) and no `*err*`, so a program can't flush standard output or write to standard error without `skein.log`.
+- skein-ui part F (M2.14): Skein's finalizers only free foreign memory (`ffi/own`); a finalizer that runs Skein code (on the UI thread, queued) when an object is collected would let images release their native images by themselves, as LGT's do with trivial-garbage, rather than only through `free-image!`.
 - Phase 2: decide VS Code support for the native runtime's Swank server (a Swank-speaking extension or an LSP server); check SLY/Slynk compatibility (D-018).
 - Phase 2: decide whether FFI calls run on the fiber stack or the worker thread's native stack (D-024).
 - Phase 1: the seq library is written in CL for Phase 0 speed (D-032); port it to Skein (`lib/skein/core.skn`) with the front end, or reimplement it in the Zig runtime.

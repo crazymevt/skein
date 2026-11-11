@@ -1364,6 +1364,10 @@ Date: 2026-11-11 · Status: Accepted
   - A code view's editing commands run where no native view does them (the headless backend); the backends emit input with `*native-input*` true, so a native text view does what no handler consumed. `caret-position` and `has-caret?` are generic, so completion popups show under a code view's caret too.
   - Cocoa follows LGT: one `NSTextStorage` per buffer shared by its views' layout managers, runs as temporary attributes, a gutter view it draws. GTK gives each view a `GtkTextBuffer` of its own mirroring the core's; it reports no pointer motion over the text yet.
   - GTK's split panes now count their divider (layout gave the panes its pixel, and GTK widened the window a pixel a frame), and GTK text drawn by skein-ui takes GTK's resolution (72 dpi on macOS, where it had come out a third bigger than a widget's).
+- **As built (step 6, part F):**
+  - An image says what it is (a file's path, a file's bytes, pixels, a system image's name or a glyph's text and font), and each backend makes its native image from that the first time it shows; this also makes good step 4's missing row icons. Skein's finalizers only free foreign memory (`ffi/own`); none runs Skein code when an object is collected, so a native image (an `NSImage` to release, a GObject to unref) lives until `free-image!`, which LGT also has for large images; showing a freed image is an error. Glyph images are shared, made once per text, font, color, size and template.
+  - Cocoa's lists, tables and trees are now view-based, as LGT's: each cell an `NSTableCellView` with a label and an image view. GTK's cells are a box of an icon and the label. On GTK a system image is a texture of the icon theme's file when GTK reads it, so a canvas can draw it, else the theme's paintable, which only widgets show.
+  - Font files are registered with Core Text on macOS (by the GTK backend too, since Pango draws with Core Text there) and with fontconfig elsewhere.
 
 ## D-098: `skein.system`, and the operating system a program runs on
 Date: 2026-11-11 · Status: Accepted
