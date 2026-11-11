@@ -1094,6 +1094,9 @@ it was built from has changed since, else built now."
         manifest (str exe ".sources")
         skeinc-date (%file-mtime (skeinc-path home))]
     (when-not (built-from-current? exe manifest skeinc-date)
+      ;; A build can take a minute or two, and prints nothing; say why nothing happens.
+      ;; On stderr, which keeps the program's own output apart.
+      (%write-stderr (str "skein: building " (file-name path) " (this can take a minute)\n"))
       (make-directories! (directory-of exe))
       (build-program path (assoc opts :output exe))
       (io/write-file manifest (manifest-text skeinc-date

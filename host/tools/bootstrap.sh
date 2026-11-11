@@ -148,6 +148,18 @@ test_projects() {
     echo "skeinc: skeinc run of the deps app printed something else"
     exit 1
   fi
+  # skeinc run says on stderr when it builds the program first, and not when it reuses
+  # the build; stdout is the program's alone.
+  rm -f .skein-cache/run/hello-*-dev*
+  "$skeinc" run examples/hello.skn 2> build/examples/run-first.err > build/examples/run.out
+  "$skeinc" run examples/hello.skn 2> build/examples/run-again.err > /dev/null
+  if ! grep -q "skein: building hello.skn" build/examples/run-first.err \
+       || [ -s build/examples/run-again.err ] \
+       || ! diff --strip-trailing-cr examples/hello.expected build/examples/run.out \
+            > /dev/null; then
+    echo "skeinc: skeinc run doesn't say when it builds, or says it when it doesn't"
+    exit 1
+  fi
   (cd $deps/app && "$OLDPWD/$skeinc" package > /dev/null)
   local top="$deps/app/dist/$host/app/" lib="libutil.so" lib_dir="" asset_dir=""
   case "$host" in
