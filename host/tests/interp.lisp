@@ -70,8 +70,12 @@ run it there."
 
 (test interpreter-runs-programs-as-phase-0-does
   (dolist (path (interpreted-programs))
-    (let ((expected (phase0-output path))
-          (actual (handler-case (interpret-file path)
-                    (error (e) (format nil "error: ~A" e)))))
+    ;; A phase warning prints once per process: forget which were printed before each
+    ;; run, so both print the same ones whatever ran before (make test runs suites in
+    ;; separate processes).
+    (let ((expected (progn (clrhash skein.runtime::**phase-warned**) (phase0-output path)))
+          (actual (progn (clrhash skein.runtime::**phase-warned**)
+                         (handler-case (interpret-file path)
+                           (error (e) (format nil "error: ~A" e))))))
       (is (string= expected actual) "~A: the interpreter differs~%~A" (file-namestring path)
           (first-difference expected actual)))))

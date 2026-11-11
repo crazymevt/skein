@@ -7,8 +7,10 @@ ZIG ?= zig
 .PHONY: test test-host test-runtime test-compiler compiler repl bench
 
 # The host (Phase 0, SBCL), the native runtime (Phase 1, Zig 0.17.1) and the native
-# compiler.
-test: test-host test-runtime test-compiler
+# compiler, side by side after one preparation step (host/tools/test-all.sh); the logs
+# are in build/test-logs/. test-host, test-runtime and test-compiler run one part each.
+test:
+	bash host/tools/test-all.sh
 
 test-host:
 	$(SBCL_BATCH) --load host/tools/run-tests.lisp

@@ -70,7 +70,7 @@ These are defined in M0.1; update this section if they change.
 
 | Command | Purpose |
 |---|---|
-| `make test` | run all tests: the host's (`make test-host`), the Zig runtime's (`make test-runtime`) and the native compiler's bootstrap (`make test-compiler`) |
+| `make test` | run all tests side by side after one preparation step (`host/tools/test-all.sh`, about 3 minutes; logs in `build/test-logs/`): the host's suites (`make test-host`), the Zig runtime's (`make test-runtime`) and the native compiler's bootstrap (`make test-compiler`) |
 | `make repl` | SBCL with Skein loaded |
 | `./skein run [--release] <file.skn> [args]` | run a Skein program natively (calls its `-main` with the args): skeinc builds it with `--eval` into `.skein-cache/run/`, rebuilding only when a source changed (D-081) |
 | `./skein repl` | start a Skein REPL (natively) |
