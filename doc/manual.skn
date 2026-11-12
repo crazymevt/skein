@@ -490,8 +490,9 @@ announces (nil if neither), :lines the block's lines and :end the index after it
               new? (or heading (seq caption) (some str/blank? between))
               code (str/join "\n" (subvec lines start end))
               {res-lines :lines res-end :end value :value prints :prints} (results lines end)
+              shown-results (remove (fn [l] (= (str/trim l) ";; not run")) res-lines)
               step {:code code :value value :prints prints :line (inc start)
-                    :shown (str/join "\n" (into [code] res-lines))}
+                    :shown (str/join "\n" (into [code] shown-results))}
               acc (if (and new? current ex)
                     (update-in acc [:vars current] (fnil conj []) ex)
                     acc)
