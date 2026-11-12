@@ -978,7 +978,8 @@ Phase 3's main project (D-102) is an IDE for Skein written in Skein, Skein Studi
 | `skein.ecs` | entity–component–system on `defsoa` | 1+ |
 | `skein.json`, `skein.edn` | data formats: JSON in clojure.data.json's shape, with `reformat` keeping keys' order; EDN in clojure.edn's, readable in every build (D-104) | 3 (M3.2) |
 | `skein.bytes` | UTF-8, base64 and hex encodings, and SHA-1, SHA-256 and MD5, over strings and `u8` arrays (D-104) | 3 (M3.2) |
-| `skein.net` | TCP sockets, client and server (M3.4); HTTP through libcurl in its own library, `skein-curl` (M3.14) | 3 (D-102) |
+| `skein.net` | TCP sockets, client and server, as skein.io streams both ways (`connect`, `listen`, `accept`, `port`; timeouts in seconds signal `net-timeout`; `listen` on localhost unless `:host` says otherwise) (M3.4, D-106); HTTP through libcurl in its own library, `skein-curl` (M3.14) | 3 (D-102) |
+| `skein.swank.client` | a Swank client, for an IDE driving `skein dev`: requests return promises (deref signals `swank-abort` for an abort), events are maps on a channel (M3.4, D-106) | 3 (D-106) |
 | `skein.ui` | native desktop UIs: widgets backed by Cocoa, Win32 and GTK 4 controls, events, layout, menus and dialogs; a headless backend for tests. In its own repository, `skein-ui`, used with `:deps` | 2 (M2.14, D-090, D-097) |
 
 Phase 0 status (D-040):
