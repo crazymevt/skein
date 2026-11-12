@@ -492,7 +492,7 @@ test_gc_verify() {
 }
 
 test_manual() {
-  # The manual (D-109): the generator's tests, then every example in doc/examples run and
+  # The manual (D-111): the generator's tests, then every example in doc/examples run and
   # compared with what it says it prints, and doc/topics.edn and doc/notes checked.
   "$skeinc" build doc/manual-test.skn --eval -o "build/examples/manual-test$exe" > /dev/null
   "build/examples/manual-test$exe"

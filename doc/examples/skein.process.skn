@@ -3,8 +3,9 @@
             [skein.io :as io]
             [skein.string :as str]))
 
-;;; Examples for skein.process (D-111). They start Unix programs (cat, sh, sleep, echo);
-;;; on Windows the same calls run its own.
+;;; Examples for skein.process (D-111). They start Unix programs (cat, sh, sleep, echo),
+;;; which Windows has with Git. The exit statuses of programs ended by a signal are Unix's,
+;;; so those examples aren't run on Windows, nor is :err :out, which isn't supported there yet.
 ;;; `./skein run doc/manual.skn --check skein.process` runs them.
 
 ;;;; process
@@ -29,11 +30,13 @@
   (io/read-text (:out proc)))
 ;=> "apple\npear\n"
 
-;; :dir, :extra-env, and :err :out to merge the error output into the output.
+;; :dir, :extra-env, and :err :out to merge the error output into the output (not yet
+;; supported on Windows).
 (let [proc (p/process ["sh" "-c" "echo $GREETING from $(basename $PWD); echo oops >&2"]
                       {:dir "lib" :extra-env {"GREETING" "hi"} :err :out})]
   (io/read-text (:out proc)))
 ;=> "hi from lib\noops\n"
+;; not run on windows
 
 ;; :out to a file; :discard drops a stream.
 (let [f (io/temp-file)]
@@ -72,17 +75,20 @@
 ;=> true
 
 ;;;; signal!
-;; By intent; a program ended by a signal has the signal's number as its :exit.
+;; By intent; on Unix a program ended by a signal has the signal's number as its :exit
+;; (on Windows, where :kill and :terminate both end it, 1).
 (let [proc (p/process ["sleep" "10"])]
   (p/signal! proc :kill)
   (:exit @proc))
 ;=> 9
+;; not run on windows
 
 ;;;; destroy!
 (let [proc (p/process ["sleep" "10"])]
   (p/destroy! proc)
   (:exit @proc))
 ;=> 15
+;; not run on windows
 
 ;;;; destroy-tree!
 ;; Ends the programs it started too: here sh's sleep.
@@ -91,6 +97,7 @@
   (p/destroy-tree! proc)
   [(:exit @proc) (io/read-text (:out proc))])
 ;=> [15 ""]
+;; not run on windows
 
 ;; @p with a time limit gives the timeout value if the program is still running.
 (let [proc (p/process ["sleep" "10"])]
