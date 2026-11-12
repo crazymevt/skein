@@ -1541,3 +1541,19 @@ Date: 2026-11-12 · Status: Accepted
 - **Alternatives:** separate one-way `:in` and `:out` streams, as skein.process has; timeouts as nil; listening on every interface by default; callbacks (Lisp Studio's) for replies and events.
 - **Consequences:** a socket's reads and writes go through the same stream table as files, so a socket can be passed wherever skein.io takes a stream; text and bytes can be mixed on one, as Swank's framing needs (a byte count, then UTF-8 text). `skein dev` keeps listening only on localhost.
 
+## D-107: Files and the system
+Date: 2026-11-12 · Status: Accepted
+- **Context:** M3.5 (D-102): Skein Studio's explorer walks a project as Git sees it, its editors notice files changed on disk, agents and the terminal need temporary files, settings and tokens are kept owner-only in the application's own directories, links open in the default browser, and chat and logs write times as ISO 8601. Lisp Studio filters its explorer by folder names and checks modification times when its window is focused; skein dev polls its sources' dates (D-081).
+- **Decision** (Jessie's):
+  - **Native watchers:** FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW on Windows, each watching a tree recursively.
+  - **Git's ignore rules:** every `.gitignore` down the tree with Git's whole pattern syntax (negation, `**`, anchoring, a trailing `/` for directories), and `.git/info/exclude`; `.git` itself is always skipped. Not the global `core.excludesFile`.
+  - **`skein.system` gives `config-dir`, `data-dir` and `cache-dir`** of an application: Application Support and Caches on macOS; `%APPDATA%` and `%LOCALAPPDATA%` on Windows; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` (with their defaults) on Linux.
+  - **Names:** `skein.io`'s `walk` (a lazy seq of paths under a root, sorted, each directory before its contents; options `:gitignore`, `:hidden`, `:dirs`), `ignore-matcher` and `ignored?`, `watch` (a watcher whose `:events` is a channel of `{:kind :created|:modified|:deleted :path p}`) and `stop-watch!`, `temp-file` and `temp-dir` (created owner-only), and `owner-only!` (modes 600 and 700; nothing on Windows, where a user's files are already theirs); `skein.system/open!` (a file or URL in its default application); `skein.time/format-iso8601` (of millis or a calendar time) and `parse-iso8601` (a calendar time).
+- **Implementation:**
+  - **The ignore rules are Skein,** in `skein.io`: each directory's patterns compiled once, matched against paths relative to the directory that holds them, the last match deciding, and a directory that is ignored not entered (Git's rule: a file in an ignored directory can't be re-included). The reference model is Git itself: a script makes random trees and patterns and records what `git check-ignore` says, checked in as a table, as D-105's regex cases are.
+  - **Watchers are in the runtime,** one thread per watcher reading the platform's events into a queue that `skein.io` drains into the channel, filtered by the ignore rules. Platform events are reduced to the three kinds: a rename is a deletion and a creation; a platform's coalesced or overflowed events end in a `:modified` of the root's path, telling the reader to look again. FSEvents comes from CoreServices, which macOS builds link.
+  - **Temporary files** are made with exclusive creation and random names in the system's temporary directory, so two programs can't get the same one.
+  - **`open!`** runs `open` on macOS, `xdg-open` on Linux and `ShellExecuteW` on Windows.
+- **Alternatives:** polling, as skein dev's watcher does; only the root's `.gitignore`, or also the global excludes; one data directory.
+- **Consequences:** the IDE's explorer, search and watcher agree with Git about what's in a project. A watcher's events can arrive in a burst and repeat; readers treat them as hints to look at the file again.
+

@@ -967,11 +967,11 @@ Phase 3's main project (D-102) is an IDE for Skein written in Skein, Skein Studi
 | `skein.conc` | nurseries, futures, channels, timeouts, job graphs | 0 |
 | `skein.ffi` | FFI | 0 |
 | `skein.gc` | GC controls, arenas | 0 (stubs) |
-| `skein.io` | files, paths, streams, bytes | 0 |
-| `skein.time` | monotonic clocks, the wall clock (`epoch-millis`, M2.14), calendar times (`local-time`, `utc-time`, `utc-offset`, D-100), sleep, frame timers | 0 |
+| `skein.io` | files, paths, streams, bytes; walking a tree with Git's ignore rules (`walk`, `ignore-matcher`, `ignored?`), watching one (`watch`, `stop-watch!`), temporary files (`temp-file`, `temp-dir`) and `owner-only!` (M3.5, D-107) | 0 |
+| `skein.time` | monotonic clocks, the wall clock (`epoch-millis`, M2.14), calendar times (`local-time`, `utc-time`, `utc-offset`, D-100) and ISO 8601 text of them (`format-iso8601`, `parse-iso8601`, M3.5, D-107), sleep, frame timers | 0 |
 | `skein.log` | leveled logging | 0 |
 | `skein.process` | programs run in the background, in babashka.process's style: `process`, streams for `:in`, `:out` and `:err`, `@p` for the exit, `signal!` by intent, `destroy-tree!` (D-103) | 3 (M3.1) |
-| `skein.system` | the system the program runs on: `(os)` is `:macos`, `:linux` or `:windows`, `(arch)` `:aarch64` or `:x86_64`, `(getenv name)` and `(home-dir)` (D-098) | 2 (M2.14) |
+| `skein.system` | the system the program runs on: `(os)` is `:macos`, `:linux` or `:windows`, `(arch)` `:aarch64` or `:x86_64`, `(getenv name)` and `(home-dir)` (D-098); an application's `config-dir`, `data-dir` and `cache-dir`, and `open!` (M3.5, D-107) | 2 (M2.14) |
 | `skein.test` | testing | 0 |
 | `skein.repl` | REPL helpers, inspector | 0 |
 | `skein.game` | game loop, fixed timestep, restarts, input mapping | 0 (demo) |
