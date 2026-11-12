@@ -58,15 +58,13 @@
 ;=> "from the client"
 
 ;;;; close-server
-;; accept returns nil once the server is closed. (On Windows, closing a server while an
-;; accept waits on it crashes the runtime for now, so this isn't run there.)
+;; accept returns nil once the server is closed.
 (let [srv (net/listen 0)
       waiting (future (net/accept srv))]
   (sleep 0.05)
   (net/close-server srv)
   @waiting)
 ;=> nil
-;; not run on windows
 
 ;;;; server
 (instance? net/server echo-server)

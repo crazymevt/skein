@@ -166,15 +166,51 @@ fn portOf(port: Value, comptime what: []const u8) u16 {
 // Servers
 
 var lock: platform.Mutex = .{};
-var servers: std.ArrayList(?*net.Server) = .empty;
+var servers: std.ArrayList(?*Server) = .empty;
 
-fn serverOf(h: Value, comptime what: []const u8) *net.Server {
+const is_windows = @import("builtin").os.tag == .windows;
+
+/// A listening server. `users` (under `lock`) counts the accepts waiting on it and a
+/// close-server at work: the last of them to finish once it's closed frees it, and on
+/// Windows closes its socket, after every accept has returned.
+const Server = struct {
+    server: net.Server,
+    users: usize = 0,
+    closed: bool = false,
+};
+
+/// One user of a closed server is done: the last frees it.
+fn release(s: *Server) void {
     lock.lock();
-    var found: ?*net.Server = null;
-    if (h.isFixnum() and h.toFixnum() >= 1 and h.toFixnum() <= servers.items.len)
-        found = servers.items[@intCast(h.toFixnum() - 1)];
+    s.users -= 1;
+    const last = s.users == 0;
     lock.unlock();
-    return found orelse rt.raise(.@"error", what ++ ": the server is closed", .{});
+    if (!last) return;
+    if (is_windows) sched.blocking(closeSocketBlocking, s);
+    alloc.destroy(s);
+}
+
+/// The port of the server h names.
+fn serverPort(h: Value) u16 {
+    lock.lock();
+    defer lock.unlock();
+    if (h.isFixnum() and h.toFixnum() >= 1 and h.toFixnum() <= servers.items.len) {
+        if (servers.items[@intCast(h.toFixnum() - 1)]) |s| return s.server.socket.address.getPort();
+    }
+    rt.raise(.@"error", "port: the server is closed", .{});
+}
+
+/// The server h names, counting the caller among the accepts waiting on it.
+fn serverToAccept(h: Value) *Server {
+    lock.lock();
+    defer lock.unlock();
+    if (h.isFixnum() and h.toFixnum() >= 1 and h.toFixnum() <= servers.items.len) {
+        if (servers.items[@intCast(h.toFixnum() - 1)]) |s| {
+            s.users += 1;
+            return s;
+        }
+    }
+    rt.raise(.@"error", "accept: the server is closed", .{});
 }
 
 const ListenCall = struct { address: net.IpAddress, server: ?net.Server = null, failure: []const u8 = "" };
@@ -204,8 +240,8 @@ fn listen(host: Value, port: Value) Value {
     var call: ListenCall = .{ .address = address };
     sched.blocking(listenBlocking, &call);
     const server = call.server orelse return string.make(call.failure);
-    const s = alloc.create(net.Server) catch rt.fatal("out of memory", .{});
-    s.* = server;
+    const s = alloc.create(Server) catch rt.fatal("out of memory", .{});
+    s.* = .{ .server = server };
     lock.lock();
     defer lock.unlock();
     for (servers.items, 0..) |slot, i| {
@@ -228,37 +264,97 @@ fn acceptBlocking(arg: ?*anyopaque) void {
 /// (%net-accept server): the next connection's socket stream, or nil once the server is
 /// closed.
 fn accept(h: Value) Value {
-    var call: AcceptCall = .{ .server = serverOf(h, "accept") };
+    const s = serverToAccept(h);
+    var call: AcceptCall = .{ .server = &s.server };
     sched.blocking(acceptBlocking, &call);
-    const s = call.stream orelse return Value.nil;
-    return files.registerSocket(s);
+    lock.lock();
+    const closed = s.closed;
+    if (!closed) s.users -= 1;
+    lock.unlock();
+    if (closed) {
+        // A connection close-server made to wake it (or one that came as it closed).
+        if (call.stream) |stream| stream.close(io.stdIo());
+        release(s);
+        return Value.nil;
+    }
+    const stream = call.stream orelse return Value.nil;
+    return files.registerSocket(stream);
 }
 
+fn closeSocketBlocking(arg: ?*anyopaque) void {
+    const s: *Server = @ptrCast(@alignCast(arg));
+    s.server.deinit(io.stdIo());
+}
+
+/// The server, and how many accepts were waiting on it when it was closed.
+const CloseCall = struct { server: *Server, waiting: usize };
+
 fn closeServerBlocking(arg: ?*anyopaque) void {
-    const s: *net.Server = @ptrCast(@alignCast(arg));
+    const c: *CloseCall = @ptrCast(@alignCast(arg));
+    const s = &c.server.server;
     const sio = io.stdIo();
+    if (is_windows) {
+        // Closing the socket cancels a waiting accept, which Zig's library takes for
+        // unreachable (STATUS_CANCELLED): wake each with a connection instead, and the
+        // last user closes the socket (release).
+        var address = s.socket.address;
+        switch (address) {
+            .ip4 => |a| if (std.mem.eql(u8, &a.bytes, &.{ 0, 0, 0, 0 })) {
+                address = .{ .ip4 = net.Ip4Address.loopback(a.port) };
+            },
+            .ip6 => |a| if (std.mem.allEqual(u8, &a.bytes, 0)) {
+                address = .{ .ip6 = net.Ip6Address.loopback(a.port) };
+            },
+        }
+        const wakers = alloc.alloc(net.Stream, c.waiting) catch rt.fatal("out of memory", .{});
+        defer alloc.free(wakers);
+        var made: usize = 0;
+        while (made < c.waiting) : (made += 1) {
+            wakers[made] = address.connect(sio, .{ .mode = .stream }) catch break;
+        }
+        // Each stays open until the accepts have taken them (or 2 s have passed): one
+        // closed sooner could make an accept fail on the reset.
+        var pause_lock: platform.Mutex = .{};
+        var pause: platform.Condition = .{};
+        var tries: usize = 0;
+        while (tries < 2000) : (tries += 1) {
+            lock.lock();
+            const done = c.server.users == 1; // only this close-server
+            lock.unlock();
+            if (done) break;
+            pause_lock.lock();
+            pause.timedWait(&pause_lock, std.time.ns_per_ms);
+            pause_lock.unlock();
+        }
+        for (wakers[0..made]) |w| w.close(sio);
+        return;
+    }
     // Closing the socket alone doesn't wake an accept waiting on it on Linux, where it
     // would wait for ever: shutting it down first does, and the accept then returns nil.
-    // (macOS wakes it on close, and fails this harmlessly; Windows is left as it was.)
-    if (@import("builtin").os.tag != .windows) {
-        sio.vtable.netShutdown(sio.userdata, s.socket.handle, .both) catch {};
-    }
+    // (macOS wakes it on close, and fails this harmlessly.)
+    sio.vtable.netShutdown(sio.userdata, s.socket.handle, .both) catch {};
     s.deinit(sio);
 }
 
 /// (%net-close-server server): stop listening; closing it again does nothing.
 fn closeServer(h: Value) Value {
     lock.lock();
-    var s: ?*net.Server = null;
+    var found: ?*Server = null;
     if (h.isFixnum() and h.toFixnum() >= 1 and h.toFixnum() <= servers.items.len) {
         const i: usize = @intCast(h.toFixnum() - 1);
-        s = servers.items[i];
+        found = servers.items[i];
         servers.items[i] = null;
     }
+    const s = found orelse {
+        lock.unlock();
+        return Value.nil;
+    };
+    s.closed = true;
+    var call: CloseCall = .{ .server = s, .waiting = s.users };
+    s.users += 1;
     lock.unlock();
-    const server = s orelse return Value.nil;
-    sched.blocking(closeServerBlocking, server);
-    // An accept still waiting holds the server: it's freed with the program.
+    sched.blocking(closeServerBlocking, &call);
+    release(s);
     return Value.nil;
 }
 
@@ -307,7 +403,7 @@ pub const entries = [_]io.Entry{
     }.f },
     .{ .name = "%net-port", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
-            return Value.fromFixnum(serverOf(a[0], "port").socket.address.getPort());
+            return Value.fromFixnum(serverPort(a[0]));
         }
     }.f },
     .{ .name = "%net-close-server", .min = 1, .max = 1, .impl = struct {
