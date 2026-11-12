@@ -1,0 +1,54 @@
+;; skein.io's ignore rules and walk (M3.5 step 1, D-107), natively, against the reference
+;; model: for every case in gitignore-cases.edn (written by host/tools/gitignore-cases.py
+;; from Git), the tree is made on disk, and walk finds the files Git doesn't ignore, and
+;; ignored? agrees about each file. Then walk's order and options.
+(ns gitignore
+  (:require [skein.edn :as edn]
+            [skein.io :as io]))
+
+(def ^:private work "build/test-gitignore")
+
+(defn- make-tree! [files ignores exclude]
+  (io/delete-tree work)
+  (io/make-dirs work)
+  (doseq [f files]
+    (when-let [d (io/parent f)] (io/make-dirs (io/path work d)))
+    (io/write-file (io/path work f) "x\n"))
+  (doseq [[p text] ignores]
+    (when-let [d (io/parent p)] (io/make-dirs (io/path work d)))
+    (io/write-file (io/path work p) text))
+  (when-not (= "" exclude)
+    (io/make-dirs (io/path work ".git" "info"))
+    (io/write-file (io/path work ".git" "info" "exclude") exclude)))
+
+(defn- relative [p] (subs p (inc (count work))))
+
+(defn- gitignore-file? [p] (= ".gitignore" (io/file-name p)))
+
+(defn- check [[files ignores exclude visible]]
+  (make-tree! files ignores exclude)
+  (let [walked (set (remove gitignore-file?
+                            (map relative (io/walk work {:hidden true :dirs false}))))
+        m (io/ignore-matcher work)
+        wrong-ignored (remove (fn [f] (= (io/ignored? m f false) (not (contains? (set visible) f))))
+                              files)]
+    (when-not (and (= walked (set visible)) (empty? wrong-ignored))
+      {:files files :ignores ignores :exclude exclude :git visible :walk (vec (sort walked))
+       :ignored?-wrong (vec wrong-ignored)})))
+
+(defn -main [& args]
+  (let [cases (edn/read-string (io/read-file "host/tests/fixtures/library/gitignore-cases.edn"))
+        wrong (keep check cases)]
+    (println "cases:" (count cases))
+    (println "mismatches:" (count wrong))
+    (doseq [w (take 5 wrong)] (prn w)))
+  ;; Order, directories, hidden names, and paths under the root.
+  (make-tree! ["b/z.txt" "b/a/y.txt" "a.txt" ".hidden/x" ".env" "build/out.o" "c"]
+              [[".gitignore" "build/\n"]] "")
+  (println "walk:" (mapv relative (io/walk work)))
+  (println "hidden too:" (mapv relative (io/walk work {:hidden true :dirs false})))
+  (println "no rules:" (mapv relative (io/walk work {:gitignore false :dirs false})))
+  (let [m (io/ignore-matcher work)]
+    (println "ignored?:" (io/ignored? m "build/out.o") (io/ignored? m (io/path work "build"))
+             (io/ignored? m "b/z.txt") (io/ignored? m ".git/config") (io/ignored? m "/elsewhere/x")))
+  (io/delete-tree work))

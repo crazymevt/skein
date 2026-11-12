@@ -19,6 +19,8 @@ M2.11, D-093). Failures signal io-error.
   (run-process [program args...] {:dir path}?)
                                 run a program without a shell; {:exit :out :err}
   (resource-dir)                the directory holding the program's assets
+  (walk root opts?)             the paths under root, with Git's ignore rules (native)
+  (ignore-matcher root) (ignored? matcher path dir?)
 
 Path functions take / or \\ as separators and join with /, which every OS accepts.")
 
@@ -225,6 +227,220 @@ Returns nil."
   [path data]
   (when-not (%write-bytes path data false) (fail path "cannot write file " path))
   nil)
+
+;;; ------------------------------------------------------------------------------------
+;;; Git's ignore rules and walking a tree (M3.5, D-107). Each .gitignore's patterns are
+;;; compiled once into regular expressions (so these are native only, as regexes are) and
+;;; matched against paths relative to the directory that holds them: the last pattern that
+;;; matches decides, deeper files before higher ones, then .git/info/exclude. A directory
+;;; that is ignored isn't entered: nothing in it can be re-included, as in Git.
+
+(defn- split-slash
+  "The parts of the relative path p between its /s."
+  [p]
+  (loop [from 0 parts []]
+    (if-let [at (%string-find p "/" from)]
+      (recur (inc at) (conj parts (%string-slice p from at)))
+      (conj parts (%string-slice p from (%string-end p))))))
+
+(defn- lines-of
+  "The lines of text, split at newlines."
+  [text]
+  (loop [from 0 lines []]
+    (if-let [at (%string-find text "\n" from)]
+      (recur (inc at) (conj lines (%string-slice text from at)))
+      (conj lines (%string-slice text from (%string-end text))))))
+
+(defn- join-slash [parts]
+  (apply str (interpose "/" parts)))
+
+(defn- re-char
+  "The regular expression that matches the character ch as it is."
+  [ch]
+  (let [i (int ch)]
+    (if (or (<= 48 i 57) (<= 65 i 90) (<= 97 i 122) (> i 127))
+      (str ch)
+      (apply str "\\u" (map (fn [k] (nth "0123456789abcdef" (mod (quot i k) 16)))
+                             [4096 256 16 1])))))
+
+(defn- glob-class
+  "[regex, index after it] for the bracket expression of glob characters cs at i (its
+[), or nil if it has no closing ]."
+  [cs i]
+  (let [n (count cs)
+        neg? (and (< (inc i) n) (contains? #{\! \^} (nth cs (inc i))))
+        start (if neg? (+ i 2) (inc i))]
+    (loop [k start items []]
+      (cond
+        (>= k n) nil
+        (and (= \] (nth cs k)) (> k start))
+        [(str (if neg? "[^/" "[") (apply str items) "]") (inc k)]
+        :else
+        (let [[ch k] (if (and (= \\ (nth cs k)) (< (inc k) n)) [(nth cs (inc k)) (+ k 2)]
+                         [(nth cs k) (inc k)])]
+          (if (and (< (inc k) n) (= \- (nth cs k)) (not= \] (nth cs (inc k))))
+            (let [[hi k] (if (and (= \\ (nth cs (inc k))) (< (+ k 2) n))
+                           [(nth cs (+ k 2)) (+ k 3)]
+                           [(nth cs (inc k)) (+ k 2)])]
+              (recur k (conj items (str (re-char ch) "-" (re-char hi)))))
+            (recur k (conj items (re-char ch)))))))))
+
+(defn- glob->regex
+  "The regular expression for a gitignore glob, which matches a whole path: * and ? within
+a part, ** across parts where it is a part of its own."
+  [glob]
+  (let [cs (vec glob)
+        n (count cs)]
+    (loop [i 0 out []]
+      (if (>= i n)
+        (apply str out)
+        (let [c (nth cs i)]
+          (cond
+            (= c \*)
+            (let [j (loop [j i] (if (and (< j n) (= \* (nth cs j))) (recur (inc j)) j))
+                  own-part? (and (>= (- j i) 2)
+                                 (or (= i 0) (= \/ (nth cs (dec i))))
+                                 (or (= j n) (= \/ (nth cs j))))]
+              (cond (and own-part? (= j n)) (recur j (conj out ".*"))
+                    own-part? (recur (inc j) (conj out "(?:.*/)?"))
+                    :else (recur j (conj out "[^/]*"))))
+            (= c \?) (recur (inc i) (conj out "[^/]"))
+            (= c \[) (if-let [[re k] (glob-class cs i)]
+                       (recur k (conj out re))
+                       (recur (inc i) (conj out (re-char c))))
+            (and (= c \\) (< (inc i) n)) (recur (+ i 2) (conj out (re-char (nth cs (inc i)))))
+            :else (recur (inc i) (conj out (re-char c)))))))))
+
+(defn- ignore-pattern
+  "The pattern a line of a .gitignore gives, or nil for a blank line or a comment:
+{:negate :dir-only :anchored :re}."
+  [line]
+  (let [line (if (and (pos? (count line)) (= \return (nth line (dec (count line)))))
+               (subs line 0 (dec (count line)))
+               line)
+        ;; Trailing spaces go, unless a backslash escapes one.
+        line (loop [l line]
+               (let [k (count l)]
+                 (if (and (pos? k) (= \space (nth l (dec k)))
+                          (not (and (> k 1) (= \\ (nth l (- k 2))))))
+                   (recur (subs l 0 (dec k)))
+                   l)))]
+    (when-not (or (= "" line) (= \# (first line)))
+      (let [negate (= \! (first line))
+            body (if negate (subs line 1) line)
+            dir-only (and (pos? (count body)) (= \/ (nth body (dec (count body)))))
+            body (if dir-only (subs body 0 (dec (count body))) body)
+            anchored (some? (%string-find body "/" 0))
+            body (if (and anchored (= \/ (first body))) (subs body 1) body)]
+        (when-not (= "" body)
+          (when-let [re (try (re-pattern (glob->regex body)) (catch error e nil))]
+            {:negate negate :dir-only dir-only :anchored anchored :re re}))))))
+
+(defn- ignore-patterns
+  "The patterns of a .gitignore's text, in order."
+  [text]
+  (if text (vec (keep ignore-pattern (lines-of text))) []))
+
+(defn- verdict
+  "Whether the last of the patterns that matches the path sub (relative to their
+directory; name is its last part) ignores it (true) or re-includes it (false); nil if
+none matches."
+  [patterns sub name dir?]
+  (loop [i (dec (count patterns))]
+    (when (>= i 0)
+      (let [p (nth patterns i)]
+        (if (and (or dir? (not (:dir-only p)))
+                 (%re-exec (:re p) (if (:anchored p) sub name) 0 true))
+          (not (:negate p))
+          (recur (dec i)))))))
+
+(defn ignore-matcher
+  "A matcher of Git's ignore rules for the tree at root: every .gitignore in it (read when
+first needed, and kept) and root/.git/info/exclude. ignored? asks it about a path."
+  [root]
+  {::root root
+   ::exclude (ignore-patterns (%read-file (path root ".git" "info" "exclude")))
+   ::gitignores (atom {})})
+
+(defn- gitignore-patterns
+  "The patterns of the .gitignore in the directory dir (relative to the root; \"\" for
+it), or []."
+  [m dir]
+  (or (get @(::gitignores m) dir)
+      (let [ps (ignore-patterns (%read-file (path (::root m) dir ".gitignore")))]
+        (swap! (::gitignores m) assoc dir ps)
+        ps)))
+
+(defn- ignored-here?
+  "Whether the rules ignore the path rel (parts, relative to the root) itself, its
+directories being known not to be."
+  [m parts dir?]
+  (let [n (count parts)
+        nm (peek parts)]
+    (true? (loop [k (dec n)]
+             (if (< k 0)
+               (verdict (::exclude m) (join-slash parts) nm dir?)
+               (let [v (verdict (gitignore-patterns m (join-slash (vec (take k parts))))
+                                (join-slash (vec (drop k parts))) nm dir?)]
+                 (if (nil? v) (recur (dec k)) v)))))))
+
+(defn- relative-parts
+  "The parts of path p relative to the matcher's root (p is relative to it, or under it),
+or nil if it isn't under the root."
+  [m p]
+  (let [norm (fn [x] (apply str (map (fn [ch] (if (= ch \\) \/ ch)) (trim-separators x))))
+        root (norm (::root m))
+        p (norm p)
+        prefix (str root "/")
+        rel (cond (and (>= (count p) (count prefix)) (= prefix (subs p 0 (count prefix))))
+                  (subs p (count prefix))
+                  (absolute? p) nil
+                  (and (> (count p) 2) (= "./" (subs p 0 2))) (subs p 2)
+                  :else p)]
+    (when (and rel (not= "" rel) (not= "." rel))
+      (vec (remove (fn [x] (or (= "" x) (= "." x))) (split-slash rel))))))
+
+(defn ignored?
+  "True if Git's ignore rules, as the matcher reads them, ignore path (relative to the
+matcher's root, or under it): it, or a directory it's in, matches. dir? says whether it's a
+directory; without it the file system is asked. Anything in .git is ignored."
+  ([m p] (ignored? m p nil))
+  ([m p dir?]
+   (if-let [parts (relative-parts m p)]
+     (boolean
+      (or (some #{".git"} parts)
+          (some (fn [k] (ignored-here? m (vec (take k parts)) true)) (range 1 (count parts)))
+          (ignored-here? m parts
+                         (if (nil? dir?) (directory? (apply path (::root m) parts)) dir?))))
+     false)))
+
+(defn walk
+  "A lazy seq of the paths under the directory root (each root joined with its path), by
+name, each directory before what it holds. Symbolic links aren't followed, and .git is
+skipped. opts: :gitignore (true), Git's ignore rules (as ignore-matcher reads them);
+:hidden (false), names that start with a dot too; :dirs (true), directories too, not only
+files."
+  ([root] (walk root {}))
+  ([root opts]
+   (let [m (when (get opts :gitignore true) (ignore-matcher root))
+         hidden (get opts :hidden false)
+         dirs (get opts :dirs true)
+         entries
+         (fn entries [parts]
+           (let [names (sort (map (fn [n] (if (= \/ (nth n (dec (count n))))
+                                            [(subs n 0 (dec (count n))) true]
+                                            [n false]))
+                                  (or (%list-directory (apply path root parts)) [])))]
+             (mapcat (fn [[nm dir?]]
+                       (let [ps (conj parts nm)]
+                         (cond (= nm ".git") nil
+                               (and (not hidden) (= \. (first nm))) nil
+                               (and m (ignored-here? m ps dir?)) nil
+                               dir? (let [more (lazy-seq (entries ps))]
+                                      (if dirs (cons (apply path root ps) more) more))
+                               :else [(apply path root ps)])))
+                     names)))]
+     (lazy-seq (entries [])))))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Streams (M2.11, D-093): text readers and writers, and byte inputs and outputs. close

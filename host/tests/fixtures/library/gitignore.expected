@@ -1,0 +1,6 @@
+cases: 400
+mismatches: 0
+walk: [a.txt b b/a b/a/y.txt b/z.txt c]
+hidden too: [.env .gitignore .hidden/x a.txt b/a/y.txt b/z.txt c]
+no rules: [a.txt b/a/y.txt b/z.txt build/out.o c]
+ignored?: true true false true false
