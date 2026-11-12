@@ -623,7 +623,7 @@ A track beside the M3.x milestones, worked on in its own session; it doesn't com
 - The vars, argument lists, docstrings and source locations come from the compiler's model of the namespaces (as Swank's documentation does), in a program built with `--eval`. Examples, notes and topics are hand-written in `doc/`: `doc/examples/<ns>.skn` (code with `;=>` results and `;; prints:` output, which the tests run, so an example can't go stale), `doc/notes/<ns>.md`, `doc/topics.edn`.
 - Steps, in order:
   1. ✅ The generator, its `make` target and tests; the quick reference covering the whole standard library; `skein.string` complete as the model namespace, with its examples tested.
-  2. 🟨 Examples and notes for the rest of the standard library, namespace by namespace: `skein.core` ✅, `skein.io` ✅, `skein.math` ✅, `skein.process` ✅, `skein.json` ✅, `skein.edn` ✅, `skein.bytes` ✅.
+  2. 🟨 Examples and notes for the rest of the standard library, namespace by namespace: `skein.core` ✅, `skein.io` ✅, `skein.math` ✅, `skein.process` ✅, `skein.json` ✅, `skein.edn` ✅, `skein.bytes` ✅, `skein.system` ✅.
   3. ⬜ The entries as data (name, argument lists, docstring, source location, examples) beside the pages, which M3.13's docset reuses (D-102's "Later").
 
 **Exit:** `make manual` builds the site from the checkout; every public var has an entry; every namespace's examples pass in `make test`.
