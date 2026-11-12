@@ -1,0 +1,310 @@
+(ns skein.io.examples
+  (:require [skein.io :as io]
+            [skein.string :as str]))
+
+;;; Examples for skein.io (D-109). They work in a new temporary directory, dir.
+;;; `./skein run doc/manual.skn --check skein.io` runs them.
+
+;;;; temp-dir
+;; A new directory that only you may use; deleting it is up to you.
+(def dir (io/temp-dir "manual"))
+(io/directory? dir)
+;=> true
+
+;;;; path
+(io/path "assets" "levels" "one.txt")
+;=> "assets/levels/one.txt"
+
+;; Separators between the parts aren't doubled.
+(io/path "assets/" "/one.txt")
+;=> "assets/one.txt"
+
+;;;; write-file
+(io/write-file (io/path dir "notes.txt") "first line\nsecond line\n")
+(io/read-file (io/path dir "notes.txt"))
+;=> "first line\nsecond line\n"
+
+;;;; read-file
+(count (str/split-lines (io/read-file (io/path dir "notes.txt"))))
+;=> 2
+
+;; A missing file signals io-error.
+(handler-case (io/read-file (io/path dir "missing.txt"))
+  (io/io-error [c] :no-such-file))
+;=> :no-such-file
+
+;;;; append-file
+(io/append-file (io/path dir "log.txt") "one\n")
+(io/append-file (io/path dir "log.txt") "two\n")
+(io/read-file (io/path dir "log.txt"))
+;=> "one\ntwo\n"
+
+;;;; write-bytes
+(io/write-bytes (io/path dir "data.bin") "AB")
+(io/file-size (io/path dir "data.bin"))
+;=> 2
+
+;;;; read-bytes
+(let [bytes (io/read-bytes (io/path dir "data.bin"))]
+  [(count bytes) (aget bytes 0) (aget bytes 1)])
+;=> [2 65 66]
+
+;;;; file-exists?
+[(io/file-exists? dir) (io/file-exists? (io/path dir "notes.txt"))
+ (io/file-exists? (io/path dir "nothing"))]
+;=> [true true false]
+
+;;;; file?
+[(io/file? (io/path dir "notes.txt")) (io/file? dir)]
+;=> [true false]
+
+;;;; directory?
+[(io/directory? dir) (io/directory? (io/path dir "notes.txt"))]
+;=> [true false]
+
+;;;; file-size
+(io/file-size (io/path dir "notes.txt"))
+;=> 23
+
+;;;; modified-time
+;; Milliseconds since 1970, as skein.time/epoch-millis counts.
+(<= (io/modified-time (io/path dir "notes.txt")) (skein.time/epoch-millis))
+;=> true
+
+;;;; make-dirs
+(io/make-dirs (io/path dir "a" "b" "c"))
+(io/directory? (io/path dir "a" "b" "c"))
+;=> true
+
+;;;; list-dir
+(io/list-dir dir)
+;=> ["a" "data.bin" "log.txt" "notes.txt"]
+
+;;;; copy-file
+(io/copy-file (io/path dir "notes.txt") (io/path dir "a" "copy.txt"))
+(io/read-file (io/path dir "a" "copy.txt"))
+;=> "first line\nsecond line\n"
+
+;;;; rename
+(io/rename (io/path dir "a" "copy.txt") (io/path dir "a" "moved.txt"))
+(io/list-dir (io/path dir "a"))
+;=> ["b" "moved.txt"]
+
+;;;; delete
+;; A file, or an empty directory.
+(io/delete (io/path dir "a" "moved.txt"))
+(io/list-dir (io/path dir "a"))
+;=> ["b"]
+
+;;;; delete-tree
+(io/delete-tree (io/path dir "a"))
+(io/file-exists? (io/path dir "a"))
+;=> false
+
+;;;; file-name
+[(io/file-name "a/b/c.txt") (io/file-name "c.txt")]
+;=> ["c.txt" "c.txt"]
+
+;;;; parent
+[(io/parent "a/b/c.txt") (io/parent "c.txt")]
+;=> ["a/b" nil]
+
+;;;; extension
+[(io/extension "game.skn") (io/extension "c.tar.gz") (io/extension ".gitignore")
+ (io/extension "README")]
+;=> ["skn" "gz" nil nil]
+
+;;;; absolute?
+[(io/absolute? "/usr/lib") (io/absolute? "C:\\Users") (io/absolute? "lib/skein")]
+;=> [true true false]
+
+;;;; absolute-path
+(io/absolute? (io/absolute-path "."))
+;=> true
+
+;;;; open-reader
+(with-open [r (io/open-reader (io/path dir "notes.txt"))]
+  [(io/read-line r) (io/read-line r) (io/read-line r)])
+;=> ["first line" "second line" nil]
+
+;;;; read-line
+(with-open [r (io/open-reader (io/path dir "notes.txt"))]
+  (loop [n 0]
+    (if (io/read-line r) (recur (inc n)) n)))
+;=> 2
+
+;;;; line-seq
+;; Lazy: realize it before with-open closes the reader.
+(with-open [r (io/open-reader (io/path dir "notes.txt"))]
+  (mapv str/upper-case (io/line-seq r)))
+;=> ["FIRST LINE" "SECOND LINE"]
+
+;;;; read-text
+(with-open [r (io/open-reader (io/path dir "notes.txt"))]
+  (io/read-line r)
+  (io/read-text r))
+;=> "second line\n"
+
+;;;; open-writer
+(with-open [w (io/open-writer (io/path dir "out.txt"))]
+  (io/write w "x = ")
+  (io/write w 42)
+  (io/write w "\n"))
+(io/read-file (io/path dir "out.txt"))
+;=> "x = 42\n"
+
+;; With {:append true}, after what the file holds.
+(with-open [w (io/open-writer (io/path dir "out.txt") {:append true})]
+  (io/write w "more\n"))
+(io/read-file (io/path dir "out.txt"))
+;=> "x = 42\nmore\n"
+
+;;;; write
+(with-open [w (io/open-writer (io/path dir "list.txt"))]
+  (doseq [x [:a 1 "b"]]
+    (io/write w x)))
+(io/read-file (io/path dir "list.txt"))
+;=> ":a1b"
+
+;;;; flush
+;; Writes what the writer holds back, while it stays open.
+(with-open [w (io/open-writer (io/path dir "flushed.txt"))]
+  (io/write w "now")
+  (io/flush w)
+  (io/read-file (io/path dir "flushed.txt")))
+;=> "now"
+
+;;;; open-output
+(with-open [out (io/open-output (io/path dir "bytes.bin"))]
+  (io/write-bytes! out "hello"))
+(io/file-size (io/path dir "bytes.bin"))
+;=> 5
+
+;;;; write-bytes!
+;; A range of the bytes.
+(with-open [out (io/open-output (io/path dir "part.bin"))]
+  (io/write-bytes! out "abcdef" 1 3))
+(io/read-file (io/path dir "part.bin"))
+;=> "bc"
+
+;;;; open-input
+;; Reading a file in chunks.
+(with-open [in (io/open-input (io/path dir "bytes.bin"))]
+  (let [buf (make-array u8 2)]
+    (loop [sizes []]
+      (if-let [n (io/read-bytes! in buf)]
+        (recur (conj sizes n))
+        sizes))))
+;=> [2 2 1]
+
+;;;; read-bytes!
+(with-open [in (io/open-input (io/path dir "bytes.bin"))]
+  (let [buf (make-array u8 8)
+        n (io/read-bytes! in buf 2 3)]
+    [n (aget buf 2) (aget buf 0)]))
+;=> [3 104 0]
+
+;;;; stream
+;; The class of what open-reader and the other open functions return.
+(with-open [r (io/open-reader (io/path dir "notes.txt"))]
+  (instance? io/stream r))
+;=> true
+
+;;;; stream-path
+(with-open [r (io/open-reader (io/path dir "notes.txt"))]
+  (io/file-name (io/stream-path r)))
+;=> "notes.txt"
+
+;;;; io-error
+(handler-case (io/delete (io/path dir "never-was"))
+  (io/io-error [c] (error? c)))
+;=> true
+
+;;;; io-error-message
+(handler-case (io/list-dir (io/path dir "never-was"))
+  (io/io-error [c] (string? (io/io-error-message c))))
+;=> true
+
+;;;; io-error-path
+(handler-case (io/read-file (io/path dir "never-was"))
+  (io/io-error [c] (io/file-name (io/io-error-path c))))
+;=> "never-was"
+
+;;;; run-process
+;; Runs a program to its end, without a shell; skein.process talks to one as it runs.
+(let [{:keys [exit out]} (io/run-process ["git" "--version"])]
+  [exit (str/starts-with? out "git version")])
+;=> [0 true]
+
+(:exit (io/run-process ["ls"] {:dir dir}))
+;=> 0
+
+;;;; resource-dir
+;; Run from source, the project's directory; in a package, where its assets are.
+(str/ends-with? (io/resource-dir) "/")
+;=> true
+
+;;;; temp-file
+(let [f (io/temp-file "report-" ".txt")]
+  (io/write-file f "draft")
+  [(str/ends-with? f ".txt") (io/read-file f)])
+;=> [true "draft"]
+
+;;;; owner-only!
+;; Mode 600 for a file, 700 for a directory; nothing to do on Windows.
+(io/owner-only! (io/path dir "notes.txt"))
+;=> nil
+
+;;;; walk
+;; Every path under a directory, a directory before what it holds, with Git's ignore rules.
+(io/make-dirs (io/path dir "tree" "src"))
+(io/make-dirs (io/path dir "tree" "build"))
+(io/write-file (io/path dir "tree" "src" "main.skn") "")
+(io/write-file (io/path dir "tree" "build" "main.o") "")
+(io/write-file (io/path dir "tree" ".gitignore") "build/\n")
+(mapv (fn [p] (subs p (inc (count dir)))) (io/walk (io/path dir "tree")))
+;=> ["tree/src" "tree/src/main.skn"]
+
+;; Options: hidden names too, and no ignore rules; only files.
+(mapv io/file-name (io/walk (io/path dir "tree") {:gitignore false :hidden true :dirs false}))
+;=> [".gitignore" "main.o" "main.skn"]
+
+;;;; ignore-matcher
+(let [m (io/ignore-matcher (io/path dir "tree"))]
+  [(io/ignored? m "build/main.o") (io/ignored? m "src/main.skn")])
+;=> [true false]
+
+;;;; ignored?
+;; Say whether a path is a directory, so the file system isn't asked.
+(let [m (io/ignore-matcher (io/path dir "tree"))]
+  [(io/ignored? m "build" true) (io/ignored? m "build" false) (io/ignored? m ".git/HEAD")])
+;=> [true false true]
+
+;;;; watch
+;; Changes arrive on the watcher's :events channel, as hints to look at a path.
+;; An event can also come for a change made just before the watch began, so wait for
+;; the one wanted.
+(let [w (io/watch (io/path dir "tree"))
+      deadline (timeout-chan 5)]
+  (sleep 0.2)
+  (io/write-file (io/path dir "tree" "src" "new.skn") "(ns new)")
+  (let [found (loop []
+                (let [[event ch] (alts! [(:events w) deadline])]
+                  (cond (not= ch (:events w)) :timed-out
+                        (= "new.skn" (io/file-name (:path event))) (:kind event)
+                        :else (recur))))]
+    (io/stop-watch! w)
+    (contains? #{:created :modified} found)))
+;=> true
+
+;;;; stop-watch!
+(let [w (io/watch (io/path dir "tree"))]
+  (io/stop-watch! w)
+  (loop [] (when (<! (:events w)) (recur))))
+;=> nil
+
+;;;; delete-tree
+;; Cleaning up: the temporary directory and everything in it.
+(io/delete-tree dir)
+(io/file-exists? dir)
+;=> false
