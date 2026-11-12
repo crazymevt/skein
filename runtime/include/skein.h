@@ -48,6 +48,7 @@ void sk_collect(_Bool major);
     } while (0)
 
 sk_value sk_string(const char *bytes, size_t len);
+sk_value sk_pattern(const char *bytes, size_t len);
 sk_value sk_f64(double x);
 sk_value sk_integer(const char *decimal);
 

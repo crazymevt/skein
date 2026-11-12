@@ -381,7 +381,7 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     ;; JSON (M3.2, D-104)
     "%json-read" "%json-write" "%json-reformat"
     ;; Regular expressions (M3.3, D-105)
-    "re-pattern" "%re-exec" "%re-names" "%re-source" "%pattern?"
+    "re-pattern" "%re-exec" "%re-names" "%re-source" "%pattern?" "%regex-literal"
     ;; Hot reload (M2.9, D-091)
     "%load-module" "%evaluated?"
     ;; STM (M2.10, D-092)

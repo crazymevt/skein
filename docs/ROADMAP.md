@@ -529,7 +529,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 - Steps, in order (D-105):
   1. ✅ The engine in the runtime: parsing Java's common syntax and compiling it, and a backtracking matcher over code points with groups, back references and lookahead; the table of cases (`host/tools/regex-cases.py` and what it writes) and a native test that runs them.
   2. ✅ The pattern type and `skein.core`'s functions: `re-pattern`, `re-find`, `re-seq`, `re-matches`, `re-groups` and `re-matcher` (with `re-find` on a matcher), and printing a pattern as `#"..."`.
-  3. The literal: `#"..."` in Skein's reader and Phase 0's, the printer, and the C backend (a constant compiled at start-up).
+  3. ✅ The literal: `#"..."` in Skein's reader and Phase 0's, the printer, and the C backend (a constant compiled at start-up).
   4. `skein.string`: `replace` and `replace-first` with a pattern (a replacement string with `$1` and `${name}`, or a function of the match) and `split` with a pattern; a benchmark of searching a large file.
 
 **Exit:** native tests against a reference model of the syntax, randomized, and a benchmark of searching a large file.

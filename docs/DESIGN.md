@@ -91,6 +91,7 @@ The reader follows **Clojure's conventions** unless noted.
 | `^type x`, `^{:k v} x` | metadata / type hint on the next form |
 | `#(+ % 1)` | anonymous function shorthand (`%`, `%1`, `%2`, `%&`) |
 | `#_form` | discard the next form |
+| `#"\d+"` | a regex pattern, its text taken raw (a backslash keeps the character after it); read as `(skein.core/%regex-literal "\\d+")`, a constant compiled once (D-105) |
 | `; comment` | line comment |
 | `#\| ... \|#` | block comment (nestable) |
 | `,` | whitespace |

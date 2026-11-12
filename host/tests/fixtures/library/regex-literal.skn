@@ -1,0 +1,15 @@
+;; The regex literal (M3.3 step 3, D-105), natively: #"..." with its backslashes as
+;; written, made once (a constant), printed back the same way, and refused in EDN.
+(ns regex-literal
+  (:require [skein.edn :as edn]))
+
+(defn- pattern-in-a-loop [] #"\w+")
+
+(defn -main [& args]
+  (println (re-find #"\d+" "abc 123") (re-seq #"(\w)(\d)" "a1 b2") (re-matches #"[a-c]+" "abcab"))
+  (println "a constant:" (identical? (pattern-in-a-loop) (pattern-in-a-loop)))
+  (println "a quote:" (re-find #"a\"b" "x a\"b y") "a backslash:" (re-find #"\\" "a\\b"))
+  (println "printed:" (pr-str #"\d+\.\d*") (pr-str #"a\"b") (str #"\s+"))
+  (println "the same as re-pattern:" (= (str #"(?i)x[y]") (str (re-pattern "(?i)x[y]"))))
+  (println "quoted:" '#"a+")
+  (println "in EDN:" (try (edn/read-string "#\"a\"") :read (catch error e :refused))))

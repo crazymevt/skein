@@ -140,6 +140,7 @@ for a closing delimiter, or (values :EOF). Skips whitespace, comments and #_ for
           (#\# (let ((d (next r)))
                  (case d
                    (#\{ (form (read-sequence-form r :set #\} line column)))
+                   (#\" (form (read-regex-literal r line column)))
                    (#\( (form (read-fn-literal r line column)))
                    (#\_ (read-required r "#_" line column))
                    (#\| (skip-block-comment r line column))
@@ -151,6 +152,25 @@ for a closing delimiter, or (values :EOF). Skips whitespace, comments and #_ for
                                                and not supported yet"
                                 (read-token-text r d)))))))
           (t (form (read-token-form r c line column))))))))
+
+(defun read-regex-literal (r line column)
+  "#\"...\" (D-105): a pattern's source, its backslashes kept as written, read as
+(skein.core/%regex-literal source)."
+  (let ((out (make-string-output-stream)))
+    (loop
+      (let ((c (next r)))
+        (case c
+          ((nil) (fail r line column "unterminated regex"))
+          (#\" (return))
+          (#\\ (let ((e (next r)))
+                  (unless e (fail r line column "unterminated regex"))
+                  (write-char c out)
+                  (write-char e out)))
+          (t (write-char c out)))))
+    (let ((l (span r line column)))
+      (compound :list (list (sym-syntax "%regex-literal" "skein.core" l)
+                            (atom-at (get-output-stream-string out) l))
+                l))))
 
 (defun read-required (r after line column)
   "Read one form that must follow the prefix AFTER, which started at LINE:COLUMN."

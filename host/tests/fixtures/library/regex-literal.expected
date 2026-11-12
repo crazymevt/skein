@@ -1,0 +1,7 @@
+123 ([a1 a 1] [b2 b 2]) abcab
+a constant: true
+a quote: a"b a backslash: \
+printed: #"\d+\.\d*" #"a\"b" \s+
+the same as re-pattern: true
+quoted: (skein.core/%regex-literal a+)
+in EDN: :refused

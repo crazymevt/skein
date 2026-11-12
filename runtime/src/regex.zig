@@ -993,6 +993,12 @@ pub const entries = [_]io.Entry{
             return pattern(a[0]);
         }
     }.f },
+    .{ .name = "%regex-literal", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            // What #"..." reads as: the pattern of its source (a constant natively).
+            return pattern(a[0]);
+        }
+    }.f },
     .{ .name = "%re-exec", .min = 4, .max = 4, .impl = struct {
         fn f(a: Args) Value {
             return exec(a[0], a[1], a[2], a[3]);

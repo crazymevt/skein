@@ -476,6 +476,7 @@ one /, and its parts don't start or end with : or contain ::."
 (def ^:private read-required)
 (def ^:private read-symbolic-value)
 (def ^:private read-tagged)
+(def ^:private read-regex-literal)
 
 (defn- skip-line-comment [r]
   (loop []
@@ -522,6 +523,7 @@ one /, and its parts don't start or end with : or contain ::."
         (= c \#)
         (let [d (next-char r)]
           (cond (= d \{) [:form (read-sequence-form r :set \} line column)]
+                (= d \") [:form (read-regex-literal r line column)]
                 (= d \() [:form (read-fn-literal r line column)]
                 (= d \_) (do (read-required r "#_" line column) (recur))
                 (= d \|) (do (skip-block-comment r line column) (recur))
@@ -541,6 +543,25 @@ one /, and its parts don't start or end with : or contain ::."
       :form x
       :close (fail r close-line close-column "expected a form after `" after "`, found `" x "`")
       :eof (fail r line column "expected a form after `" after "`, reached end of input"))))
+
+;;; Regex literals (D-105): #"..."
+
+(defn- read-regex-literal
+  "#\"...\": a pattern's source, its backslashes kept as written (\\\" puts a quote in it),
+read as (skein.core/%regex-literal source), which the C backend makes a constant. EDN has
+no regex literals."
+  [r line column]
+  (when (:tagged r) (fail r line column "EDN has no regex literals"))
+  (let [text (loop [out (transient [])]
+               (let [c (next-char r)]
+                 (cond (nil? c) (fail r line column "unterminated regex")
+                       (= c \") (apply str (persistent! out))
+                       (= c \\) (let [e (next-char r)]
+                                   (when (nil? e) (fail r line column "unterminated regex"))
+                                   (recur (conj! (conj! out c) e)))
+                       :else (recur (conj! out c)))))
+        l (span r line column)]
+    (compound :list [(sym-syntax "%regex-literal" "skein.core" l) (atom-at text l)] l)))
 
 ;;; Tagged literals, for skein.edn (D-104): #tag form
 

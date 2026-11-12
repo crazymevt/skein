@@ -75,6 +75,11 @@ export fn sk_collect(major: bool) void {
 
 // Constants
 
+/// A regex literal's pattern (D-105): the C backend makes one at startup for #"...".
+export fn sk_pattern(bytes: [*]const u8, len: usize) Value {
+    return @import("regex.zig").pattern(sk_string(bytes, len));
+}
+
 export fn sk_string(bytes: [*]const u8, len: usize) Value {
     return string.make(bytes[0..len]);
 }

@@ -202,6 +202,10 @@ received to that form's metadata (as data), for %syntax-meta.")
   nil)
 
 ;; Regular expressions (M3.3, D-105) are native only.
+(defcore "%regex-literal" (s)
+  (declare (ignore s))
+  (error "regular expressions are native only (D-105)"))
+
 (defcore "re-pattern" (s)
   (declare (ignore s))
   (error "regular expressions are native only (D-105)"))

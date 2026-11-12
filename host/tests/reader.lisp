@@ -480,7 +480,14 @@ x ; trailing
   (read-fails "##Inf2" "unknown symbolic value `##Inf2`" 1 1)
   (read-fails "##" "unknown symbolic value `##`" 1 1)
   (read-fails "# x" "unknown dispatch" 1 1)
-  (read-fails "#\"re\"" "unknown dispatch" 1 1))
+  (read-fails "x #\"a" "unterminated regex" 1 3)
+  (read-fails "#\"a\\" "unterminated regex" 1 1))
+
+;;; D-105: a regex literal keeps its text raw, each backslash with the character after it.
+(test regex-literals
+  (reads-as "#\"a+\"" "(skein.core/%regex-literal \"a+\")")
+  (reads-as "#\"\\d\\.\"" "(skein.core/%regex-literal \"\\\\d\\\\.\")")
+  (reads-as "#\"a\\\"b\"" "(skein.core/%regex-literal \"a\\\\\\\"b\")"))
 
 (test bad-metadata
   (read-fails "^5 x" "metadata must be a symbol, keyword, string, map or type form" 1 2)
