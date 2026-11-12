@@ -573,6 +573,15 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 ### M3.7 Skein Studio's core
 - The repository, its CI and a launcher; Lisp Studio's workbench on skein-ui: the editor (Skein's reader for highlighting, brackets by depth, indentation by Skein's forms, completion and argument hints), tabs and split editors, the explorer, the command palette, settings and themes, find and find in files; the REPL, debugger, inspector and problems through `skein dev`'s Swank (M3.4), with evaluating and compiling forms and files, and going to definitions. Languages are registered, as Lisp Studio's are.
 
+- Settled (D-109): a public repository, `crazymevt/skein-studio`, using skein-ui through `:deps` and CI like skein-ui's on macOS and Linux; highlighting by a lexer that follows Skein's reader's rules (line states, tolerant, incremental), the reader itself for structure; namespaces `skein.studio.*`; `./studio [folder]` to start it.
+- Steps, in order (D-109):
+  1. The repository and the workbench: `skein-studio` with its CI and `./studio`; a window with the explorer (`walk` with Git's ignore rules, refreshed by `watch`), editor tabs of code views on files (opening, saving, unsaved changes by the buffer's `:revision`, reloading files changed on disk), a status bar and menus; settings (EDN in `config-dir`) and Lisp Studio's light and dark themes; the session restored.
+  2. Languages and the Skein editor: registered languages (extensions, lexer, indenter, comments); Skein's lexer, with incremental highlighting, brackets colored by depth and the matching one shown, indentation by Skein's forms (bodies, bindings, `cond` and `case` pairs), comment toggling and auto-pairs; the lexer tested against `skein.compiler.reader` over Skein's sources.
+  3. Running the project: `skein dev` started for it with Swank on a free port, or a running Swank connected to; the REPL panel (history, completion, highlighted input), evaluating the form or file and compiling, the program's output; completion and argument hints in the editor.
+  4. Debugging: the debugger panel from SLDB's events (backtrace, locals, restarts, evaluating in a frame), the inspector, problems from compiler notes and read errors, underlined in the editor, and going to definitions.
+  5. Commands and search: the command palette, find and replace (regex), find in files, split editors, going to a line, file or symbol.
+  6. The scripted session in CI: a script that opens a sample project, runs it under `skein dev`, edits and evaluates, hits an error and restarts, on macOS and Linux.
+
 **Exit:** Skein Studio opens a Skein project, runs it under `skein dev`, and edits, evaluates and debugs it, on macOS and Linux; a scripted session checks it in CI.
 
 ### M3.8 Agents

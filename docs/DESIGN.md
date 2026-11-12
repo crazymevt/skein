@@ -954,7 +954,7 @@ As built (M2.11, D-093): `(deftest name body...)` defines a function of no argum
 
 ### 20.4 Skein Studio
 
-Phase 3's main project (D-102) is an IDE for Skein written in Skein, Skein Studio, in its own repository, `skein-studio`: Lisp Studio's design on skein-ui, reading Skein with Skein's own reader and driving programs through `skein dev`'s Swank (§15) for the REPL, debugger, inspector and completion, with AI agents, source control, a terminal, databases, Markdown and offline docs. Its general libraries join the standard library (§21); the specialized ones (SQLite, the terminal, Markdown, HTTP, docsets) are libraries of their own.
+Phase 3's main project (D-102) is an IDE for Skein written in Skein, Skein Studio, in its own repository, `skein-studio`: Lisp Studio's design on skein-ui, reading Skein with Skein's own reader and driving programs through `skein dev`'s Swank (§15) for the REPL, debugger, inspector and completion, with AI agents, source control, a terminal, databases, Markdown and offline docs. Its general libraries join the standard library (§21); the specialized ones (SQLite, the terminal, Markdown, HTTP, docsets) are libraries of their own. It is a Skein program like any other, in the public repository `crazymevt/skein-studio` with namespaces `skein.studio.*`, started with `./studio [folder]` in its checkout; its editor highlights Skein with a lexer that follows the reader's rules (tolerant of unfinished text, lexing only changed lines) and uses the reader itself for structure (D-109).
 
 ## 21. Standard library outline
 
