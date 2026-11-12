@@ -943,17 +943,31 @@ pub fn source(p: Value) Value {
 fn exec(p: Value, s: Value, start: Value, full: Value) Value {
     const prog = programOf(p);
     if (!string.isString(s)) rt.raise(.type_error, "matching a pattern needs a string, not {s}", .{readable(s)});
-    const input = alloc.dupe(u8, string.bytes(s)) catch rt.fatal("out of memory", .{});
-    defer alloc.free(input);
+    // The matcher allocates only on the C heap, so it reads s in place; making the result
+    // can move s, so the groups' text is copied out first. Copying all of s instead made
+    // each search of a long string take as long as the string (quadratic over re-seq).
+    const input = string.bytes(s);
     const from: usize = if (start.isFixnum()) @intCast(@max(start.toFixnum(), 0)) else 0;
     if (from > input.len) return Value.nil;
     const regs = execute(prog, input, from, full.isTruthy()) orelse return Value.nil;
     defer alloc.free(regs);
+    // The span the groups lie in (a lookahead's can lie past the match).
+    var lo: usize = regs[0];
+    var hi: usize = regs[1];
+    for (0..prog.groups + 1) |g| {
+        const a = regs[2 * g];
+        const b = regs[2 * g + 1];
+        if (a == none or b == none) continue;
+        lo = @min(lo, a);
+        hi = @max(hi, b);
+    }
+    const span = alloc.dupe(u8, input[lo..hi]) catch rt.fatal("out of memory", .{});
+    defer alloc.free(span);
     var v = coll.vectorOf(&.{Value.fromFixnum(@intCast(regs[1]))});
     for (0..prog.groups + 1) |g| {
         const a = regs[2 * g];
         const b = regs[2 * g + 1];
-        v = coll.vectorConj(v, if (a == none or b == none) Value.nil else string.make(input[a..b]));
+        v = coll.vectorConj(v, if (a == none or b == none) Value.nil else string.make(span[a - lo .. b - lo]));
     }
     return v;
 }

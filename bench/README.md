@@ -67,3 +67,20 @@ Recorded 2026-11-10 on Apple M4, Zig 0.17.1, macOS, by `bench/nbody/eval.lisp`: 
 | Ratio | 20.2x |
 
 Before step 5's typed closures the ratio was about 137×: every float was boxed. Typed nodes compute raw `f64` and integers as the C backend does, and read locals, constants and `(aget a i)` operands in place. What's left is mostly one indirect call per node.
+
+## Searching a large file (M3.3)
+
+Recorded 2026-11-11 on Apple M4, Zig 0.17.1, macOS, by `bench/regex/native.lisp`: `search.skn` built natively with the release profile writes a made-up log of 150,000 lines (12.7 MB), reads it back and times each search, counting the matches of `re-seq` (D-105).
+
+| Search | Result | Best of 5 (ms) | MB/s |
+|---|---|---|---|
+| a word: `#"timeout"` | 18752 | 94.9 | 134 |
+| ignoring case: `#"(?i)TIMEOUT"` | 18752 | 98.4 | 129 |
+| dates: `#"\d{4}-\d\d-\d\d"` | 150000 | 184.5 | 69 |
+| a group: `#"user_(\d+)"` | 150000 | 201.1 | 63 |
+| words: `#"\b[a-z]+ing\b"` | 112436 | 238.4 | 53 |
+| error lines: `#"(?m)^.*ERROR.*$"` | 21424 | 165.1 | 77 |
+| split into lines: `#"\n"` | 150000 | 137.3 | 92 |
+| replace numbers: `#"\d+"` with `"N"` (the result's length) | 10245255 | 609.2 | 21 |
+
+Before this was measured, each search copied the whole string out of the heap, so `re-seq` over a long string took time quadratic in its length (this run took over ten minutes); the matcher now reads the string in place and copies only a match's text. `replace` was 2.4 s with skein.string's builder; gathering its pieces in a transient vector made it 4× faster. The matcher tries the pattern at each position in turn: skipping ahead to a literal first character would speed up searches like the first two.

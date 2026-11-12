@@ -1,0 +1,13 @@
+cases: 800
+mismatches: 0
+a<1>b<2> v=k y=x Aaa
+a0b \ab
+"a$1b" ["a" "b" "c"] ["a" "b" "c"] [""] []
+error: replace: no group 2 in the replacement "$2"
+error: replace: a $ with no group after it in the replacement "$"
+error: replace: a backslash with nothing after it in the replacement "\\"
+error: replace: a $ followed by \x in the replacement "$x"
+error: replace: no group named m in the replacement "${m}"
+error: replace: a ${ with no } in the replacement "${n"
+error: replace needs a string or a function to replace a pattern's matches with, not 5
+b

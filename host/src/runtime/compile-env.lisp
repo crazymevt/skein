@@ -223,8 +223,9 @@ received to that form's metadata (as data), for %syntax-meta.")
   (error "regular expressions are native only (D-105)"))
 
 (defcore "%pattern?" (x)
+  ;; Nothing is a pattern in Phase 0; skein.string asks before matching a string.
   (declare (ignore x))
-  (error "regular expressions are native only (D-105)"))
+  nil)
 
 ;; skein.json (M3.2, D-104) is native only.
 (defcore "%json-read" (s key-fn value-fn)

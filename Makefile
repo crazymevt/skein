@@ -37,6 +37,7 @@ bench:
 	$(SBCL_BATCH) --load bench/nbody/compare.lisp
 	$(SBCL_BATCH) --load bench/nbody/native.lisp
 	$(SBCL_BATCH) --load bench/nbody/eval.lisp
+	$(SBCL_BATCH) --load bench/regex/native.lisp
 
 # The SDL3 bindings live in their own repository, crazymevt/skein-sdl3 (M2.12, D-095),
 # whose `make bindings` regenerates them with this checkout's skein bindgen.

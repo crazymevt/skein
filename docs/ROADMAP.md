@@ -530,7 +530,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
   1. ✅ The engine in the runtime: parsing Java's common syntax and compiling it, and a backtracking matcher over code points with groups, back references and lookahead; the table of cases (`host/tools/regex-cases.py` and what it writes) and a native test that runs them.
   2. ✅ The pattern type and `skein.core`'s functions: `re-pattern`, `re-find`, `re-seq`, `re-matches`, `re-groups` and `re-matcher` (with `re-find` on a matcher), and printing a pattern as `#"..."`.
   3. ✅ The literal: `#"..."` in Skein's reader and Phase 0's, the printer, and the C backend (a constant compiled at start-up).
-  4. `skein.string`: `replace` and `replace-first` with a pattern (a replacement string with `$1` and `${name}`, or a function of the match) and `split` with a pattern; a benchmark of searching a large file.
+  4. ✅ `skein.string`: `replace` and `replace-first` with a pattern (a replacement string with `$1` and `${name}`, or a function of the match) and `split` with a pattern; a benchmark of searching a large file.
 
 **Exit:** native tests against a reference model of the syntax, randomized, and a benchmark of searching a large file.
 
@@ -603,6 +603,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 ## Notes for later
 Ideas and follow-ups noticed during work, kept here so they don't derail the current milestone.
 
+- Regex searches (D-105) try the pattern at each position; skipping ahead to a literal first character or prefix (`memchr`, or a substring search) would make searches for words several times faster (bench/README.md).
 - `skein.process` (D-103): output a program writes that is never read holds a pipe's descriptor until its stream is closed (stdin and output read to the end are released by themselves), and the process table keeps a small entry per program. Finalizers for runtime handles would let the GC release both, as `ffi/own` pointers are.
 - Windows: `skein.process`'s `:interrupt`, `:err :out` and `{:file path :append true}` need Skein's own `CreateProcessW` spawn: with `CREATE_NEW_PROCESS_GROUP`, and the handles given as they are (Zig's spawn reopens a file, which a pipe can't be and an append loses its place in) (D-103); with Windows work (M2.16).
 - Programs can't read their own standard input through a public API: the REPL reads the terminal through `%stdin` and `%read-text`. `skein.io` could give stdin, stdout and stderr as streams (`*in*`, or `(io/stdin)`), which a child program of `skein.process` would want; the names need Jessie's OK (M3.1).

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Write host/tests/fixtures/library/regex-cases.edn: the reference model for Skein's
-regex engine (M3.3, D-105). Each case is a pattern in Java's syntax, a string, and the
-first match Python's re finds there, as [whole group1 ...] (nil for a group that didn't
+"""Write host/tests/fixtures/library/regex-cases.edn and regex-replace.edn: the reference
+model for Skein's regex engine and skein.string's functions over it (M3.3, D-105).
+
+In regex-cases.edn each case is a pattern in Java's syntax, a string, and the first match
+Python's re finds there, as [whole group1 ...] (nil for a group that didn't
 take part), or nil for no match.
 
 The patterns are random, from the part of the syntax Java and Python agree on, plus hand
@@ -11,7 +13,13 @@ The strings avoid \\r, which Java's . doesn't match and Python's does.
 
     python3 host/tools/regex-cases.py
 
-It's deterministic (a fixed seed), so the file changes only when this script does.
+regex-replace.edn has, for a pattern, a string and a replacement in Java's syntax ($1,
+${name}, \\$), what replace and replace-first give, and what split gives with no limit
+and with a limit of 2. Python's re finds the matches, going on as Java's Matcher does:
+from the end of a match, or a character on after an empty one (Python's own finditer
+would try a non-empty match where an empty one was).
+
+It's deterministic (a fixed seed), so the files change only when this script does.
 """
 
 import random
@@ -169,6 +177,119 @@ def expected(p, s):
     return [m.group(0)] + list(m.groups())
 
 
+def java_matches(p, s):
+    """The successive matches of p in s, found as Java's Matcher.find finds them."""
+    cp = re.compile(to_python(p), re.ASCII)
+    pos = 0
+    while pos <= len(s):
+        m = cp.search(s, pos)
+        if m is None:
+            return
+        yield m
+        pos = m.end() if m.end() > m.start() else m.end() + 1
+
+
+def to_python_template(t):
+    # Java's $n, ${name} and \$ are Python's \g<n>, \g<name> and $.
+    out, i = [], 0
+    while i < len(t):
+        if t[i] == "\\":
+            out.append(t[i + 1].replace("\\", "\\\\"))
+            i += 2
+        elif t[i] == "$" and t[i + 1] == "{":
+            j = t.index("}", i)
+            out.append("\\g<" + t[i + 2:j] + ">")
+            i = j + 1
+        elif t[i] == "$":
+            out.append("\\g<" + t[i + 1] + ">")
+            i += 2
+        else:
+            out.append(t[i])
+            i += 1
+    return "".join(out)
+
+
+def java_replace(p, s, t, first):
+    pt = to_python_template(t)
+    out, copied = [], 0
+    for m in java_matches(p, s):
+        out.append(s[copied:m.start()])
+        out.append(m.expand(pt))
+        copied = m.end()
+        if first:
+            break
+    out.append(s[copied:])
+    return "".join(out)
+
+
+def java_split(p, s, limit):
+    """Java's Pattern.split(s, limit), with Clojure's split: s itself if nothing splits
+    it, else empty parts at the end dropped when limit is 0."""
+    parts, index = [], 0
+    for m in java_matches(p, s):
+        if limit > 0 and len(parts) >= limit - 1:
+            break
+        if index == 0 and m.start() == 0 and m.end() == 0:
+            continue
+        parts.append(s[index:m.start()])
+        index = m.end()
+    if not parts and index == 0:
+        return [s]
+    parts.append(s[index:])
+    if limit == 0:
+        while parts and parts[-1] == "":
+            parts.pop()
+    return parts
+
+
+REPLACE_HAND = [
+    ("(?<y>\\d{4})-(?<m>\\d\\d)", "on 2026-11-12 and 2027-01-02.", "${m}/${y}"),
+    ("(\\w+)@(\\w+)", "a@b c@d", "$2 at $1"),
+    ("a(b)?", "a ab", "[$1]"),
+    ("\\d+", "1 22 333", "\\$$0"),
+    ("x*", "abc", "-"),
+    ("b*", "abc", "-"),
+    ("", "abc", "."),
+    ("(?=b)|b", "abcb", "!"),
+    ("\\s+", "  two  words  ", " "),
+    ("\\b", "hi there", "|"),
+    ("é", "aéb", "e"),
+    (".", "😀x", "<$0>"),
+]
+
+SPLIT_HAND = [
+    ("", "abc"), (",", ""), (",", ","), (",", ",,a,,"), ("\\s+", " a b  c "),
+    ("(?=b)", "abab"), ("x*", "axbxxc"), ("\\d", "a1b2c3"), (",", "a,b"), ("z", "abc"),
+]
+
+
+def replace_cases():
+    cases = []
+    for p, s, t in REPLACE_HAND:
+        cases.append((p, s, t))
+    for p, s in SPLIT_HAND:
+        cases.append((p, s, "-"))
+    seen = set()
+    while len(cases) < 800:
+        p = random_pattern()
+        try:
+            groups = re.compile(to_python(p), re.ASCII).groups
+        except re.error:
+            continue
+        templates = ["<$0>", "", "-", "\\$"]
+        if groups >= 1:
+            templates += ["[$1]", "$1$0"]
+        if groups >= 2:
+            templates.append("$2-$1")
+        s = random_string()
+        if (p, s) in seen:
+            continue
+        seen.add((p, s))
+        cases.append((p, s, random.choice(templates)))
+    return [(p, s, t, java_replace(p, s, t, False), java_replace(p, s, t, True),
+             java_split(p, s, 0), java_split(p, s, 2)) for p, s, t in cases]
+
+
 def main():
     cases = list(JAVA_ONLY)
     for p, s in HAND:
@@ -194,6 +315,15 @@ def main():
             f.write(" [" + edn_string(p) + " " + edn_string(s) + " " + edn_value(e) + "]\n")
         f.write("]\n")
     print(len(cases), "cases")
+    rcases = replace_cases()
+    with open(os.path.join(root, "regex-replace.edn"), "w", encoding="utf-8") as f:
+        f.write(";; Written by host/tools/regex-cases.py from Python's re: [pattern string "
+                "replacement\n;; replace replace-first split split-with-limit-2].\n")
+        f.write("[\n")
+        for case in rcases:
+            f.write(" [" + " ".join(edn_value(x) for x in case) + "]\n")
+        f.write("]\n")
+    print(len(rcases), "replace cases")
 
 
 if __name__ == "__main__":

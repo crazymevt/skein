@@ -1,7 +1,8 @@
 (ns skein.string
   "String functions, after clojure.string (DESIGN §21, M2.11, D-093), and the cursors of
-D-019. Skein has no regular expressions: split, replace and the rest take a string or a
-character to match. Case functions change ASCII letters only.
+D-019. split, replace and replace-first take a string, a character or a regex pattern
+(D-105) to match; the rest take a string or a character. Case functions change ASCII
+letters only.
 
 A cursor is a position in a string, at the start of a character or at its end: (cursor s)
 is the start, (next s c) the cursor after the character at c, (char-at s c) that
@@ -200,33 +201,157 @@ or nil."
               (do (append! b (slice s after)) (build b))
               (recur after))))))))
 
+;;; Patterns (M3.3, D-105). A match from the runtime is [end g0 g1 ...]: where it ends (a
+;;; cursor) and its groups' text, nil for a group that didn't take part.
+
+(defn- match-start [v]
+  (- (nth v 0) (%string-end (nth v 1))))
+
+(defn- match-next
+  "Where a search goes on after the match v: past it, or a character on after an empty
+match (as Java's); nil at the end of s."
+  [s v]
+  (let [end (nth v 0)]
+    (if (= "" (nth v 1))
+      (when (< end (%string-end s)) (%string-next s end))
+      end)))
+
+(defn- digit [ch]
+  (when (and ch (<= (int \0) (int ch) (int \9))) (- (int ch) (int \0))))
+
+(defn- name-char? [ch first?]
+  (let [i (int ch)]
+    (or (<= (int \a) i (int \z)) (<= (int \A) i (int \Z)) (and (not first?) (digit ch)))))
+
+(defn- template
+  "The parts of the replacement string r, as Java's Matcher reads it for a pattern with
+groups groups and the group names names: strings, and the numbers of groups. $n is group
+n (as many digits as make a group), ${name} the named group, and a backslash takes the
+character after it as it is."
+  [r groups names]
+  (let [n (end r)
+        at (fn [c] (when (< c n) (char-at r c)))
+        with-text (fn [parts text] (if (empty? text) parts (conj parts (apply str text))))
+        fail (fn [why] (error (str "replace: " why " in the replacement " (pr-str r))))]
+    (loop [c 0 text [] parts []]
+      (let [ch (at c)]
+        (cond
+          (nil? ch) (with-text parts text)
+          (= ch \\) (let [x (at (next r c))]
+                      (when-not x (fail "a backslash with nothing after it"))
+                      (recur (next r (next r c)) (conj text x) parts))
+          (not= ch \$) (recur (next r c) (conj text ch) parts)
+          :else
+          (let [c (next r c)
+                x (at c)]
+            (cond
+              (nil? x) (fail "a $ with no group after it")
+              (= x \{)
+              (let [close (%string-find r "}" c)
+                    nm (when close (slice r (next r c) close))]
+                (when-not close (fail "a ${ with no }"))
+                (when-not (and (not= "" nm) (name-char? (char-at nm 0) true)
+                               (every? (fn [ch] (name-char? ch false)) nm))
+                  (fail (str "a group name that isn't one, " (pr-str nm))))
+                (let [g (get names nm)]
+                  (when-not g (fail (str "no group named " nm)))
+                  (recur (next r close) [] (conj (with-text parts text) g))))
+              (digit x)
+              (let [first-g (digit x)]
+                (when (> first-g groups) (fail (str "no group " first-g)))
+                ;; Java's rule: more digits while they still make a group the pattern has.
+                (let [[g c] (loop [g first-g c (next r c)]
+                              (let [d (digit (at c))
+                                    more (when d (+ (* 10 g) d))]
+                                (if (and more (<= more groups))
+                                  (recur more (next r c))
+                                  [g c])))]
+                  (recur c [] (conj (with-text parts text) g))))
+              :else (fail (str "a $ followed by " (pr-str x))))))))))
+
+(defn- replace-pattern [s re replacement first-only?]
+  (let [re (re-pattern re)
+        names (%re-names re)
+        by-fn? (not (string? replacement))]
+    (when (and by-fn? (not (ifn? replacement)))
+      (error (str "replace needs a string or a function to replace a pattern's matches "
+                  "with, not " (pr-str replacement))))
+    ;; out gathers the pieces of the result; a template is read at the first match, as
+    ;; Java's is, once the number of groups is known.
+    (loop [search 0 copied 0 parts nil out (transient [])]
+      (let [v (when search (%re-exec re s search false))]
+        (if (nil? v)
+          (apply str (persistent! (conj! out (slice s copied))))
+          (let [out (conj! out (slice s copied (match-start v)))
+                parts (if (or by-fn? parts)
+                        parts
+                        (template replacement (- (count v) 2) names))
+                out (if by-fn?
+                      (conj! out (str (replacement (if (= 2 (count v)) (nth v 1) (vec (rest v))))))
+                      (reduce (fn [out p]
+                                (if (string? p)
+                                  (conj! out p)
+                                  (if-let [g (nth v (inc p))] (conj! out g) out)))
+                              out parts))]
+            (if first-only?
+              (apply str (persistent! (conj! out (slice s (nth v 0)))))
+              (recur (match-next s v) (nth v 0) parts out))))))))
+
 (defn replace
-  "s with every match (a string or character) replaced by replacement."
+  "s with every match replaced. match is a string or character, replaced by the string
+replacement as it is; or a pattern (#\"...\"), replaced by a string in which $1 is group 1,
+${name} the named group and \\$ a dollar sign, or by (replacement m), m the match as
+re-find gives it."
   [s match replacement]
-  (replace-all s match replacement false))
+  (if (%pattern? match)
+    (replace-pattern s match replacement false)
+    (replace-all s match replacement false)))
 
 (defn replace-first
-  "s with the first match (a string or character) replaced by replacement."
+  "s with the first match replaced, as replace does."
   [s match replacement]
-  (replace-all s match replacement true))
+  (if (%pattern? match)
+    (replace-pattern s match replacement true)
+    (replace-all s match replacement true)))
+
+(defn- drop-trailing-empty [parts]
+  (loop [parts parts]
+    (if (and (seq parts) (= "" (peek parts))) (recur (pop parts)) parts)))
+
+(defn- split-pattern
+  "The parts of s between the pattern re's matches, as Java's Pattern.split makes them:
+no empty first part for an empty match at the start, and s itself if nothing matches."
+  [s re limit]
+  (let [re (re-pattern re)]
+    (loop [search 0 from 0 parts []]
+      (let [v (when (and search (or (<= limit 0) (< (inc (count parts)) limit)))
+                (%re-exec re s search false))]
+        (cond
+          (nil? v) (if (and (= 0 from) (empty? parts)) [s] (conj parts (slice s from)))
+          ;; An empty match at the very start splits off nothing.
+          (and (= 0 from) (= 0 (nth v 0))) (recur (match-next s v) from parts)
+          :else (recur (match-next s v) (nth v 0)
+                       (conj parts (slice s from (match-start v)))))))))
 
 (defn split
-  "The parts of s between the separators (a string or character), as a vector. Empty
-parts at the end are dropped, as Clojure's split drops them, unless limit is given: then
-at most limit parts, the last holding the rest of s."
+  "The parts of s between the separators (a string, a character or a pattern), as a
+vector. Empty parts at the end are dropped, as Clojure's split drops them, unless limit
+is given: then at most limit parts, the last holding the rest of s."
   ([s separator]
    (let [parts (split s separator 0)]
-     (loop [parts parts]
-       (if (and (seq parts) (= "" (peek parts))) (recur (pop parts)) parts))))
+     ;; A pattern that matches nothing gives s itself, even "", as Java's split does.
+     (if (and (%pattern? separator) (= 1 (count parts))) parts (drop-trailing-empty parts))))
   ([s separator limit]
-   (let [sep (text-of separator "split")]
-     (when (= "" sep) (error "split needs a separator, not an empty string"))
-     (loop [from 0 parts []]
-       (let [at (when (or (<= limit 0) (< (inc (count parts)) limit))
-                  (%string-find s sep from))]
-         (if (nil? at)
-           (conj parts (slice s from))
-           (recur (+ at (%string-end sep)) (conj parts (slice s from at)))))))))
+   (if (%pattern? separator)
+     (split-pattern s separator limit)
+     (let [sep (text-of separator "split")]
+       (when (= "" sep) (error "split needs a separator, not an empty string"))
+       (loop [from 0 parts []]
+         (let [at (when (or (<= limit 0) (< (inc (count parts)) limit))
+                    (%string-find s sep from))]
+           (if (nil? at)
+             (conj parts (slice s from))
+             (recur (+ at (%string-end sep)) (conj parts (slice s from at))))))))))
 
 (defn split-lines
   "The lines of s, split at newlines (and a carriage return before one)."

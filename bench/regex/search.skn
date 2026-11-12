@@ -1,0 +1,64 @@
+(ns search
+  "Searching a large file with regular expressions (M3.3, D-105): writes a log of about
+10 MB to the path on the command line, reads it back, and prints a Markdown table of the
+best of 5 times for each search (bench/regex/native.lisp builds it with the release
+profile and runs it)."
+  (:require [skein.io :as io]
+            [skein.string :as string]
+            [skein.time :as time]))
+
+(def ^:private words
+  ["started" "processing" "request" "timeout" "loading" "saved" "cache" "missing"
+   "retrying" "connection" "closed" "parsing" "config" "worker" "queue" "flushing"])
+
+(def ^:private levels ["INFO" "INFO" "INFO" "DEBUG" "DEBUG" "WARN" "ERROR"])
+
+(defn- log-text
+  "n lines of a made-up log, the same each time (a linear congruential generator)."
+  [n]
+  (let [b (string/builder)]
+    (loop [i 0 x 12345]
+      (if (= i n)
+        (string/build b)
+        (let [r (fn [k m] (mod (quot x (inc k)) m))
+              x' (mod (+ (* x 1103515245) 12345) 2147483648)]
+          (string/append! b "2026-11-" (+ 10 (r 1 19)) " " (+ 10 (r 2 13)) ":" (+ 10 (r 3 49))
+                          ":" (+ 10 (r 4 49)) " " (nth levels (r 5 7)) " worker-" (r 6 32)
+                          " " (nth words (r 7 16)) " " (nth words (r 11 16)) " " (r 13 10000)
+                          " items for user_" (r 17 9000) " in " (r 19 500) "ms\n")
+          (recur (inc i) x'))))))
+
+(defn- best-ms
+  "The best of 5 times of (f), in milliseconds, and its result."
+  [f]
+  (loop [i 0 best nil result nil]
+    (if (= i 5)
+      [best result]
+      (let [start (time/now-ns)
+            v (f)
+            ms (/ (- (time/now-ns) start) 1e6)]
+        (recur (inc i) (if best (min best ms) ms) v)))))
+
+(def ^:private searches
+  [["a word: #\"timeout\"" (fn [s] (count (re-seq #"timeout" s)))]
+   ["ignoring case: #\"(?i)TIMEOUT\"" (fn [s] (count (re-seq #"(?i)TIMEOUT" s)))]
+   ["dates: #\"\\d{4}-\\d\\d-\\d\\d\"" (fn [s] (count (re-seq #"\d{4}-\d\d-\d\d" s)))]
+   ["a group: #\"user_(\\d+)\"" (fn [s] (count (re-seq #"user_(\d+)" s)))]
+   ["words: #\"\\b[a-z]+ing\\b\"" (fn [s] (count (re-seq #"\b[a-z]+ing\b" s)))]
+   ["error lines: #\"(?m)^.*ERROR.*$\"" (fn [s] (count (re-seq #"(?m)^.*ERROR.*$" s)))]
+   ["split into lines: #\"\\n\"" (fn [s] (count (string/split s #"\n")))]
+   ["replace numbers: #\"\\d+\" with \"N\" (the result's length)"
+    (fn [s] (count (string/replace s #"\d+" "N")))]])
+
+(defn -main [& args]
+  (let [path (or (first args) "regex-bench.log")]
+    (io/write-file path (log-text 150000))
+    (let [s (io/read-file path)
+          mb (/ (string/end s) 1e6)]
+      (println (str "Searching " (format "%.1f" mb) " MB (" path "):\n"))
+      (println "| Search | Result | Best of 5 (ms) | MB/s |")
+      (println "|---|---|---|---|")
+      (doseq [[label f] searches]
+        (let [[ms n] (best-ms (fn [] (f s)))]
+          (println (str "| " (string/replace label "|" "\\|") " | " n " | "
+                        (format "%.1f" ms) " | " (format "%.0f" (/ mb (/ ms 1000))) " |")))))))

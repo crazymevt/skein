@@ -1,0 +1,43 @@
+;; skein.string with patterns (M3.3 step 4, D-105), natively: every case in
+;; regex-replace.edn (written by host/tools/regex-cases.py from Python's re, finding
+;; matches as Java's Matcher does) gives the same replace, replace-first and split; then
+;; replacement functions, escapes and errors.
+(ns regex-string
+  (:require [skein.edn :as edn]
+            [skein.io :as io]
+            [skein.string :as string]))
+
+(defn- results [[p s t]]
+  (let [re (re-pattern p)]
+    [(string/replace s re t) (string/replace-first s re t)
+     (string/split s re) (string/split s re 2)]))
+
+(defn- outcome [f]
+  (try (f) (catch error e (str "error: " (condition-message e)))))
+
+(defn -main [& args]
+  (let [cases (edn/read-string (io/read-file "host/tests/fixtures/library/regex-replace.edn"))
+        wrong (remove (fn [c] (= (subvec c 3) (results c))) cases)]
+    (println "cases:" (count cases))
+    (println "mismatches:" (count wrong))
+    (doseq [c (take 20 wrong)]
+      (println (pr-str (subvec c 0 3)) "expected" (pr-str (subvec c 3))
+               "got" (pr-str (results c)))))
+  ;; A function of the match, as re-find gives it.
+  (println (string/replace "a1b22" #"\d+" (fn [m] (str "<" (count m) ">")))
+           (string/replace "k=v x=y" #"(\w)=(\w)" (fn [[_ k v]] (str v "=" k)))
+           (string/replace-first "aaa" #"a" string/upper-case))
+  ;; Java's rule for $nn: digits while they make a group, so $10 with one group is $1 0.
+  (println (string/replace "ab" #"(a)" "$10") (string/replace "ab" #"(a)" "\\\\$1"))
+  ;; Strings and characters still match as they are, $ and all.
+  (prn (string/replace "a.b" "." "$1") (string/split "a.b.c" \.)
+           (string/split "a1b2c" #"\d" 0) (string/split "" #",") (string/split "" ","))
+  (doseq [f [(fn [] (string/replace "a" #"a" "$2"))
+             (fn [] (string/replace "a" #"a" "$"))
+             (fn [] (string/replace "a" #"a" "\\"))
+             (fn [] (string/replace "a" #"a" "$x"))
+             (fn [] (string/replace "a" #"(?<n>a)" "${m}"))
+             (fn [] (string/replace "a" #"(?<n>a)" "${n"))
+             (fn [] (string/replace "a" #"a" 5))
+             (fn [] (string/replace "b" #"a" "$2"))]]
+    (println (outcome f))))
