@@ -85,6 +85,7 @@ These are defined in M0.1; update this section if they change.
 | `./skein test [path...]` | run a project's skein.test tests natively (default: its `:test-paths`, else `test/`); exits with 1 on a failure |
 | `./skein deps [update [lib...]]` | fetch the project's dependencies (`:deps`, git and local folders) into the cache, `SKEIN_DEPS_DIR` or `~/.skein/deps`; `update` moves `skein.lock` to the tags' current commits (D-094) |
 | `make bench` | run the benchmarks in `bench/` |
+| `tools/linux/run.sh [--build] [command]` | run `make test`, or a command, in Linux, in Docker (Colima on macOS: `colima start --memory 10`), on a copy of the checkout kept in the volume `skein-linux-work` (D-113) |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |
 
 ## 9. When to ask Jessie
