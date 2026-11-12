@@ -44,7 +44,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.12 Package management | ✅ |
 | M2.13 FFI additions | ✅ |
 | M2.14 UI library | ✅ |
-| M2.15 Driftrock developed live, natively | 🟨 |
+| M2.15 Driftrock developed live, natively | ✅ |
 | M2.16 skein-ui on Windows | ⬜ |
 | M3.1 Processes | ⬜ |
 | M3.2 Data formats and bytes | ⬜ |
@@ -472,13 +472,13 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
   1. ✅ Dependable CI for live development: an error in a task while another debug session is ending waits for the console instead of failing at once (`dev-task-errors-natively` fails now and then on Linux); the live-edit check judges the median of three edits against its 1 s limit, since a shared macOS runner took 1.02 s and 1.24 s now and then (Jessie's choice); a first module after `skein dev` starts doesn't pay for an empty zig cache (1.7 s); retries for CI's apt installs.
   2. ✅ Parent restarts: in a program with the debugger, a task of a nursery (`spawn`, `skein.jobs` graphs) offers, after its own restarts and before "Fail the task", the restarts that were active in its spawner when it was spawned, which the nursery keeps alive while the task runs, each reported with its fiber. Choosing one fails the task without a second debugger in the spawner, and the spawner invokes that restart once its nursery has ended. In the text REPL and SLDB; native dev fixtures and a Swank host test.
   3. ✅ Paused frames: `run-loop`'s `:paused` (a function called about 60 times a second on the loop's thread while one of its calls waits in the debugger, in its own fiber or in a task it waits for); Driftrock pumps SDL's events in it and presents its last frame, dropping input. A native test, and a check by hand on macOS that the window doesn't show the spinning cursor.
-  4. The scripted session (built; awaiting its first CI runs) (`host/tools/live-debug.lisp`, on all three platforms in CI): Driftrock under native `skein dev` with `--autopilot`; a bug saved into one of its jobs crashes it; the debugger offers `retry-frame`; the fix is saved and runs compiled; `retry-frame` resumes the game, `:paused` having run meanwhile; the game finishes with no frame over budget after it resumed. M2.9's live edit stays as it is.
-  5. The same through SLIME in Linux CI (built; awaiting its first CI run) (`editors/tests/driftrock-session.el`): SLDB for the crash, the fix with `C-c C-c`, `retry-frame`, and the game going on.
+  4. ✅ The scripted session (`host/tools/live-debug.lisp`, on all three platforms in CI): Driftrock under native `skein dev` with `--autopilot`; a bug saved into one of its jobs crashes it; the debugger offers `retry-frame`; the fix is saved and runs compiled; `retry-frame` resumes the game, `:paused` having run meanwhile; the game finishes with no frame over budget after it resumed. M2.9's live edit stays as it is.
+  5. ✅ The same through SLIME in Linux CI (`editors/tests/driftrock-session.el`): SLDB for the crash, the fix with `C-c C-c`, `retry-frame`, and the game going on.
   6. ✅ Jessie develops Driftrock live through SLIME on her Mac; what that finds is fixed here.
 
 **Exit:** the scripted sessions pass in CI on all three platforms (through SLIME on Linux), and Jessie develops Driftrock live through SLIME on her Mac.
 
-Steps 4 and 5 wait for their first CI runs (GitHub Actions was down when they were pushed); Jessie finishes Phase 2 with them and M2.16 later, and Phase 3 goes ahead meanwhile.
+Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run #121 and on Windows in #118, and the SLIME session on Linux in #121. Phase 2 ends with M2.16, which waits for Jessie to work on Windows.
 
 ### M2.16 skein-ui on Windows
 - M2.14's last steps (D-101), when Jessie works on Windows (a UTM virtual machine is set up); Phase 3 goes ahead meanwhile (D-102). In skein-ui:
