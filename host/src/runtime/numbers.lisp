@@ -25,14 +25,21 @@ NaN gives false instead of signaling (x86-64 traps on NaN comparisons; arm64 doe
 
 ;;; Skein follows IEEE for floats: an invalid operation (such as comparing a NaN, or
 ;;; 0.0/0.0) gives NaN or false instead of trapping. Inlined comparisons rely on this.
-;;; The modes belong to each thread, and SBCL on Windows does not keep them across
-;;; loading, so the compiler driver calls this before running each top-level form.
+;;; Overflow and division by zero do trap, signaling arithmetic errors. SBCL starts with
+;;; those traps on x86-64 and macOS but with none on arm64 Linux, so they are set here
+;;; rather than kept. The modes belong to each thread, and SBCL on Windows does not keep
+;;; them across loading, so the compiler driver calls this before running each top-level
+;;; form.
+
+(defparameter *skein-float-traps* '(:overflow :divide-by-zero)
+  "The floating-point traps Skein code runs with: overflow and division by zero.")
 
 (defun ensure-float-modes ()
-  "Mask the floating-point invalid-operation trap in the current thread."
+  "Give the current thread Skein's floating-point traps (*skein-float-traps*): overflow
+and division by zero trap, an invalid operation doesn't."
   (let ((traps (getf (sb-int:get-floating-point-modes) :traps)))
-    (when (member :invalid traps)
-      (sb-int:set-floating-point-modes :traps (remove :invalid traps)))))
+    (unless (and (subsetp traps *skein-float-traps*) (subsetp *skein-float-traps* traps))
+      (sb-int:set-floating-point-modes :traps *skein-float-traps*))))
 
 (ensure-float-modes)
 

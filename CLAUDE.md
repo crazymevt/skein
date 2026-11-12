@@ -86,6 +86,7 @@ These are defined in M0.1; update this section if they change.
 | `./skein deps [update [lib...]]` | fetch the project's dependencies (`:deps`, git and local folders) into the cache, `SKEIN_DEPS_DIR` or `~/.skein/deps`; `update` moves `skein.lock` to the tags' current commits (D-094) |
 | `make bench` | run the benchmarks in `bench/` |
 | `make manual` | generate Skein's manual into `build/manual/`, with its entries as EDN in `build/manual/data/` (`doc/manual.skn`, D-111); `./skein run doc/manual.skn --check [ns...]` runs its examples |
+| `tools/linux/run.sh [--build] [command]` | run `make test`, or a command, in Linux, in Docker (Colima on macOS: `colima start --memory 10`), on a copy of the checkout kept in the volume `skein-linux-work` (D-113) |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |
 
 ## 9. When to ask Jessie
