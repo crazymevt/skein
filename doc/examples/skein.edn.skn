@@ -1,0 +1,39 @@
+(ns skein.edn.examples
+  (:require [skein.edn :as edn]
+            [skein.io :as io]))
+
+;;; Examples for skein.edn (D-109).
+;;; `./skein run doc/manual.skn --check skein.edn` runs them.
+
+;;;; read-string
+(edn/read-string "{:window {:width 800 :height 600} :title \"Driftrock\" :tags #{:2d}}")
+;=> {:window {:width 800, :height 600}, :title "Driftrock", :tags #{:2d}}
+
+;; Data, never code: a list stays a list.
+(edn/read-string "(+ 1 2)")
+;=> (+ 1 2)
+
+;; Only the first form; nil, or :eof, when there is none.
+[(edn/read-string "1 2") (edn/read-string "") (edn/read-string {:eof :none} "  ")]
+;=> [1 nil :none]
+
+;; Tagged values, read by the functions in :readers.
+(edn/read-string {:readers {'point (fn [[x y]] {:x x :y y})}} "#point [3 4]")
+;=> {:x 3, :y 4}
+
+;; :default handles the tags :readers hasn't; without either, a tag is an error.
+(edn/read-string {:default (fn [tag v] [:tagged tag v])} "#inst \"2026-11-12\"")
+;=> [:tagged inst "2026-11-12"]
+
+;; pr-str writes EDN that read-string reads back.
+(let [settings {:volume 0.8 :keys {:jump \space} :recent ["a.skn" "b.skn"]}]
+  (= settings (edn/read-string (pr-str settings))))
+;=> true
+
+;;;; read
+;; Forms one after another from a reader; a form may span lines.
+(let [f (io/temp-file)]
+  (io/write-file f "{:id 1}\n{:id 2\n :name \"two\"}\n")
+  (with-open [r (io/open-reader f)]
+    [(edn/read r) (edn/read r) (edn/read {:eof :end} r)]))
+;=> [{:id 1} {:id 2, :name "two"} :end]
