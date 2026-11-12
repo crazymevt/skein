@@ -1,0 +1,67 @@
+(ns skein.json
+  "JSON (M3.2, D-104), in the shape of Clojure's clojure.data.json:
+  (read-str s)  (read reader)  JSON text into data; objects are maps with string keys
+                               (:key-fn keyword makes keywords of them), arrays vectors,
+                               numbers integers or f64s, null nil
+  (write-str x)  (write x writer)  data into JSON text ({:pretty true} indents it)
+  (reformat s {:indent 2})  JSON text re-indented, its keys in their order
+Options come as data.json's keyword arguments, (read-str s :key-fn keyword), or as a map.
+Text that isn't JSON signals json-error, with its :line and :column. Native only."
+  (:require [skein.io :as io]
+            [skein.string :as string]))
+
+(defcondition json-error [error]
+  "JSON text that can't be read: its message, and the :line and :column (from 1) where it
+went wrong."
+  (message :reader json-error-message)
+  (line :reader json-error-line)
+  (column :reader json-error-column)
+  (:report (fn [c] (json-error-message c))))
+
+(defn- options
+  "data.json's keyword arguments, or one map of them."
+  [args]
+  (if (and (= 1 (count args)) (map? (first args)))
+    (first args)
+    (apply hash-map args)))
+
+(defn- parse
+  "s read as JSON, or ::incomplete if it ends inside its value."
+  [s {:keys [key-fn value-fn]}]
+  (let [[kind a line column] (%json-read s key-fn value-fn)]
+    (case kind
+      :ok a
+      :incomplete ::incomplete
+      (error json-error :message (str "not JSON: " a " at line " line ", column " column)
+             :line line :column column))))
+
+(defn read-str
+  "The data the JSON text s holds. Options: :key-fn, called with each object's key (a
+string), keyword to make keywords; :value-fn, called with each key (as :key-fn made it) and
+value, whose result is the value, or which leaves the entry out by returning itself."
+  [s & opts]
+  (let [v (parse s (options opts))]
+    (when (= v ::incomplete)
+      (error json-error :message "not JSON: the text ends inside a value" :line nil :column nil))
+    v))
+
+(defn read
+  "The next JSON value from the skein.io reader r, read a line at a time until the lines
+hold a whole value: one a line, as JSON Lines and stream-json have them, or a value over
+several lines. A line holds at most one value. At the end of the stream: an error, or with
+:eof-error? false, :eof-value (nil). Options as read-str's."
+  [r & opts]
+  (let [opts (options opts)]
+    (loop [text nil]
+      (if-let [line (io/read-line r)]
+        (if (and (nil? text) (string/blank? line))
+          (recur nil)
+          (let [t (if text (str text "\n" line) line)
+                v (parse t opts)]
+            (if (= v ::incomplete) (recur t) v)))
+        (cond text (error json-error :message "not JSON: the stream ends inside a value"
+                          :line nil :column nil)
+              (get opts :eof-error? true)
+              (error json-error :message "the stream ends before a JSON value"
+                     :line nil :column nil)
+              :else (:eof-value opts))))))

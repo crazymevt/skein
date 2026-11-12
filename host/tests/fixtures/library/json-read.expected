@@ -1,0 +1,28 @@
+[true false nil 0 -7 12345678901234567890123 1.5 -2500.0 100.0]
+{a [1 {b []}], c {}}
+(integer integer f64)
+"a\"b\\c/d\b\f\n\r\t"
+é☺ 😀 é
+{:a 1, :b {:c 2}}
+{a 10, c 30}
+duplicate keys, the last wins: {a 2}
+"[1, 2" -> [nil nil not JSON: the text ends inside a value]
+"{\"a\" 1}" -> [1 6 not JSON: expected : after a key at line 1, column 6]
+"[1,]" -> [1 4 not JSON: unexpected character at line 1, column 4]
+"tru" -> [nil nil not JSON: the text ends inside a value]
+"nul x" -> [1 1 not JSON: unexpected word at line 1, column 1]
+"01" -> [1 2 not JSON: text after the value at line 1, column 2]
+"1." -> [nil nil not JSON: the text ends inside a value]
+"\"\\x\"" -> [1 3 not JSON: an unknown escape at line 1, column 3]
+"\"a\nb\"" -> [1 3 not JSON: a control character in a string at line 1, column 3]
+"[1] 2" -> [1 5 not JSON: text after the value at line 1, column 5]
+"\"\\ud83d\"" -> [1 8 not JSON: a lone surrogate in a \u escape at line 1, column 8]
+"" -> [nil nil not JSON: the text ends inside a value]
+"{\n  \"a\": @}" -> [2 8 not JSON: unexpected character at line 2, column 8]
+deep: 1
+not too deep: true
+from the program: {:type start, :n 1}
+from the program: {:type text, :text héllo ☺}
+from the program: {:type end, :n 3}
+at the end: :eof
+exit: 0

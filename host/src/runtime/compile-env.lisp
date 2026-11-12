@@ -201,6 +201,11 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore f))
   nil)
 
+;; skein.json (M3.2, D-104) is native only.
+(defcore "%json-read" (s key-fn value-fn)
+  (declare (ignore s key-fn value-fn))
+  (error "skein.json is native only (D-104)"))
+
 ;; skein.bytes (M3.2, D-104) is native only.
 (defcore "%utf8" (x)
   (declare (ignore x))

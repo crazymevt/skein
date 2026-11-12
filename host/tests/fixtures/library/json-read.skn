@@ -1,0 +1,51 @@
+;; skein.json's reading (M3.2 step 2, D-104), natively: values, numbers, strings and their
+;; escapes, :key-fn and :value-fn, errors and where they are, and JSON read a line at a
+;; time from a program (this one, started as its own child) and over several lines.
+(ns json-read
+  (:require [skein.json :as json]
+            [skein.process :as process :refer [process]]
+            [skein.io :as io]
+            [skein.string :as string]))
+
+(defn- err [s]
+  (try (json/read-str s) :no-error
+       (catch json/json-error e [(json/json-error-line e) (json/json-error-column e)
+                                 (json/json-error-message e)])))
+
+(defn- child []
+  ;; A value a line, as stream-json has them, with a blank line and a value on three.
+  (println "{\"type\":\"start\",\"n\":1}")
+  (println "")
+  (println "{\"type\":\"text\",\"text\":\"héllo \\u263A\"}")
+  (println "{\"type\":")
+  (println "  \"end\",")
+  (println "  \"n\": 3}"))
+
+(defn -main [& args]
+  (if (seq args)
+    (child)
+    (do
+      ;; Literals, numbers and nesting.
+      (println (json/read-str "[true, false, null, 0, -7, 12345678901234567890123, 1.5, -2.5e3, 1E2]"))
+      (println (json/read-str " {\"a\": [1, {\"b\": []}], \"c\": {}} "))
+      (println (map class-name (map class-of (json/read-str "[1, 99999999999999999999999, 1.0]"))))
+      ;; Strings: escapes, \u escapes, a surrogate pair, and UTF-8 as it is.
+      (println (pr-str (json/read-str "\"a\\\"b\\\\c\\/d\\b\\f\\n\\r\\t\"")))
+      (println (json/read-str "\"\\u00e9\\u263A \\ud83d\\ude00 é\""))
+      ;; :key-fn and :value-fn, as keyword arguments or a map.
+      (println (json/read-str "{\"a\": 1, \"b\": {\"c\": 2}}" :key-fn keyword))
+      (println (json/read-str "{\"a\": 1, \"drop\": 2, \"c\": 3}"
+                              {:value-fn (fn value-fn [k v] (if (= k "drop") value-fn (* 10 v)))}))
+      (println "duplicate keys, the last wins:" (json/read-str "{\"a\": 1, \"a\": 2}"))
+      ;; Errors, with where they are.
+      (doseq [bad ["[1, 2" "{\"a\" 1}" "[1,]" "tru" "nul x" "01" "1." "\"\\x\"" "\"a\nb\""
+                   "[1] 2" "\"\\ud83d\"" "" "{\n  \"a\": @}"]]
+        (println (pr-str bad) "->" (err bad)))
+      (println "deep:" (first (err (str (apply str (repeat 600 "[")) (apply str (repeat 600 "]"))))))
+      (println "not too deep:" (vector? (json/read-str (str (apply str (repeat 500 "[")) (apply str (repeat 500 "]"))))))
+      ;; From a program, a value at a time.
+      (let [p (process [(%executable-path) "child"])
+            r (:out p)]
+        (dotimes [_ 3] (println "from the program:" (json/read r :key-fn keyword)))
+        (println "at the end:" (json/read r :eof-error? false :eof-value :eof))
+        (println "exit:" (:exit @p))))))
