@@ -728,6 +728,10 @@ const AFD_POLL_DISCONNECT: u32 = 0x0008;
 const AFD_POLL_ABORT: u32 = 0x0010;
 const AFD_POLL_LOCAL_CLOSE: u32 = 0x0020;
 
+/// Whether shutting a socket down ends a read waiting on it in another thread: on Windows it
+/// doesn't, and the read (an AFD receive in Zig's std.Io) can't be cancelled either.
+pub const socket_shutdown_ends_reads = false;
+
 /// Wait until the socket can be read (data, its end or an error are there), at most
 /// `nanos`; false if the time ran out.
 pub fn socketReadable(io: std.Io, handle: std.Io.net.Socket.Handle, nanos: u64) bool {

@@ -189,6 +189,9 @@ pub fn modeBits(permissions: std.Io.File.Permissions) ?u32 {
     return @intCast(permissions.toMode() & 0o7777);
 }
 
+/// Whether shutting a socket down ends a read waiting on it in another thread: it does.
+pub const socket_shutdown_ends_reads = true;
+
 /// Wait until the socket can be read (data, its end or an error are there), at most
 /// `nanos`; false if the time ran out (skein.net's read timeouts, D-106).
 pub fn socketReadable(io: std.Io, handle: std.Io.net.Socket.Handle, nanos: u64) bool {

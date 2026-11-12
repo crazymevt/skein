@@ -341,7 +341,7 @@ fn shutdownBlocking(arg: ?*anyopaque) void {
 pub fn shutdownSocket(h: Value) void {
     const s = streamOf(h);
     var call: ShutdownCall = .{ .sock = s.sock orelse rt.raise(.@"error", "the stream isn't a socket", .{}) };
-    s.shut = true;
+    @atomicStore(bool, &s.shut, true, .release);
     @import("sched.zig").blocking(shutdownBlocking, &call);
 }
 
@@ -366,12 +366,31 @@ fn register(s: *Stream) Value {
     return Value.fromFixnum(@intCast(table.items.len));
 }
 
+/// How long a socket read waits at a time, where a shutdown doesn't end a waiting read.
+const shut_check_ns: u64 = 50 * std.time.ns_per_ms;
+
 /// Read from a socket into its buffer: how many bytes (0 at its end), waiting at most its
-/// read timeout for some to arrive (the platform's poll) before the read itself.
+/// read timeout for some to arrive (the platform's poll) before the read itself. Where a
+/// shutdown doesn't end a read that waits (Windows, whose read can't be cancelled either),
+/// it waits for data in slices, ending when another fiber has shut the socket down.
 fn readSocket(s: *Stream) !usize {
     const sio = io.stdIo();
     const handle = s.sock.?.socket.handle;
-    if (s.read_timeout != 0 and !platform.socketReadable(sio, handle, s.read_timeout)) return error.Timeout;
+    if (!platform.socket_shutdown_ends_reads) {
+        var waited: u64 = 0;
+        while (true) {
+            if (@atomicLoad(bool, &s.shut, .acquire)) return 0;
+            const step = if (s.read_timeout != 0)
+                @min(shut_check_ns, s.read_timeout - waited)
+            else
+                shut_check_ns;
+            if (platform.socketReadable(sio, handle, step)) break;
+            waited += step;
+            if (s.read_timeout != 0 and waited >= s.read_timeout) return error.Timeout;
+        }
+    } else if (s.read_timeout != 0 and !platform.socketReadable(sio, handle, s.read_timeout)) {
+        return error.Timeout;
+    }
     var bufs = [_][]u8{s.buf[0..]};
     const op: std.Io.Operation = .{ .net_read = .{ .socket_handle = handle, .data = &bufs } };
     return (try (try sio.operate(op)).net_read).data_len;
