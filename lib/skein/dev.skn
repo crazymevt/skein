@@ -425,15 +425,22 @@ from where it was signaled."
   [session form reply console]
   (let [replied (atom false)
         answer (fn [& x] (reset! replied true) (>! reply (vec x)))
+        ;; Resuming, the console no longer waits for this fiber: say so before it goes on,
+        ;; not once the console's fiber runs again, or an error the program meets at once
+        ;; (a job of the frame it retries) would find every console evaluating and give up.
+        resumed (fn []
+                  (reset! (:evaluating console) false)
+                  (reset! replied true)
+                  (>! reply [:resumed]))
         restarts (:restarts session)
         n (integer-form form)
         k (keyword-name form)]
     (try
-      (cond (and n (< -1 n (count restarts))) (do (answer :resumed)
+      (cond (and n (< -1 n (count restarts))) (do (resumed)
                                                   (invoke-debugger-restart (nth restarts n)))
             n (answer :message (str "no restart " n "\n"))
             (= k "bt") (answer :message (backtrace-text (:frames session)))
-            (= k "quit") (do (answer :resumed)
+            (= k "quit") (do (resumed)
                              (when-let [a (outermost-abort (:own session))] (invoke-restart a)))
             :else (let [result (try (let [v (eval-in console form)]
                                       (record-value! v)
@@ -441,7 +448,7 @@ from where it was signaled."
                                     (catch error e [:error (condition-message e)]))]
                     (apply answer result)))
       ;; The form invoked a restart (or otherwise left): this fiber resumes.
-      (finally (when-not @replied (>! reply [:resumed]))))))
+      (finally (when-not @replied (resumed))))))
 
 (def ^:private open-sessions
   "How many errors in the program are in the debugger now."
