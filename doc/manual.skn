@@ -34,21 +34,31 @@ locations, as Swank sees them, and it can evaluate the examples."
         root (if (str/ends-with? root "/./") (subs root 0 (- (count root) 2)) root)]
     (if (and path (str/starts-with? path root)) (subs path (count root)) path)))
 
+(defn- type-docstring
+  "The docstring of a (defclass name [supers] doc? ...) or (defcondition ...) form's items,
+or nil."
+  [items]
+  (when (and (>= (count items) 4) (= :vector (:kind (nth items 2)))
+             (string? (:datum (nth items 3))))
+    (:datum (nth items 3))))
+
 (defn- source-forms
   "name -> {:doc :arglists :loc} for the top-level definitions with a docstring in the
-source file at path, read with Skein's reader: a fallback for vars the model has no
-information for (the macros of lib/skein/core.skn, compiled into every program)."
-  [path]
-  (if-not (io/file-exists? path)
+source file at path of namespace ns, read with Skein's reader: a fallback for vars the
+model has no information for (the macros of lib/skein/core.skn, compiled into every
+program, and the classes and condition types defclass and defcondition define)."
+  [path ns]
+  (if-not (and path (io/file-exists? path))
     {}
     (into {}
           (keep (fn [form]
-                  (let [items (:datum form)]
-                    (when (and (= :list (:kind form)) (>= (count items) 3)
-                               (symbol? (:datum (first items)))
-                               (contains? #{"defn" "defmacro" "defgeneric" "def"}
-                                          (name (:datum (first items))))
-                               (string? (:datum (nth items 2))))
+                  (let [items (:datum form)
+                        head (when (and (= :list (:kind form)) (>= (count items) 3)
+                                        (symbol? (:datum (first items))))
+                               (name (:datum (first items))))]
+                    (cond
+                      (and (contains? #{"defn" "defmacro" "defgeneric" "def"} head)
+                           (string? (:datum (nth items 2))))
                       (let [nm (name (:datum (second items)))
                             params (filter (fn [s] (= :vector (:kind s))) (drop 3 items))
                             bodies (filter (fn [s] (and (= :list (:kind s))
@@ -62,9 +72,15 @@ information for (the macros of lib/skein/core.skn, compiled into every program).
                                          (str "(" (str/join " " (map reader/syntax-to-string
                                                                      vectors))
                                               ")"))
-                             :loc (str path ":" (:line (:loc form)) ":1")}]))))
-                (reader/read-string-forms (io/read-file path)
-                                          {:file path :namespace "skein.core"})))))
+                             :loc (str path ":" (:line (:loc form)) ":1")}])
+
+                      (and (contains? #{"defclass" "defcondition"} head) (type-docstring items))
+                      [(name (:datum (second items)))
+                       {:doc (type-docstring items)
+                        :loc (str path ":" (:line (:loc form)) ":1")}]
+
+                      :else nil)))
+                (reader/read-string-forms (io/read-file path) {:file path :namespace ns})))))
 
 (defn- var-info
   "{:doc :arglists :loc} of a var: the model's, else skein.core.native's for a skein.core
@@ -104,7 +120,7 @@ function written in Skein (as Swank does), else from fallback."
   [nm]
   (let [ns (%find-namespace nm)
         file (if (= nm "skein.core") "lib/skein/core.skn" (relative-path (%namespace-file ns)))
-        fallback (if (= nm "skein.core") (source-forms "lib/skein/core.skn") {})]
+        fallback (source-forms file nm)]
     {:name nm
      :file file
      :doc (ns-docstring file)

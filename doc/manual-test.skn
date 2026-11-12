@@ -103,6 +103,11 @@ host/tools/bootstrap.sh."
       (is (:macro? when-var))
       (is (str/starts-with? (:doc when-var) "If test is true"))
       (is (= [["test" "&" "body"]] (:arglists when-var)))))
+  (testing "classes and condition types get their docstrings from the source"
+    (let [doc-of (fn [nm] (:doc (first (filter (fn [v] (= nm (:name v)))
+                                               (:vars (manual/namespace-model "skein.io"))))))]
+      (is (str/starts-with? (doc-of "stream") "An open file"))
+      (is (str/starts-with? (doc-of "io-error") "A file that can't be read"))))
   (is (= ["skein.core" "str"] (manual/resolve-name "skein.string" "str")))
   (is (= ["skein.string" "join"] (manual/resolve-name "skein.string" "join")))
   (is (= ["skein.io" "line-seq"] (manual/resolve-name "skein.string" "skein.io/line-seq")))
@@ -136,7 +141,7 @@ host/tools/bootstrap.sh."
 (def complete
   "The namespaces documented completely: every public var with examples, arguments and
 values, and see also."
-  ["skein.string" "skein.core"])
+  ["skein.string" "skein.core" "skein.io"])
 
 (deftest documented-namespaces-are-complete
   (doseq [ns complete
