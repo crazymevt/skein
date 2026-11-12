@@ -961,6 +961,7 @@ Phase 3's main project (D-102) is an IDE for Skein written in Skein, Skein Studi
 |---|---|---|
 | `skein.core` | special-form wrappers, core macros, collections, seqs, transducers, atoms, numbers, strings basics | 0 |
 | `skein.string` | string operations, cursors, builders (D-019) | 2 (M2.11, D-093) |
+| (regexes) | `#"..."` literals and `re-pattern`, `re-find`, `re-seq`, `re-matches`, `re-groups`, `re-matcher` in `skein.core`; `skein.string`'s `replace` and `split` take a pattern; Java's common syntax on an engine of Skein's own (D-105) | 3 (M3.3) |
 | `skein.math` | scalar math; `vec2/3/4`, `quat`, `mat3/4` value structs; lerp, clamp, noise | 0 |
 | `skein.conc` | nurseries, futures, channels, timeouts, job graphs | 0 |
 | `skein.ffi` | FFI | 0 |

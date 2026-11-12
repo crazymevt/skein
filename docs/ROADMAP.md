@@ -524,7 +524,13 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 **Exit:** native tests round-trip JSON and EDN against a reference model, read JSON a line at a time from a process, and check the hashes against published test vectors.
 
 ### M3.3 Regular expressions
-- A regex engine of Skein's own, compiled natively (D-102): Java's common syntax (classes, groups, named groups, alternation, greedy and lazy quantifiers, anchors, `(?i)` and other flags), and Clojure's functions (`re-pattern`, `re-find`, `re-seq`, `re-matches`, `re-groups`) with `skein.string/replace` and `split` taking a pattern. To settle when preparing: a literal syntax (Clojure's `#"..."`) and where the functions live.
+- A regex engine of Skein's own, compiled natively (D-102): Java's common syntax (classes, groups, named groups, alternation, greedy and lazy quantifiers, anchors, `(?i)` and other flags), and Clojure's functions (`re-pattern`, `re-find`, `re-seq`, `re-matches`, `re-groups`) with `skein.string/replace` and `split` taking a pattern.
+- Settled (D-105): Clojure's literal, `#"..."`, and the functions in `skein.core`, as Clojure's. The engine is a backtracking matcher in the runtime; Phase 0 reads the literal, but its regex functions are native only. The reference model is a table generated with Python's `re` over the syntax Java and Python share.
+- Steps, in order (D-105):
+  1. The engine in the runtime: parsing Java's common syntax and compiling it, and a backtracking matcher over code points with groups, back references and lookahead; the table of cases (`host/tools/regex-cases.py` and what it writes) and a native test that runs them.
+  2. The pattern type and `skein.core`'s functions: `re-pattern`, `re-find`, `re-seq`, `re-matches`, `re-groups` and `re-matcher` (with `re-find` on a matcher), and printing a pattern as `#"..."`.
+  3. The literal: `#"..."` in Skein's reader and Phase 0's, the printer, and the C backend (a constant compiled at start-up).
+  4. `skein.string`: `replace` and `replace-first` with a pattern (a replacement string with `$1` and `${name}`, or a function of the match) and `split` with a pattern; a benchmark of searching a large file.
 
 **Exit:** native tests against a reference model of the syntax, randomized, and a benchmark of searching a large file.
 
