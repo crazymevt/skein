@@ -196,6 +196,22 @@ pub fn processEnviron() std.process.Environ {
 // ---------------------------------------------------------------------------------------
 // C libraries (the FFI, M1.10)
 
+/// The permissions of a file or directory only its owner may use (D-107): Windows' defaults,
+/// since a user's files and %TEMP% are already only theirs; owner-only! does nothing.
+pub fn ownerOnlyPermissions(directory: bool) std.Io.File.Permissions {
+    _ = directory;
+    return .default_file;
+}
+
+/// A file's permission bits: none on Windows.
+pub fn modeBits(permissions: std.Io.File.Permissions) ?u32 {
+    _ = permissions;
+    return null;
+}
+
+/// Whether owner-only! changes anything here.
+pub const has_owner_only = false;
+
 /// "windows": which entry of a deflibrary spec applies.
 pub const os_name = "windows";
 

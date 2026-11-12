@@ -1,0 +1,44 @@
+;; skein.io's temporary files and owner-only! (M3.5 step 2, D-107), natively. Modes are
+;; checked where there are any (not on Windows, where %permissions is nil): 384 is 600
+;; in octal, 448 is 700.
+(ns io-temp
+  (:require [skein.io :as io]
+            [skein.string :as string]))
+
+(defn- mode-is? [p mode]
+  (let [m (%permissions p)]
+    (or (nil? m) (= m mode))))
+
+(defn -main [& args]
+  (let [f (io/temp-file "skein-test-" ".txt")
+        name (io/file-name f)]
+    (println "a file:" (io/file? f) "empty:" (= "" (io/read-file f))
+             "named:" (string/starts-with? name "skein-test-") (string/ends-with? name ".txt")
+             (= (+ (count "skein-test-") 12 (count ".txt")) (count name)))
+    (println "owner only:" (mode-is? f 384))
+    (io/write-file f "secret")
+    (println "written:" (io/read-file f))
+    (io/delete f))
+  (let [fs (repeatedly 100 io/temp-file)]
+    (println "100 files, all different:" (= 100 (count (set fs))) (every? io/file? fs)
+             "named skein:" (every? (fn [f] (string/starts-with? (io/file-name f) "skein")) fs))
+    (doseq [f fs] (io/delete f)))
+  (let [d (io/temp-dir "skein-dir-")]
+    (println "a directory:" (io/directory? d) "empty:" (= [] (io/list-dir d))
+             "owner only:" (mode-is? d 448))
+    (io/write-file (io/path d "a.txt") "x")
+    (println "holds files:" (io/list-dir d))
+    ;; owner-only! of a file written as usual, and of a directory made as usual.
+    (let [f (io/path d "token")
+          sub (io/path d "sub")]
+      (io/write-file f "t")
+      (io/make-dirs sub)
+      (println "a file written as usual isn't:" (let [m (%permissions f)] (or (nil? m) (not= m 384))))
+      (io/owner-only! f)
+      (io/owner-only! sub)
+      (println "owner-only!:" (mode-is? f 384) (mode-is? sub 448)))
+    (io/delete-tree d)
+    (println "deleted:" (not (io/file-exists? d)))
+    (println "missing:" (try (io/owner-only! (io/path d "nothing"))
+                             (catch io/io-error e (string/starts-with? (io/io-error-message e)
+                                                                       "file not found"))))))

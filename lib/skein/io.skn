@@ -21,8 +21,12 @@ M2.11, D-093). Failures signal io-error.
   (resource-dir)                the directory holding the program's assets
   (walk root opts?)             the paths under root, with Git's ignore rules (native)
   (ignore-matcher root) (ignored? matcher path dir?)
+  (temp-file prefix? suffix?) (temp-dir prefix?)
+                                a new file or directory only you may use; its path
+  (owner-only! path)            let only you read and write it (nothing on Windows)
 
-Path functions take / or \\ as separators and join with /, which every OS accepts.")
+Path functions take / or \\ as separators and join with /, which every OS accepts."
+  (:require [skein.system :as system]))
 
 (defcondition io-error [error]
   "A file that can't be read or written, or a program that can't be started."
@@ -226,6 +230,49 @@ nil."
 Returns nil."
   [path data]
   (when-not (%write-bytes path data false) (fail path "cannot write file " path))
+  nil)
+
+;;; ------------------------------------------------------------------------------------
+;;; Temporary files and owner-only permissions (M3.5, D-107)
+
+(defn- system-temp-dir
+  "The system's directory for temporary files: TMPDIR (or /tmp), or on Windows TEMP or
+TMP."
+  []
+  (let [dir (if (= :windows (system/os))
+              (or (system/getenv "TEMP") (system/getenv "TMP")
+                  (path (system/home-dir) "AppData" "Local" "Temp"))
+              (let [t (system/getenv "TMPDIR")] (if (and t (not= "" t)) t "/tmp")))]
+    (trim-separators dir)))
+
+(defn- make-temp [prefix suffix directory?]
+  (let [dir (system-temp-dir)]
+    (or (%make-temp dir prefix suffix directory?)
+        (fail dir "cannot make a temporary " (if directory? "directory" "file") " in " dir))))
+
+(defn temp-file
+  "A new, empty file in the system's directory for temporary files, made for this call
+alone and only its owner may use (mode 600): prefix (\"skein\"), random letters and
+digits, then suffix (\"\"). Its path. Deleting it is up to the caller."
+  ([] (temp-file "skein" ""))
+  ([prefix] (temp-file prefix ""))
+  ([prefix suffix] (make-temp prefix suffix false)))
+
+(defn temp-dir
+  "A new, empty directory in the system's directory for temporary files, as temp-file
+makes a file (mode 700). Its path. Deleting it (delete-tree) is up to the caller."
+  ([] (temp-dir "skein"))
+  ([prefix] (make-temp prefix "" true)))
+
+(defn owner-only!
+  "Let only the owner of the file or directory at path use it: mode 600 for a file, 700
+for a directory. On Windows, where a user's files are already only theirs, nothing
+changes. Returns nil."
+  [path]
+  (when-not (%owner-only path)
+    (if (file-exists? path)
+      (fail path "cannot change the permissions of " path)
+      (fail path "file not found: " path)))
   nil)
 
 ;;; ------------------------------------------------------------------------------------

@@ -178,6 +178,20 @@ pub fn processEnviron() std.process.Environ {
 // C libraries (the FFI, M1.10)
 
 /// "macos" or "linux": which entry of a deflibrary spec applies.
+/// The permissions of a file or directory only its owner may use (modes 600 and 700,
+/// D-107), for temporary files and owner-only!.
+pub fn ownerOnlyPermissions(directory: bool) std.Io.File.Permissions {
+    return .fromMode(if (directory) 0o700 else 0o600);
+}
+
+/// A file's permission bits (its mode's low twelve bits).
+pub fn modeBits(permissions: std.Io.File.Permissions) ?u32 {
+    return @intCast(permissions.toMode() & 0o7777);
+}
+
+/// Whether owner-only! changes anything here (on Windows a user's files are theirs).
+pub const has_owner_only = true;
+
 pub const os_name = if (builtin.os.tag == .macos) "macos" else "linux";
 
 /// The separator of SKEIN_LIBRARY_PATH's directories.

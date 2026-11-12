@@ -168,6 +168,8 @@ received to that form's metadata (as data), for %syntax-meta.")
                "%stat" "%delete-path" "%rename-path" "%read-bytes" "%write-bytes"
                "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes"
                "%stream-write" "%stream-flush" "%stream-close" "%stream-read-some"
+               ;; Temporary files and permissions (M3.5, D-107)
+               "%make-temp" "%owner-only" "%permissions"
                ;; By-value structs (M2.13, D-096): the C backend's, which runs natively
                "%ctype-layout"))
 

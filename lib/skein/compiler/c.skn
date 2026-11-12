@@ -732,6 +732,8 @@ is the Lisp backend's list."
     "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes" "%stream-write"
     "%stream-read-some" "%stream-flush" "%stream-close" "%epoch-millis" "%utc-offset"
     "%write-stderr"
+    ;; Temporary files and permissions (M3.5, D-107)
+    "%make-temp" "%owner-only" "%permissions"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

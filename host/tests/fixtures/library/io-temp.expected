@@ -1,0 +1,10 @@
+a file: true empty: true named: true true true
+owner only: true
+written: secret
+100 files, all different: true true named skein: true
+a directory: true empty: true owner only: true
+holds files: [a.txt]
+a file written as usual isn't: true
+owner-only!: true true
+deleted: true
+missing: true

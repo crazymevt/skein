@@ -63,6 +63,92 @@ fn stat(path: Value) Value {
     return coll.vectorOf(&.{ names.keyword(null, kind), Value.fromFixnum(@intCast(st.size)), Value.fromFixnum(ms) });
 }
 
+// ---------------------------------------------------------------------------------------
+// Temporary files and owner-only permissions (M3.5, D-107)
+
+const TempCall = struct { dir: []const u8, prefix: []const u8, suffix: []const u8, directory: bool, out: ?[]u8 = null };
+
+fn tempBlocking(arg: ?*anyopaque) void {
+    const c: *TempCall = @ptrCast(@alignCast(arg));
+    const sio = io.stdIo();
+    const letters = "abcdefghijklmnopqrstuvwxyz0123456789";
+    var attempt: usize = 0;
+    while (attempt < 100) : (attempt += 1) {
+        var bytes: [12]u8 = undefined;
+        sio.random(&bytes);
+        var name: [12]u8 = undefined;
+        for (bytes, 0..) |b, i| name[i] = letters[b % letters.len];
+        const p = std.fmt.allocPrint(alloc, "{s}/{s}{s}{s}", .{ c.dir, c.prefix, name, c.suffix }) catch return;
+        const cwd = std.Io.Dir.cwd();
+        const made = if (c.directory)
+            cwd.createDir(sio, p, platform.ownerOnlyPermissions(true))
+        else if (cwd.createFile(sio, p, .{ .exclusive = true, .permissions = platform.ownerOnlyPermissions(false) })) |f|
+            f.close(sio)
+        else |err|
+            err;
+        made catch |err| {
+            alloc.free(p);
+            if (err == error.PathAlreadyExists) continue;
+            return;
+        };
+        c.out = p;
+        return;
+    }
+}
+
+/// (%make-temp dir prefix suffix directory?): a new file (or directory), made only for
+/// this call (exclusively) with owner-only permissions, named prefix, 12 random letters
+/// and digits, and suffix, in dir; its path, or nil if it can't be made.
+fn makeTemp(dir: Value, prefix: Value, suffix: Value, directory: bool) Value {
+    const d = copyPath(dir);
+    defer alloc.free(d);
+    const pre = copyPath(prefix);
+    defer alloc.free(pre);
+    const suf = copyPath(suffix);
+    defer alloc.free(suf);
+    var call: TempCall = .{ .dir = d, .prefix = pre, .suffix = suf, .directory = directory };
+    io.pathBlocking(tempBlocking, &call);
+    const out = call.out orelse return Value.nil;
+    defer alloc.free(out);
+    return string.make(out);
+}
+
+const OwnerCall = struct { path: []const u8, ok: bool = false };
+
+fn ownerOnlyBlocking(arg: ?*anyopaque) void {
+    const c: *OwnerCall = @ptrCast(@alignCast(arg));
+    const sio = io.stdIo();
+    const cwd = std.Io.Dir.cwd();
+    const st = cwd.statFile(sio, c.path, .{}) catch return;
+    if (!platform.has_owner_only) {
+        c.ok = true;
+        return;
+    }
+    cwd.setFilePermissions(sio, c.path, platform.ownerOnlyPermissions(st.kind == .directory), .{}) catch return;
+    c.ok = true;
+}
+
+/// (%owner-only path): make the file or directory only its owner's (modes 600 and 700;
+/// nothing on Windows); false if it doesn't exist or can't be changed.
+fn ownerOnly(path: Value) Value {
+    const p = copyPath(path);
+    defer alloc.free(p);
+    var call: OwnerCall = .{ .path = p };
+    io.pathBlocking(ownerOnlyBlocking, &call);
+    return Value.fromBool(call.ok);
+}
+
+/// (%permissions path): the file's mode bits (POSIX), or nil (Windows, or no file).
+fn permissionsOf(path: Value) Value {
+    const p = copyPath(path);
+    defer alloc.free(p);
+    var call: StatCall = .{ .path = p };
+    io.pathBlocking(statBlocking, &call);
+    const st = call.stat orelse return Value.nil;
+    const bits = platform.modeBits(st.permissions) orelse return Value.nil;
+    return Value.fromFixnum(@intCast(bits));
+}
+
 const TwoPaths = struct { a: []const u8, b: []const u8 = "", ok: bool = false };
 
 fn deleteBlocking(arg: ?*anyopaque) void {
@@ -664,6 +750,21 @@ pub const entries = [_]Entry{
     .{ .name = "%write-bytes", .min = 3, .max = 3, .impl = struct {
         fn f(a: Args) Value {
             return writeBytes(a[0], a[1], a[2] != Value.nil and a[2] != Value.false);
+        }
+    }.f },
+    .{ .name = "%make-temp", .min = 4, .max = 4, .impl = struct {
+        fn f(a: Args) Value {
+            return makeTemp(a[0], a[1], a[2], a[3] != Value.nil and a[3] != Value.false);
+        }
+    }.f },
+    .{ .name = "%owner-only", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return ownerOnly(a[0]);
+        }
+    }.f },
+    .{ .name = "%permissions", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return permissionsOf(a[0]);
         }
     }.f },
     .{ .name = "%open-stream", .min = 2, .max = 2, .impl = struct {
