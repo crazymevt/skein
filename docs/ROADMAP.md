@@ -562,7 +562,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 
 - Settled (D-108): rich text takes Hiccup data (`(ui/rich-text {:content [[:h2 "Result"] [:p "Call " [:code "(f 1)"]] ...]})`, `append-content!` as an answer streams, `:link-activated`); `(ui/snapshot window)` gives PNG bytes and `(ui/snapshot window path)` writes them; a column's `:editable true` and the table's `:cell-edited` (`:item`, `:column`, `:text`), the program saving the value; `item-at-point` gives the item or nil, and `cell-at-point` a table's `[item column]`. A buffer's `:revision` already serves for unsaved changes.
 - Steps, in order (D-108):
-  1. The small calls: `item-at-point` for lists, tables and trees and `cell-at-point` for tables, `snapshot` (PNG bytes or a file; boxes outlined on the headless backend), and a test that a buffer's `:revision` tells unsaved changes through edits, undo and redo.
+  1. ✅ The small calls: `item-at-point` for lists, tables and trees and `cell-at-point` for tables, `snapshot` (PNG bytes or a file; boxes outlined on the headless backend), and a test that a buffer's `:revision` tells unsaved changes through edits, undo and redo.
   2. Editing a table's cells: `:editable` columns and `:cell-edited`, on NSTableView and GtkColumnView.
   3. code view's speed: a benchmark that highlights a 10,000-line Skein file and edits it a keystroke at a time; replacing a changed range's runs, and the backends' updates, costing what the change does.
   4. Rich text's styles in the runs: font sizes, a monospace family, paragraph indentation and spacing, and a block's background, on Cocoa and GTK.
