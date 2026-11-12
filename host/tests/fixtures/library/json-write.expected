@@ -1,0 +1,42 @@
+[null,true,false,0,-7,12345678901234567890123,1.5,-2500.0,"s","kw","sym","c"]
+{"a":1,"b":[1,2],"c":{},"d":[]}
+[1,2] [] [0,1,2]
+"q\"b\\s/\n\r\t\b\f\u0001 é😀"
+"\u00e9\ud83d\ude00"
+{"A":1,"B":2}
+{"a":10}
+{
+  "a": [
+    1,
+    {
+      "b": null
+    }
+  ],
+  "c": {}
+}
+[] {}
+NaN: :error a fn: :error
+{
+  "z": 1,
+  "y": [
+    1.50,
+    2e3,
+    "\u00e9"
+  ],
+  "x": {},
+  "w": true,
+  "v": null,
+  "u": 2,
+  "t": 3,
+  "s": 4,
+  "r": 5,
+  "q": 6
+}
+{"z":1,"y":[1.50,2e3,"\u00e9"],"x":{},"w":true,"v":null,"u":2,"t":3,"s":4,"r":5,"q":6}
+true
+bad: :error
+[] {}
+round trips, compact: true
+round trips, pretty: true
+round trips, escaped: true
+reformatted back to compact: true

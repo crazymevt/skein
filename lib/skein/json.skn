@@ -65,3 +65,34 @@ several lines. A line holds at most one value. At the end of the stream: an erro
               (error json-error :message "the stream ends before a JSON value"
                      :line nil :column nil)
               :else (:eof-value opts))))))
+
+(defn write-str
+  "x as JSON text: nil, booleans, numbers, strings (and keywords, symbols and characters,
+as strings), maps as objects and other collections as arrays. Options: :pretty, to indent
+by two spaces; :escape-unicode, to write characters past ASCII as \\u escapes; :key-fn,
+called with each key, giving its string (keywords and symbols are their names, without
+namespace, by default); :value-fn, called with each key and value, whose result is
+written, or which leaves the entry out by returning itself."
+  [x & opts]
+  (let [{:keys [pretty escape-unicode key-fn value-fn]} (options opts)]
+    (%json-write x pretty escape-unicode key-fn value-fn)))
+
+(defn write
+  "Write x as JSON text to the skein.io writer w (see write-str for the options). Returns
+nil."
+  [x w & opts]
+  (io/write w (apply write-str x opts)))
+
+(defn reformat
+  "The JSON text s re-indented, by :indent spaces a level (2; 0 for one line), its keys in
+their order and its strings and numbers as they were written. Signals json-error if s
+isn't JSON."
+  ([s] (reformat s {}))
+  ([s opts]
+   (let [[kind a line column] (%json-reformat s (get opts :indent 2))]
+     (case kind
+       :ok a
+       :incomplete (error json-error :message "not JSON: the text ends inside a value"
+                          :line nil :column nil)
+       (error json-error :message (str "not JSON: " a " at line " line ", column " column)
+              :line line :column column)))))

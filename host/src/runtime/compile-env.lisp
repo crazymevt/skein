@@ -206,6 +206,14 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore s key-fn value-fn))
   (error "skein.json is native only (D-104)"))
 
+(defcore "%json-write" (x pretty escape-unicode key-fn value-fn)
+  (declare (ignore x pretty escape-unicode key-fn value-fn))
+  (error "skein.json is native only (D-104)"))
+
+(defcore "%json-reformat" (s indent)
+  (declare (ignore s indent))
+  (error "skein.json is native only (D-104)"))
+
 ;; skein.bytes (M3.2, D-104) is native only.
 (defcore "%utf8" (x)
   (declare (ignore x))

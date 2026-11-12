@@ -1,0 +1,56 @@
+;; skein.json's writing and reformatting (M3.2 step 3, D-104), natively: values and their
+;; options, errors, reformat keeping keys' order, and randomized round trips against a
+;; reference model (the data itself): written, then read, data comes back equal.
+(ns json-write
+  (:require [skein.json :as json]
+            [skein.string :as string]))
+
+(defn- random-string []
+  (apply str (repeatedly (rand-int 8)
+                         (fn [] (rand-nth ["a" "Z" " " "\"" "\\" "/" "\n" "\t" "\u0001" "é"
+                                           "€" "😀" "{" "]" ":" ","])))))
+
+(defn- random-value [depth]
+  (let [n (if (< depth 3) 8 5)]
+    (case (rand-int n)
+      0 nil
+      1 (rand-nth [true false])
+      2 (- (rand-int 2000000) 1000000)
+      3 (* (rand-nth [1 -1]) (reduce * 1 (repeat (inc (rand-int 4)) 4294967296)))
+      4 (random-string)
+      5 (vec (repeatedly (rand-int 4) (fn [] (random-value (inc depth)))))
+      6 (into {} (repeatedly (rand-int 4) (fn [] [(random-string) (random-value (inc depth))])))
+      7 (/ (- (rand-int 2000000) 1000000) 1024.0))))
+
+(defn- error-of [f] (try (f) :no-error (catch error e :error)))
+
+(defn -main [& args]
+  ;; Values.
+  (println (json/write-str [nil true false 0 -7 12345678901234567890123 1.5 -2500.0 "s" :kw 'sym \c]))
+  (println (json/write-str {:a 1 :ns/b [1 2] "c" {} :d []}))
+  (println (json/write-str (list 1 2) ) (json/write-str #{}) (json/write-str (range 3)))
+  (println (json/write-str "q\"b\\s/\n\r\t\b\f\u0001 é😀"))
+  (println (json/write-str "é😀" :escape-unicode true))
+  ;; Options.
+  (println (json/write-str {:a 1 :b 2} {:key-fn (fn [k] (string/upper-case (name k)))}))
+  (println (json/write-str {:a 1 :drop 2} :value-fn (fn value-fn [k v] (if (= k :drop) value-fn (* 10 v)))))
+  (println (json/write-str {:a [1 {:b nil}] :c {}} :pretty true))
+  (println (json/write-str [] :pretty true) (json/write-str {} :pretty true))
+  ;; What JSON can't hold.
+  (println "NaN:" (error-of (fn [] (json/write-str (/ 0.0 0.0)))) "a fn:" (error-of (fn [] (json/write-str inc))))
+  ;; reformat: keys in their order, strings and numbers as written.
+  (let [text "{\"z\":1,\"y\":[1.50,2e3,\"\\u00e9\"],\"x\":{},\"w\":true,\"v\":null,\"u\":2,\"t\":3,\"s\":4,\"r\":5,\"q\":6}"]
+    (println (json/reformat text))
+    (println (json/reformat (json/reformat text) {:indent 0}))
+    (println (= text (json/reformat (json/reformat text {:indent 4}) {:indent 0}))))
+  (println "bad:" (error-of (fn [] (json/reformat "{\"a\" 1}"))))
+  (println (json/reformat "[ ]") (json/reformat " { } "))
+  ;; Randomized round trips.
+  (let [values (repeatedly 400 (fn [] (random-value 0)))
+        back (fn [x opts] (json/read-str (apply json/write-str x opts)))]
+    (println "round trips, compact:" (every? (fn [x] (= x (back x []))) values))
+    (println "round trips, pretty:" (every? (fn [x] (= x (back x [:pretty true]))) values))
+    (println "round trips, escaped:" (every? (fn [x] (= x (back x [:escape-unicode true]))) values))
+    (println "reformatted back to compact:"
+             (every? (fn [x] (= (json/write-str x) (json/reformat (json/write-str x :pretty true) {:indent 0})))
+                     values))))

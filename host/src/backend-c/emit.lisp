@@ -379,7 +379,7 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     ;; Bytes (M3.2, D-104)
     "%utf8" "%utf8-string" "%base64" "%unbase64" "%hex" "%unhex" "%sha1" "%sha256" "%md5"
     ;; JSON (M3.2, D-104)
-    "%json-read"
+    "%json-read" "%json-write" "%json-reformat"
     ;; Hot reload (M2.9, D-091)
     "%load-module" "%evaluated?"
     ;; STM (M2.10, D-092)

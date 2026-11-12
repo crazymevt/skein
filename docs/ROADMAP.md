@@ -518,7 +518,7 @@ Steps 4 and 5 wait for their first CI runs (GitHub Actions was down when they we
 - Steps, in order (D-104):
   1. ✅ `skein.bytes`: UTF-8, base64, hex and the three hashes, as runtime functions; tests against the RFCs' and NIST's test vectors.
   2. ✅ `skein.json`'s reading: `read-str` and `read` (one value from a reader, as a stream-json line), numbers, escapes and surrogate pairs, errors with their place; `:key-fn` and `:value-fn`.
-  3. `skein.json`'s writing: `write-str` and `write`, `:pretty` and `:escape-unicode`, and `reformat`; randomized round trips against a reference model.
+  3. ✅ `skein.json`'s writing: `write-str` and `write`, `:pretty` and `:escape-unicode`, and `reformat`; randomized round trips against a reference model.
   4. `skein.edn`: `read-string` and `read` from Skein's reader in every build, with `:readers`, `:default` and `:eof`; round trips with `pr-str`, checked against `read-string` in a build with `--eval`.
 
 **Exit:** native tests round-trip JSON and EDN against a reference model, read JSON a line at a time from a process, and check the hashes against published test vectors.
