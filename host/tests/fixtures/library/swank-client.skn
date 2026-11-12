@@ -1,0 +1,86 @@
+;; skein.swank.client (M3.4, D-106), natively: M3.4's exit test. It runs
+;; support/swank-target.skn under skein dev with Swank on port 0, reads the port from what
+;; skein dev prints, and drives it: connection-info, the REPL, evaluating, completion,
+;; argument lists, an error's debugger and a restart, the inspector, and quitting.
+(ns swank-client
+  (:require [skein.io :as io]
+            [skein.process :as process]
+            [skein.string :as string]
+            [skein.swank.client :as swank]
+            [skein.system :as system]))
+
+(defn- skeinc []
+  (if (= :windows (system/os)) "build/skeinc.exe" "build/skeinc"))
+
+(defn- swank-port
+  "The port skein dev says Swank is on, from its output lines."
+  [lines]
+  (some (fn [line]
+          (when-let [[_ port] (re-find #"Swank on localhost:(\d+)" line)]
+            (parse-long port)))
+        lines))
+
+(defn- next-event
+  "The next event that pred accepts, skipping others, within 20 seconds."
+  [conn pred]
+  (loop []
+    (let [[e ch] (alts! [(swank/events conn) (timeout-chan 20)])]
+      (cond (nil? e) (if (= ch (swank/events conn)) :closed :timed-out)
+            (pred e) e
+            :else (recur)))))
+
+(defn -main [& args]
+  (let [p (process/process [(skeinc) "dev" "--no-server" "--swank-port" "0"
+                            "host/tests/fixtures/library/support/swank-target.skn"]
+                           {:err :out})
+        lines (io/line-seq (:out p))
+        port (swank-port lines)]
+    (println "skein dev's Swank port:" (pos? port))
+    ;; skein dev's output goes on being read, so it never waits on a full pipe.
+    (future (dorun (drop-while (fn [line] (not (re-find #"Swank on" line))) lines)))
+    (let [conn (swank/connect "localhost" port {:timeout 60})]
+      (println "implementation:" (:type (apply hash-map (:lisp-implementation (:info conn))))
+               "package:" @(:package conn))
+      (println "create-repl:" (swank/call (swank/create-repl conn)))
+      ;; The REPL: the value comes as output for the REPL's results.
+      (swank/listener-eval conn "(+ 1 2)")
+      (println "listener-eval:"
+               (pr-str (:text (next-event conn (fn [e] (= :repl-result (:target e)))))))
+      (println "interactive-eval:"
+               (swank/call (swank/interactive-eval conn "(swank-target/add 2 3)")))
+      (println "eval-and-grab-output:"
+               (swank/call (swank/eval-and-grab-output conn "(do (print \"hi\") 42)")))
+      (let [[names] (swank/call (swank/completions conn "swank-target/ad"))]
+        (println "completions:" (vec names)))
+      (println "arglist:" (swank/call (swank/operator-arglist conn "swank-target/add")))
+      (println "set-package:" (swank/call (swank/set-package conn "swank-target"))
+               @(:package conn))
+      (println "completions in it have boom:"
+               (contains? (set (first (swank/call (swank/completions conn "bo")))) "boom"))
+      ;; An error opens the debugger in the request's thread; a restart leaves it.
+      (let [r (swank/interactive-eval conn "(boom)")
+            debug (next-event conn (fn [e] (= :debug (:event e))))]
+        (println "debugger:" (first (:condition debug)) "level" (:level debug))
+        (println "restarts:" (mapv first (:restarts debug)))
+        (println "frames:" (pos? (count (:frames debug))))
+        (println "debug levels:" (count @(:debug-levels conn)))
+        (let [abort (first (keep-indexed (fn [i [nm]] (when (= "abort" (string/lower-case nm)) i))
+                                         (:restarts debug)))]
+          (swank/invoke-nth-restart conn (:thread debug) (:level debug) abort))
+        (println "the request:" (try @r (catch swank/swank-abort e :aborted)))
+        (println "debug-return:" (:level (next-event conn (fn [e] (= :debug-return (:event e)))))
+                 "levels left:" (count @(:debug-levels conn))))
+      ;; The inspector.
+      (let [view (apply hash-map (swank/call (swank/inspect conn "[1 2]")))]
+        (println "inspect:" (:title view)))
+      ;; A request the server doesn't have is aborted.
+      (println "unknown request:"
+               (try (swank/call (swank/rex conn (list (symbol "swank" "no-such-request"))))
+                    (catch swank/swank-abort e :aborted)))
+      ;; quit-lisp ends the program, and with it the connection.
+      (swank/quit-lisp conn)
+      (println "disconnected:" (:event (next-event conn (fn [e] (= :disconnected (:event e))))))
+      (println "alive?" (swank/alive? conn))
+      (println "after:" (try (swank/call (swank/interactive-eval conn "1"))
+                             (catch swank/swank-abort e (swank/swank-abort-reason e))))
+      (println "skein dev exited:" (some? (deref p 30 nil))))))

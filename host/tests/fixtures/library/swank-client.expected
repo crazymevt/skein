@@ -1,0 +1,22 @@
+skein dev's Swank port: true
+implementation: Skein package: swank-target
+create-repl: (swank-target swank-target)
+listener-eval: "3\n"
+interactive-eval: => 5
+eval-and-grab-output: (hi 42)
+completions: [swank-target/add]
+arglist: (swank-target/add a b)
+set-package: (swank-target swank-target) swank-target
+completions in it have boom: true
+debugger: boom level 1
+restarts: [abort]
+frames: true
+debug levels: 1
+the request: :aborted
+debug-return: 1 levels left: 0
+inspect: [1 2]
+unknown request: :aborted
+disconnected: :disconnected
+alive? false
+after: not connected
+skein dev exited: true

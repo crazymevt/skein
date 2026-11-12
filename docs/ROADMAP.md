@@ -540,8 +540,8 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 - Steps, in order (D-106):
   1. ✅ Sockets: a socket kind of stream in the runtime (connecting by host name with a timeout, listening on a host and port, accepting, reading with a timeout), and `skein.net` (`connect`, `listen`, `accept`, `port`, `net-timeout`), with native tests of text and bytes both ways, timeouts, refused connections and port 0.
   2. ✅ `skein dev`'s REPL and Swank servers on `skein.net`, `devio.zig`'s `%tcp-*` gone; the Lisp data reader, printer and framing moved from `skein.swank` to `skein.swank.wire`.
-  3. `skein.swank.client`: connecting, the reader fiber (pings, output's flow control, returns to promises, events to the channel, disconnection), and the requests Lisp Studio makes (evaluation, compiling and loading, completion, argument lists, describing, definitions, packages, interrupting, the debugger's and the inspector's).
-  4. The exit test: a native test runs a program under `skein dev` with Swank on port 0 and drives it with the client.
+  3. ✅ `skein.swank.client`: connecting, the reader fiber (pings, output's flow control, returns to promises, events to the channel, disconnection), and the requests Lisp Studio makes (evaluation, compiling and loading, completion, argument lists, describing, definitions, packages, interrupting, the debugger's and the inspector's).
+  4. ✅ The exit test: a native test runs a program under `skein dev` with Swank on port 0 and drives it with the client.
 
 **Exit:** a native test drives `skein dev` through the Swank client: evaluates, completes, gets SLDB's events for an error and invokes a restart.
 

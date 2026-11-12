@@ -1,0 +1,17 @@
+(ns swank-target
+  "A program that host/tests/fixtures/library/swank-client.skn runs under skein dev and
+drives through Swank (M3.4, D-106).")
+
+(defn add
+  "The sum of a and b."
+  [a b]
+  (+ a b))
+
+(defn boom
+  "Signals an error."
+  []
+  (error "boom"))
+
+(defn -main [& args]
+  ;; Run until Swank's quit-lisp ends the program.
+  (loop [] (sleep 0.1) (recur)))

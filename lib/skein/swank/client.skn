@@ -1,0 +1,416 @@
+(ns skein.swank.client
+  "A Swank client (M3.4, D-106), for an IDE that drives skein dev (or another Lisp's Swank)
+as SLIME does.
+  (connect host port opts?)  a connection, once the server has described itself
+  (disconnect! conn)         end it
+  (rex conn form opts?)      send a request (form is data, as `(swank:connection-info)`);
+                             a reply
+  @reply, (deref reply secs timeout-value)
+                             its value, or swank-abort if the server aborted it
+  (call reply secs?)         the value, waiting at most secs (10), else swank-abort
+  (events conn)              the channel of the server's events, as maps
+and a function for each request an IDE makes, which sends it and gives its reply:
+evaluating, compiling and loading, completion and argument lists, describing and finding
+definitions, packages (namespaces), the debugger's and the inspector's.
+
+Events are maps with :event: {:event :output :text t :target t} (a :repl-result target
+for a REPL value), :new-package (:package :prompt), :debug (:thread :level :condition
+[message type extras] :restarts [[name description] ...] :frames [[index text ...] ...]),
+:debug-activate and :debug-return (:thread :level), :read-string and :read-aborted
+(:thread :tag), :inspect (:what), :indentation-update (:updates), and {:event :disconnected
+:reason r} last, before the channel closes. Others come as {:event kind :message m}.
+The connection answers pings and output's flow control itself. Take its events: when the
+channel's buffer (opts' :events-buffer, 1024) is full, reading the connection waits.
+
+A connection is a map: :socket, :info (connection-info's answer, as a map), and atoms
+:package and :prompt (the namespace requests run in, which :new-package events and
+create-repl and set-package replies change) and :debug-levels ([thread level] of each
+open debugger, newest first)."
+  (:require [skein.io :as io]
+            [skein.net :as net]
+            [skein.swank.wire :as wire]))
+
+(defcondition swank-abort [error]
+  "A request the Swank server aborted, that got no reply in time, or whose connection
+ended first."
+  (reason :reader swank-abort-reason)
+  (:report (fn [c] (str "Swank aborted the request: " (swank-abort-reason c)))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Replies
+
+(defclass reply []
+  "The answer to a request: deref it for the value."
+  (id)
+  (result))
+
+(defmethod deref-object [(r reply) timeout timeout-value]
+  (let [v (if timeout (deref (:result r) timeout ::timeout) @(:result r))]
+    (cond (= v ::timeout) timeout-value
+          (= :ok (first v)) (second v)
+          :else (error swank-abort :reason (or (second v) "aborted")))))
+
+(defn call
+  "The value of the reply, waiting at most secs (10); swank-abort if the server aborted
+the request or didn't answer in time."
+  ([r] (call r 10))
+  ([r secs]
+   (let [v (deref r secs ::none)]
+     (when (= v ::none) (error swank-abort :reason (str "no reply in " secs " s")))
+     v)))
+
+;;; ------------------------------------------------------------------------------------
+;;; The connection
+
+(defn- plist->map
+  "A Lisp property list, (:k v ...), as a map."
+  [xs]
+  (into {} (map vec (partition 2 xs))))
+
+(defn- send-message!
+  "Queue the message for the connection's writer; false once it's closed."
+  [conn message]
+  (>! (:out conn) message))
+
+(defn- emit! [conn event]
+  (>! (:events conn) event))
+
+(defn- debug-event [[_ thread level condition restarts frames continuations]]
+  {:event :debug :thread thread :level level :condition (vec condition)
+   :restarts (vec (map vec restarts)) :frames (vec (map vec frames))
+   :continuations continuations})
+
+(defn- dispatch
+  "Act on a message from the server."
+  [conn message]
+  (let [kind (when (seq? message) (first message))
+        [_ a b c] message]
+    (case kind
+      :return (when-let [r (get @(:pending conn) b)]
+                (swap! (:pending conn) dissoc b)
+                (deliver (:result r) (if (seq? a) (vec a) [:abort "not a reply"])))
+      ;; (:write-string text target? thread?): with a thread, the server waits for
+      ;; (:write-done thread) before it writes more, Swank's output flow control.
+      :write-string (do (emit! conn {:event :output :text a :target b})
+                        (when c (send-message! conn (list :write-done c))))
+      :new-package (do (reset! (:package conn) a)
+                       (reset! (:prompt conn) b)
+                       (emit! conn {:event :new-package :package a :prompt b}))
+      :debug (do (swap! (:debug-levels conn) (fn [ls] (vec (cons [a b] ls))))
+                 (emit! conn (debug-event message)))
+      :debug-activate (emit! conn {:event :debug-activate :thread a :level b})
+      :debug-return (do (swap! (:debug-levels conn)
+                               (fn [ls] (vec (remove (fn [[t l]] (and (= t a) (>= l b))) ls))))
+                        (emit! conn {:event :debug-return :thread a :level b}))
+      :ping (send-message! conn (list :emacs-pong a b))
+      (:read-string :read-aborted) (emit! conn {:event kind :thread a :tag b})
+      :inspect (emit! conn {:event :inspect :what a})
+      :indentation-update (emit! conn {:event :indentation-update :updates a})
+      :new-features (emit! conn {:event :new-features :features a})
+      (emit! conn {:event kind :message message}))))
+
+(defn- reader
+  "Read the connection's messages until it ends; then abort the requests still waiting,
+send :disconnected, and close the connection."
+  [conn]
+  (let [reason (try (loop []
+                      (let [m (wire/read-message (:socket conn) ::end)]
+                        (if (= m ::end)
+                          "the server closed the connection"
+                          (do (dispatch conn m) (recur)))))
+                    (catch error e (condition-message e)))]
+    (reset! (:alive conn) false)
+    (let [pending @(:pending conn)]
+      (reset! (:pending conn) {})
+      (doseq [[_ r] pending] (deliver (:result r) [:abort "disconnected"])))
+    (emit! conn {:event :disconnected :reason reason})
+    (close! (:events conn))
+    (close! (:out conn))
+    ;; This fiber reads the socket, so it closes it, once the writer has stopped.
+    (deref (:written conn) 5 nil)
+    (close (:socket conn))))
+
+(defn- writer
+  "Send the connection's messages, in order, until it's closed or can't be written to."
+  [conn]
+  (try (loop []
+         (when-let [m (<! (:out conn))]
+           (wire/write-message! (:socket conn) m)
+           (recur)))
+       (catch error e nil)
+       (finally
+         (close! (:out conn))
+         (deliver (:written conn) true))))
+
+(defn alive?
+  "True until the connection has ended."
+  [conn]
+  @(:alive conn))
+
+(defn events
+  "The channel of the connection's events (see the namespace's doc)."
+  [conn]
+  (:events conn))
+
+(defn disconnect!
+  "End the connection: requests still waiting get swank-abort, and the events channel
+gets {:event :disconnected} and closes. Returns nil."
+  [conn]
+  (when (alive? conn) (net/shutdown (:socket conn)))
+  nil)
+
+(defn rex
+  "Send the request form (data: a list whose first item is a symbol such as
+swank:connection-info) to run in opts' :package (the connection's) on opts' :thread (true,
+any thread; :repl-thread; or a debugger's thread); its reply."
+  ([conn form] (rex conn form {}))
+  ([conn form opts]
+   (let [id (swap! (:next-id conn) inc)
+         r (make reply :id id :result (promise))]
+     (if (alive? conn)
+       (do (swap! (:pending conn) assoc id r)
+           (when-not (send-message! conn (list :emacs-rex form
+                                               (or (:package opts) @(:package conn))
+                                               (if (contains? opts :thread) (:thread opts) true)
+                                               id))
+             (swap! (:pending conn) dissoc id)
+             (deliver (:result r) [:abort "not connected"])))
+       (deliver (:result r) [:abort "not connected"]))
+     r)))
+
+(defn- sym [s] (symbol "swank" s))
+
+(defn- request
+  "A reply to (swank:name args...), with the opts of rex."
+  [conn opts nm & args]
+  (rex conn (apply list (sym nm) args) opts))
+
+(defn- quoted [x] (list (symbol "quote") x))
+
+;;; ------------------------------------------------------------------------------------
+;;; Requests. Each takes the connection, its arguments, and rex's opts (:package,
+;;; :thread) last if wanted, and gives a reply.
+
+(defn connection-info
+  "The server's description: (:pid :lisp-implementation :package ...), a property list."
+  [conn]
+  (request conn {} "connection-info"))
+
+(defn connect
+  "A connection to the Swank server on port at host, once it has answered connection-info
+(:info). opts: :timeout, the seconds to wait for the connection and the answer (10);
+:events-buffer, the size of the events channel's buffer (1024)."
+  ([host port] (connect host port {}))
+  ([host port opts]
+   (let [timeout (or (:timeout opts) 10)
+         socket (net/connect host port {:timeout timeout})
+         conn {:socket socket
+               :out (chan 256)
+               :events (chan (or (:events-buffer opts) 1024))
+               :pending (atom {})
+               :next-id (atom 0)
+               :alive (atom true)
+               :written (promise)
+               :info (atom nil)
+               :package (atom "user")
+               :prompt (atom "user")
+               :debug-levels (atom [])}]
+     (future (writer conn))
+     (future (reader conn))
+     (let [info (try (plist->map (call (connection-info conn) timeout))
+                     (catch swank-abort e
+                       (net/shutdown socket)
+                       (error swank-abort :reason (str "no connection-info: "
+                                                       (swank-abort-reason e)))))
+           pkg (plist->map (:package info))]
+       (reset! (:info conn) info)
+       (when-let [p (:name pkg)] (reset! (:package conn) p))
+       (when-let [p (:prompt pkg)] (reset! (:prompt conn) p))
+       (assoc conn :info info)))))
+
+(defn create-repl
+  "Start the server's REPL: [package prompt]."
+  [conn]
+  (let [r (rex conn (list (symbol "swank-repl" "create-repl") nil) {})]
+    (future (try (let [[p prompt] @r]
+                   (when p (reset! (:package conn) p) (reset! (:prompt conn) prompt)))
+                 (catch swank-abort e nil)))
+    r))
+
+(defn listener-eval
+  "Evaluate text as typed at the REPL, on the REPL thread: what it prints and its values
+come as :output events."
+  ([conn text] (listener-eval conn text {}))
+  ([conn text opts]
+   (rex conn (list (symbol "swank-repl" "listener-eval") text)
+        (merge {:thread :repl-thread} opts))))
+
+(defn interactive-eval
+  "Evaluate text: a string describing its value, as \"=> 3\"."
+  ([conn text] (interactive-eval conn text {}))
+  ([conn text opts] (request conn opts "interactive-eval" text)))
+
+(defn eval-and-grab-output
+  "Evaluate text: [output printed-value]."
+  ([conn text] (eval-and-grab-output conn text {}))
+  ([conn text opts] (request conn opts "eval-and-grab-output" text)))
+
+(defn compile-string
+  "Compile and load text, a form at the 0-based line and column of file (a path or nil),
+in a buffer named buffer-name: (:compilation-result notes success duration ...)."
+  ([conn text buffer-name file line column]
+   (compile-string conn text buffer-name file line column {}))
+  ([conn text buffer-name file line column opts]
+   (request conn opts "compile-string-for-emacs" text buffer-name
+            (quoted (list (list :position 1) (list :line (inc line) (inc column))))
+            file nil)))
+
+(defn compile-file
+  "Compile the file at path, and load it unless load? is false."
+  ([conn path] (compile-file conn path true))
+  ([conn path load?] (request conn {} "compile-file-for-emacs" path load?)))
+
+(defn load-file
+  "Load the file at path."
+  [conn path]
+  (request conn {} "load-file" path))
+
+(defn completions
+  "The completions of prefix in the connection's (or opts') package: [names common-prefix]."
+  ([conn prefix] (completions conn prefix {}))
+  ([conn prefix opts]
+   (request conn opts "simple-completions" prefix (or (:package opts) @(:package conn)))))
+
+(defn operator-arglist
+  "The argument list of the operator named name, as text, or nil."
+  ([conn nm] (operator-arglist conn nm {}))
+  ([conn nm opts]
+   (request conn opts "operator-arglist" nm (or (:package opts) @(:package conn)))))
+
+(defn autodoc
+  "The argument list at the cursor: raw-form is the form being typed, as a list of strings
+(and lists of them) with \"swank::%cursor-marker%\" where the cursor is."
+  ([conn raw-form] (autodoc conn raw-form {}))
+  ([conn raw-form opts]
+   (request conn opts "autodoc" (quoted raw-form) :print-right-margin 100)))
+
+(defn describe-symbol
+  "A description of the var named name, as text."
+  ([conn nm] (describe-symbol conn nm {}))
+  ([conn nm opts] (request conn opts "describe-symbol" nm)))
+
+(defn find-definitions
+  "Where the var named name is defined: ((dspec location) ...)."
+  ([conn nm] (find-definitions conn nm {}))
+  ([conn nm opts] (request conn opts "find-definitions-for-emacs" nm)))
+
+(defn apropos-list
+  "The vars whose names contain text: ((:designator name ...) ...)."
+  ([conn text] (apropos-list conn text {}))
+  ([conn text opts] (request conn opts "apropos-list-for-emacs" text nil nil nil)))
+
+(defn set-package
+  "Make the namespace named name the connection's: [package prompt]."
+  [conn nm]
+  (let [r (request conn {} "set-package" nm)]
+    (future (try (let [[p prompt] @r]
+                   (when p (reset! (:package conn) p) (reset! (:prompt conn) prompt)))
+                 (catch swank-abort e nil)))
+    r))
+
+(defn list-packages
+  "The names of the server's packages (namespaces)."
+  [conn]
+  (request conn {} "list-all-package-names" true))
+
+(defn interrupt!
+  "Interrupt what the thread (the REPL thread) is doing. Returns nil."
+  ([conn] (interrupt! conn :repl-thread))
+  ([conn thread] (send-message! conn (list :emacs-interrupt thread)) nil))
+
+(defn send-input!
+  "Answer a :read-string event of the thread with tag: text, or nil to abort the read."
+  [conn thread tag text]
+  (send-message! conn (list :emacs-return-string thread tag text))
+  nil)
+
+(defn quit-lisp
+  "Ask the server's program to exit."
+  [conn]
+  (request conn {} "quit-lisp"))
+
+;;; The debugger: the thread and level of a :debug event.
+
+(defn invoke-nth-restart
+  "Invoke the restart at index of the debugger at level on thread."
+  [conn thread level index]
+  (request conn {:thread thread} "invoke-nth-restart-for-emacs" level index))
+
+(defn sldb-abort
+  "Invoke the debugger's abort restart."
+  [conn thread]
+  (request conn {:thread thread} "sldb-abort"))
+
+(defn sldb-continue
+  "Invoke the debugger's continue restart."
+  [conn thread]
+  (request conn {:thread thread} "sldb-continue"))
+
+(defn throw-to-toplevel
+  "Leave every level of the thread's debugger."
+  [conn thread]
+  (request conn {:thread thread} "throw-to-toplevel"))
+
+(defn backtrace
+  "The frames from start up to end of the thread's backtrace: ((index text) ...)."
+  [conn thread start end]
+  (request conn {:thread thread} "backtrace" start end))
+
+(defn frame-locals
+  "The locals of the frame at index on thread: (locals catch-tags)."
+  [conn thread index]
+  (request conn {:thread thread} "frame-locals-and-catch-tags" index))
+
+(defn frame-source-location
+  "Where the frame at index on thread is in its source: (:location ...) or (:error ...)."
+  [conn thread index]
+  (request conn {:thread thread} "frame-source-location" index))
+
+(defn eval-in-frame
+  "Evaluate text in the frame at index on thread, in package: its value, as text."
+  [conn thread index text package]
+  (request conn {:thread thread} "eval-string-in-frame" text index package))
+
+;;; The inspector. Each answers with the inspected value's description: (:title t :id i
+;;; :content (content length start end)), the content mixing strings, (:value label
+;;; index), (:action label index) and (:newline).
+
+(defn inspect
+  "Inspect the value of text."
+  ([conn text] (inspect conn text {}))
+  ([conn text opts] (request conn opts "init-inspector" text)))
+
+(defn inspect-part
+  "Inspect the inspected value's part at index."
+  [conn index]
+  (request conn {} "inspect-nth-part" index))
+
+(defn inspector-pop
+  "Go back to the value inspected before."
+  [conn]
+  (request conn {} "inspector-pop"))
+
+(defn inspector-next
+  "Go forward again after inspector-pop."
+  [conn]
+  (request conn {} "inspector-next"))
+
+(defn inspector-range
+  "The inspected value's content from index from up to to."
+  [conn from to]
+  (request conn {} "inspector-range" from to))
+
+(defn inspect-in-frame
+  "Inspect the value of text in the frame at index on thread."
+  [conn thread index text]
+  (request conn {:thread thread} "inspect-in-frame" text index))
