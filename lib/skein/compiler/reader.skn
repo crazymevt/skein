@@ -34,8 +34,10 @@ compiler can be built natively without the rest of it (M1.9).")
 
 (defn make-reader
   "A reader over the string text. Options: :file names the source in locations,
-:namespace is the current namespace name (for ::keywords), and :resolve-alias maps an
-alias name to a namespace name or nil (for ::alias/kw)."
+:namespace is the current namespace name (for ::keywords), :resolve-alias maps an alias
+name to a namespace name or nil (for ::alias/kw), and :tagged reads a tagged literal,
+#tag form, as a :tagged syntax of the tag (a symbol) and the form, for skein.edn (D-104);
+without it they're an error, reserved in Skein's own syntax."
   ([text] (make-reader text {}))
   ([text opts]
    ;; :pos is a cursor (D-019): reading non-ASCII text takes O(1) a character.
@@ -51,6 +53,7 @@ alias name to a namespace name or nil (for ::alias/kw)."
       :file (:file opts)
       :namespace (atom (:namespace opts))
       :resolve-alias (:resolve-alias opts)
+      :tagged (:tagged opts)
       ;; While reading the body of #(...): {:max-arg n :rest? bool}.
       :fn-literal (atom nil)})))
 
@@ -472,6 +475,7 @@ one /, and its parts don't start or end with : or contain ::."
 (def ^:private read-fn-literal)
 (def ^:private read-required)
 (def ^:private read-symbolic-value)
+(def ^:private read-tagged)
 
 (defn- skip-line-comment [r]
   (loop []
@@ -524,6 +528,7 @@ one /, and its parts don't start or end with : or contain ::."
                 (nil? d) (fail r line column "unexpected end of input after `#`")
                 (= d \#) [:form (read-symbolic-value r line column)]
                 (token-end? d) (fail r line column "unknown dispatch `#" d "`")
+                (:tagged r) [:form (read-tagged r d line column)]
                 :else (fail r line column "tagged literals such as `#" (read-token-text r d)
                             "` are reserved and not supported yet")))
         :else [:form (read-token-form r c line column)]))))
@@ -536,6 +541,16 @@ one /, and its parts don't start or end with : or contain ::."
       :form x
       :close (fail r close-line close-column "expected a form after `" after "`, found `" x "`")
       :eof (fail r line column "expected a form after `" after "`, reached end of input"))))
+
+;;; Tagged literals, for skein.edn (D-104): #tag form
+
+(defn- read-tagged [r first-char line column]
+  (let [token (read-token-text r first-char)
+        tag (parse-symbol r token line column)
+        form (read-required r (str "#" token) line column)]
+    (when-not (symbol? tag)
+      (fail r line column "a tag must be a symbol, not `" token "`"))
+    (compound :tagged [(atom-at tag (span r line column)) form] (span r line column))))
 
 ;;; ##Inf, ##-Inf, ##NaN
 

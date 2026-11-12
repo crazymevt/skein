@@ -99,7 +99,7 @@ Notes:
 - Commas are whitespace. Unquote is `~`, as in Clojure, not `,` as in Common Lisp.
 - Symbols are case-sensitive.
 - The reader produces **syntax objects** that carry source location (file, line, column). The compiler uses them for error messages and for future hygiene (§11).
-- There is no user-programmable readtable in v1. Tagged literals `#tag form` are reserved for later.
+- There is no user-programmable readtable in v1. Tagged literals `#tag form` are reserved for later in Skein's own syntax; `skein.edn` reads them in EDN data, through `:readers` and `:default` (D-104).
 
 ### 3.1 Literal details (D-029)
 - **Integers:** decimal, `0x`/`0X` hex and `0b`/`0B` binary, with an optional `+` or `-` sign. `_` may appear only between two digits. Leading zeros are an error (`007`): there are no octal literals.

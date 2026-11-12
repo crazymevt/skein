@@ -1,0 +1,24 @@
+(ns support.edn-random
+  "Random data for the EDN fixtures: every kind EDN holds. (rand-int rather than
+rand-nth, which Phase 0, whose expander reads every file, doesn't have.)")
+
+(defn- pick [xs] (nth xs (rand-int (count xs))))
+
+(defn- random-string []
+  (apply str (repeatedly (rand-int 6) (fn [] (pick ["a" "Z" " " "\"" "\\" "\n" "é" "😀" "#" ";"])))))
+
+(defn random-value [depth]
+  (case (rand-int (if (< depth 3) 13 8))
+    0 nil
+    1 (pick [true false])
+    2 (- (rand-int 2000000) 1000000)
+    3 (* (pick [1 -1]) (reduce * 1 (repeat (inc (rand-int 4)) 4294967296)))
+    4 (/ (- (rand-int 2000000) 1000000) 1024.0)
+    5 (random-string)
+    6 (pick [\a \space \newline \é \tab])
+    7 (pick [:k :ns/k 'sym 'ns/sym (keyword "a-b") '+ '->x])
+    8 (vec (repeatedly (rand-int 4) (fn [] (random-value (inc depth)))))
+    9 (apply list (repeatedly (rand-int 4) (fn [] (random-value (inc depth)))))
+    10 (into {} (repeatedly (rand-int 4) (fn [] [(random-value 3) (random-value (inc depth))])))
+    11 (into #{} (repeatedly (rand-int 4) (fn [] (random-value 3))))
+    12 (vec (repeatedly (rand-int 3) (fn [] (random-value (inc depth)))))))

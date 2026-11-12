@@ -1,0 +1,17 @@
+[nil true false 0 -7 12345678901234567890123 1.5 s
+ c :k :ns/k sym ns/sym]
+{:a (1 2), :b #{3}, :c {x [4]}}
+[1 3]
+metadata: {:tag 1}
+{:x 1, :y 2}
+[:tagged my/tag x]
+unknown tag: :error
+nested tags: [12]
+empty: nil :eof
+the first form: 1
+bad: :error :error
+{:name skein, :tags #{:lisp}}
+[1 2]
+:last
+at the end: :eof :error
+round trips: true

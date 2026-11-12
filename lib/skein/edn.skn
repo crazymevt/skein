@@ -1,0 +1,75 @@
+(ns skein.edn
+  "EDN (M3.2, D-104), in the shape of Clojure's clojure.edn: data, never code, readable in
+every build (read-string in skein.core needs --eval):
+  (read-string s)  (read-string opts s)  the first form of s, as data
+  (read reader)  (read opts reader)  the next form from a skein.io reader
+Options: :readers, a map of tag symbols to functions of the tagged value, for #tag forms;
+:default, a function of the tag and the value, for tags :readers doesn't have (else an
+error); :eof, the value at the end of the input (nil by default for read-string; read
+signals an error at the end unless :eof is given). Writing EDN is pr-str's."
+  (:require [skein.compiler.reader :as reader]
+            [skein.io :as io]
+            [skein.string :as string]))
+
+(defn- value
+  "The data that syntax (from Skein's reader) denotes, its tags read as opts say."
+  [syntax opts]
+  (let [d (:datum syntax)
+        children (fn [] (mapv (fn [s] (value s opts)) d))
+        v (case (:kind syntax)
+            :atom d
+            :list (apply list (children))
+            :vector (children)
+            :map (apply hash-map (children))
+            :set (apply hash-set (children))
+            :tagged (let [tag (:datum (first d))
+                          x (value (second d) opts)]
+                      (if-let [f (get (:readers opts) tag)]
+                        (f x)
+                        (if-let [f (:default opts)]
+                          (f tag x)
+                          (error (str "no reader for the tag #" tag))))))
+        m (:meta syntax)]
+    (if (and m (or (coll? v) (symbol? v)))
+      (with-meta v (value m opts))
+      v)))
+
+(defn- first-form
+  "[:form syntax], [:eof], or [:incomplete] if s ends inside a form."
+  [s]
+  (let [r (reader/make-reader s {:tagged true})]
+    (try
+      (let [form (reader/read-form r false ::eof)]
+        (if (= form ::eof) [:eof] [:form form]))
+      (catch error e
+        ;; Failing at the very end of the text: more of it would finish the form.
+        (if (>= @(:pos r) (:n r)) [:incomplete] (error e))))))
+
+(defn read-string
+  "The first form of the EDN text s, as data (see the namespace's doc for opts): nil, or
+:eof, if s holds none."
+  ([s] (read-string {} s))
+  ([opts s]
+   (when-not (string? s) (error (str "read-string needs a string, not " (pr-str s))))
+   (let [r (reader/make-reader s {:tagged true})
+         form (reader/read-form r false ::eof)]
+     (if (= form ::eof) (:eof opts) (value form opts)))))
+
+(defn read
+  "The next EDN form from the skein.io reader r, read a line at a time until the lines
+hold a whole form (which ends its last line). At the end of the stream: :eof if opts has
+it, else an error."
+  ([r] (read {} r))
+  ([opts r]
+   (loop [text nil]
+     (if-let [line (io/read-line r)]
+       (let [t (if text (str text "\n" line) line)
+             [kind form] (first-form t)]
+         (case kind
+           :form (value form opts)
+           (recur t)))
+       (let [[kind form] (when text (first-form text))]
+         (cond (= kind :form) (value form opts)
+               (= kind :incomplete) (error "EDN: the stream ends inside a form")
+               (contains? opts :eof) (:eof opts)
+               :else (error "EDN: the stream ends before a form")))))))

@@ -1,0 +1,35 @@
+;; skein.edn (M3.2 step 4, D-104), natively and without --eval: data of every kind, tagged
+;; forms, comments and discards, metadata, the end of the input, forms read across lines
+;; from a file, and randomized round trips with pr-str against a reference model.
+(ns edn-test
+  (:require [skein.edn :as edn]
+            [skein.io :as io]
+            [support.edn-random :refer [random-value]]))
+
+(defn- err [f] (try (f) :no-error (catch error e :error)))
+
+(defn -main [& args]
+  (println (edn/read-string "[nil true false 0 -7 12345678901234567890123 1.5 \"s\\n\" \\c :k :ns/k sym ns/sym]"))
+  (println (edn/read-string "{:a (1 2) :b #{3} :c {\"x\" [4]}}"))
+  (println (edn/read-string "; a comment\n #_ignored [1 #_2 3] ; more"))
+  (println "metadata:" (meta (edn/read-string "^{:tag 1} [x]")))
+  ;; Tagged forms.
+  (println (edn/read-string {:readers {'point (fn [[x y]] {:x x :y y})}} "#point [1 2]"))
+  (println (edn/read-string {:default (fn [tag v] [:tagged tag v])} "#my/tag \"x\""))
+  (println "unknown tag:" (err (fn [] (edn/read-string "#inst \"2026-11-11\""))))
+  (println "nested tags:" (edn/read-string {:readers {'twice (fn [x] (* 2 x))}} "[#twice #twice 3]"))
+  ;; The end of the input; only the first form; not data.
+  (println "empty:" (pr-str (edn/read-string "")) (edn/read-string {:eof :eof} "  ; nothing"))
+  (println "the first form:" (edn/read-string "1 2 3"))
+  (println "bad:" (err (fn [] (edn/read-string "[1 2"))) (err (fn [] (edn/read-string "{:a}"))))
+  ;; Forms across lines from a file.
+  (let [file "build/examples/edn-forms.edn"]
+    (io/write-file file "{:name \"skein\"\n :tags #{:lisp}}\n\n; a comment\n[1\n 2]\n:last\n")
+    (with-open [r (io/open-reader file)]
+      (println (edn/read r))
+      (println (edn/read r))
+      (println (edn/read r))
+      (println "at the end:" (edn/read {:eof :eof} r) (err (fn [] (edn/read r))))))
+  ;; Randomized round trips.
+  (let [values (repeatedly 400 (fn [] (random-value 0)))]
+    (println "round trips:" (every? (fn [x] (= x (edn/read-string (pr-str x)))) values))))

@@ -1,0 +1,10 @@
+;; build: --eval
+;; skein.edn (M3.2 step 4, D-104) against skein.core's read-string, which a build with
+;; --eval has: both read the same data from random text that pr-str writes.
+(ns edn-eval
+  (:require [skein.edn :as edn]
+            [support.edn-random :refer [random-value]]))
+
+(defn -main [& args]
+  (let [texts (map pr-str (repeatedly 400 (fn [] (random-value 0))))]
+    (println "as read-string:" (every? (fn [t] (= (read-string t) (edn/read-string t))) texts))))
