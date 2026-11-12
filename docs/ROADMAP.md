@@ -565,7 +565,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
   1. ✅ The small calls: `item-at-point` for lists, tables and trees and `cell-at-point` for tables, `snapshot` (PNG bytes or a file; boxes outlined on the headless backend), and a test that a buffer's `:revision` tells unsaved changes through edits, undo and redo.
   2. ✅ Editing a table's cells: `:editable` columns and `:cell-edited`, on NSTableView and GtkColumnView.
   3. ✅ code view's speed: a benchmark that highlights a 10,000-line Skein file and edits it a keystroke at a time; replacing a changed range's runs, and the backends' updates, costing what the change does.
-  4. Rich text's styles in the runs: font sizes, a monospace family, paragraph indentation and spacing, and a block's background, on Cocoa and GTK.
+  4. ✅ Rich text's styles in the runs: font sizes, a monospace family, paragraph indentation and spacing, and a block's background, on Cocoa and GTK.
   5. The rich text widget: `rich-text` with Hiccup content, `append-content!`, links, lists, code blocks and tables aligned by tab stops, selection and copying.
 
 **Exit:** skein-ui's tests for each on the headless, Cocoa and GTK backends.
