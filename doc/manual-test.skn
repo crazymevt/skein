@@ -210,7 +210,17 @@ values, and see also. All of them (step 2 of D-111)."
           step (first (:steps (first (get vars "f"))))]
       (is (= :not-run (:value step)))
       (is (= "(no-such-function)" (:shown step)))
-      (is (nil? (manual/check-step "s.skn" step))))))
+      (is (nil? (manual/check-step "s.skn" step)))))
+  (testing "a step not run on some systems is checked on the others"
+    (let [{:keys [vars]} (manual/parse-examples
+                          (str "(ns s.examples)\n\n;;;; f\n(+ 1 1)\n;=> 3\n"
+                               ";; not run on windows\n;; not run on linux\n")
+                          "s.skn" "s")
+          step (first (:steps (first (get vars "f"))))
+          skipped? (contains? #{:windows :linux} (skein.system/os))]
+      (is (= #{:windows :linux} (:not-run-on step)))
+      (is (= "(+ 1 1)\n;=> 3" (:shown step)))
+      (is (= skipped? (nil? (manual/check-step "s.skn" step)))))))
 
 (defn -main [& _]
   (when-not (successful? (run-tests 'manual-test))

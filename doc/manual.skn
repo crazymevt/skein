@@ -441,23 +441,31 @@ and values` starts its arguments, `See also:` names related vars, and the rest i
   "The result block of the lines starting at index i: {:value :prints :lines :end}, where
 :value is the text after ;=> (with its continuation lines), :prints what ;; prints:
 announces (nil if neither), :lines the block's lines and :end the index after it. A
-`;; not run` line makes :value :not-run: the code is shown but not evaluated."
+`;; not run` line makes :value :not-run: the code is shown but not evaluated. A
+`;; not run on windows` line (or macos, linux) adds the system to :not-run-on: the code
+runs and is checked only on the others."
   [lines i]
-  (loop [j i value nil prints nil mode nil]
-    (let [line (when (< j (count lines)) (nth lines j))]
+  (loop [j i value nil prints nil mode nil skip #{}]
+    (let [line (when (< j (count lines)) (nth lines j))
+          done (fn [] {:value value :prints prints :not-run-on skip
+                       :lines (subvec lines i j) :end j})]
       (cond
-        (nil? line) {:value value :prints prints :lines (subvec lines i j) :end j}
+        (nil? line) (done)
         (str/starts-with? line ";=>")
-        (recur (inc j) (str/trim (subs line 3)) prints :value)
+        (recur (inc j) (str/trim (subs line 3)) prints :value skip)
         (= (str/trim line) ";; not run")
-        (recur (inc j) :not-run prints mode)
+        (recur (inc j) :not-run prints mode skip)
+        (re-matches #";; not run on (macos|linux|windows)\s*" line)
+        (recur (inc j) value prints mode
+               (conj skip (keyword (second (re-matches #";; not run on (\w+)\s*" line)))))
         (str/starts-with? line ";; prints:")
-        (recur (inc j) value (let [t (str/trim (subs line 10))] (if (= t "") [] [t])) :prints)
+        (recur (inc j) value (let [t (str/trim (subs line 10))] (if (= t "") [] [t])) :prints
+               skip)
         (and (= mode :prints) (str/starts-with? line ";;") (not (str/starts-with? line ";;;")))
-        (recur (inc j) value (conj prints (str/replace line #"^;; ?" "")) mode)
+        (recur (inc j) value (conj prints (str/replace line #"^;; ?" "")) mode skip)
         (and (= mode :value) (re-find #"^;\s" line))
-        (recur (inc j) (str value " " (str/trim (subs line 1))) prints mode)
-        :else {:value value :prints prints :lines (subvec lines i j) :end j}))))
+        (recur (inc j) (str value " " (str/trim (subs line 1))) prints mode skip)
+        :else (done)))))
 
 (defn parse-examples
   "The examples in text, the examples file of namespace ns at path (see examples)."
@@ -489,9 +497,12 @@ announces (nil if neither), :lines the block's lines and :end the index after it
                            (str/join "\n"))
               new? (or heading (seq caption) (some str/blank? between))
               code (str/join "\n" (subvec lines start end))
-              {res-lines :lines res-end :end value :value prints :prints} (results lines end)
-              shown-results (remove (fn [l] (= (str/trim l) ";; not run")) res-lines)
+              {res-lines :lines res-end :end value :value prints :prints
+               not-run-on :not-run-on} (results lines end)
+              shown-results (remove (fn [l] (str/starts-with? (str/trim l) ";; not run"))
+                                    res-lines)
               step {:code code :value value :prints prints :line (inc start)
+                    :not-run-on not-run-on
                     :shown (str/join "\n" (into [code] shown-results))}
               acc (if (and new? current ex)
                     (update-in acc [:vars current] (fnil conj []) ex)
@@ -564,7 +575,8 @@ or equal to the text read as EDN, so a map's keys may be in another order."
   "Evaluate an example's step; nil if its value and output are as written, else a
 message."
   [path step]
-  (if (= :not-run (:value step))
+  (if (or (= :not-run (:value step))
+          (contains? (:not-run-on step) (skein.system/os)))
     nil
     (check-step* path step)))
 
