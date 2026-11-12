@@ -126,19 +126,36 @@ host/tools/bootstrap.sh."
       (is (str/includes? page "<h3>Arguments and values</h3>"))
       (is (str/includes? page "<h3>Examples</h3>"))
       (is (str/includes? page "href=\"../ns/skein.core.html#v-str\"")))
+    (testing "see also links a special form to the language reference"
+      (is (str/includes? (io/read-file (io/path out "ns/skein.core.html"))
+                         (str "href=\"../" manual/special-forms-url "\""))))
     (is (str/includes? (io/read-file (io/path out "reference.html"))
                        "id=\"5-special-forms-and-core-macros\""))
     (io/delete-tree out)))
 
-(deftest skein-string-is-complete
-  (testing "every public var of the model namespace has examples, arguments and see also"
-    (let [vars (:vars (manual/namespace-model "skein.string"))
-          exs (:vars (manual/examples "skein.string"))
-          notes (manual/notes "skein.string")]
-      (doseq [{nm :name} vars]
-        (is (seq (get exs nm)) (str nm " has examples"))
-        (is (:args (get notes nm)) (str nm " has arguments and values"))
-        (is (seq (:see-also (get notes nm))) (str nm " has see also"))))))
+(def complete
+  "The namespaces documented completely: every public var with examples, arguments and
+values, and see also."
+  ["skein.string" "skein.core"])
+
+(deftest documented-namespaces-are-complete
+  (doseq [ns complete
+          :let [vars (:vars (manual/namespace-model ns))
+                exs (:vars (manual/examples ns))
+                notes (manual/notes ns)]
+          {nm :name} vars]
+    (is (seq (get exs nm)) (str ns "/" nm " has examples"))
+    (is (:args (get notes nm)) (str ns "/" nm " has arguments and values"))
+    (is (seq (:see-also (get notes nm))) (str ns "/" nm " has see also"))))
+
+(deftest not-run-steps
+  (testing "a step marked not run is shown but not evaluated"
+    (let [{:keys [vars]} (manual/parse-examples
+                          "(ns s.examples)\n\n;;;; f\n(no-such-function)\n;; not run\n"
+                          "s.skn" "s")
+          step (first (:steps (first (get vars "f"))))]
+      (is (= :not-run (:value step)))
+      (is (nil? (manual/check-step "s.skn" step))))))
 
 (defn -main [& _]
   (when-not (successful? (run-tests 'manual-test))

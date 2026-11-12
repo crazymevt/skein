@@ -161,6 +161,17 @@ function written in Skein (as Swank does), else from fallback."
   [nm]
   (and (str/includes? nm "/") (> (count nm) 1)))
 
+(def special-forms
+  "The special forms (DESIGN §5.1), which aren't vars: a see-also name may be one, and
+links to the language reference's table of them."
+  #{"quote" "if" "do" "def" "fn" "let*" "letfn*" "loop*" "recur" "set!" "throw-condition"
+    "handler-bind*" "restart-bind*" "unwind-protect" "block*" "return-from*" "values"
+    "let-values*" "the" "declare"})
+
+(def special-forms-url
+  "The language reference's table of the special forms, from a page at the site's root."
+  "reference.html#51-special-forms-the-compiler-understands-only-these")
+
 (defn resolve-name
   "[ns name] of the public var a see-also name means on ns's page: \"name\" in ns, else
 in skein.core; \"ns/name\" in that namespace. nil if there is none."
@@ -384,7 +395,8 @@ and values` starts its arguments, `See also:` names related vars, and the rest i
 (defn- results
   "The result block of the lines starting at index i: {:value :prints :lines :end}, where
 :value is the text after ;=> (with its continuation lines), :prints what ;; prints:
-announces (nil if neither), :lines the block's lines and :end the index after it."
+announces (nil if neither), :lines the block's lines and :end the index after it. A
+`;; not run` line makes :value :not-run: the code is shown but not evaluated."
   [lines i]
   (loop [j i value nil prints nil mode nil]
     (let [line (when (< j (count lines)) (nth lines j))]
@@ -392,6 +404,8 @@ announces (nil if neither), :lines the block's lines and :end the index after it
         (nil? line) {:value value :prints prints :lines (subvec lines i j) :end j}
         (str/starts-with? line ";=>")
         (recur (inc j) (str/trim (subs line 3)) prints :value)
+        (= (str/trim line) ";; not run")
+        (recur (inc j) :not-run prints mode)
         (str/starts-with? line ";; prints:")
         (recur (inc j) value (let [t (str/trim (subs line 10))] (if (= t "") [] [t])) :prints)
         (and (= mode :prints) (str/starts-with? line ";;") (not (str/starts-with? line ";;;")))
@@ -468,9 +482,7 @@ value and output."
 
 (defn- normalize [s] (str/trim (str/replace (str s) #"\s+" " ")))
 
-(defn check-step
-  "Evaluate an example's step; nil if its value and output are as written, else a
-message."
+(defn- check-step*
   [path step]
   (let [out (atom nil)
         result (handler-case
@@ -494,6 +506,14 @@ message."
 
       :else nil)))
 
+(defn check-step
+  "Evaluate an example's step; nil if its value and output are as written, else a
+message."
+  [path step]
+  (if (= :not-run (:value step))
+    nil
+    (check-step* path step)))
+
 (defn check-examples
   "Run the examples of namespace ns; a vector of failure messages. Every example must
 belong to a public var of ns."
@@ -509,7 +529,8 @@ belong to a public var of ns."
         (vec (concat
               (for [nm (keys (:vars exs)) :when (not (contains? names nm))]
                 (str path ": examples for " nm ", which isn't a public var of " ns))
-              (for [[_ exs] (:vars exs) ex exs step (:steps ex)
+              ;; In the file's order, since an example may use what one before it made.
+              (for [step (sort-by :line (for [[_ exs] (:vars exs) ex exs step (:steps ex)] step))
                     :let [failure (check-step path step)] :when failure]
                 failure)))))))
 
@@ -525,13 +546,14 @@ belong to a public var of ns."
                 " isn't a public var of " ns)))))
 
 (defn check-notes
-  "Failures in the notes: sections and see-also names that aren't public vars."
+  "Failures in the notes: sections and see-also names that aren't public vars (or, for
+see also, special forms)."
   [ns-model]
   (let [names (set (map :name (:vars ns-model)))
         ns (:name ns-model)]
     (vec (for [[nm entry] (notes ns) :when (not= nm :intro)
                bad (cons (when-not (contains? names nm) nm)
-                         (remove (fn [s] (resolve-name ns s))
+                         (remove (fn [s] (or (resolve-name ns s) (contains? special-forms s)))
                                  (:see-also entry)))
                :when bad]
            (str "doc/notes/" ns ".md: " bad " (under " nm ") isn't a public var of " ns)))))
@@ -675,7 +697,9 @@ if(a)location.href=a.href;}});})();
   [root ns nm]
   (if-let [[vns vname] (resolve-name ns nm)]
     (str "<a href=\"" root (var-url vns vname) "\"><code>" (h nm) "</code></a>")
-    (str "<code>" (h nm) "</code>")))
+    (if (contains? special-forms nm)
+      (str "<a href=\"" root special-forms-url "\"><code>" (h nm) "</code></a>")
+      (str "<code>" (h nm) "</code>"))))
 
 (defn entry-html
   "A var's entry on its namespace's page."
