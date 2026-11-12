@@ -49,11 +49,11 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M3.1 Processes | ✅ |
 | M3.2 Data formats and bytes | ✅ |
 | M3.3 Regular expressions | ✅ |
-| M3.4 Networking and the Swank client | 🟨 |
-| M3.5 Files and the system | 🟨 |
-| M3.6 skein-ui for the IDE | ⬜ |
-| M3.7 Skein Studio's core | ⬜ |
-| M3.8 Agents | ⬜ |
+| M3.4 Networking and the Swank client | ✅ |
+| M3.5 Files and the system | ✅ |
+| M3.6 skein-ui for the IDE | ✅ |
+| M3.7 Skein Studio's core | ✅ |
+| M3.8 Agents | 🟨 |
 | M3.9 Source control | ⬜ |
 | M3.10 C sources in projects | ⬜ |
 | M3.11 SQLite and the Databases view | ⬜ |
@@ -61,7 +61,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M3.13 Markdown and documentation | ⬜ |
 | M3.14 HTTP and the API workbench | ⬜ |
 | M3.15 Shipping Skein Studio | ⬜ |
-| Manual (a track beside M3.x, D-109) | ✅ |
+| Manual (a track beside M3.x, D-111) | ✅ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -567,17 +567,35 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
   2. ✅ Editing a table's cells: `:editable` columns and `:cell-edited`, on NSTableView and GtkColumnView.
   3. ✅ code view's speed: a benchmark that highlights a 10,000-line Skein file and edits it a keystroke at a time; replacing a changed range's runs, and the backends' updates, costing what the change does.
   4. ✅ Rich text's styles in the runs: font sizes, a monospace family, paragraph indentation and spacing, and a block's background, on Cocoa and GTK.
-  5. The rich text widget: `rich-text` with Hiccup content, `append-content!`, links, lists, code blocks and tables aligned by tab stops, selection and copying.
+  5. ✅ The rich text widget: `rich-text` with Hiccup content, `append-content!`, links, lists, code blocks and tables aligned by tab stops, selection and copying.
 
 **Exit:** skein-ui's tests for each on the headless, Cocoa and GTK backends.
 
 ### M3.7 Skein Studio's core
 - The repository, its CI and a launcher; Lisp Studio's workbench on skein-ui: the editor (Skein's reader for highlighting, brackets by depth, indentation by Skein's forms, completion and argument hints), tabs and split editors, the explorer, the command palette, settings and themes, find and find in files; the REPL, debugger, inspector and problems through `skein dev`'s Swank (M3.4), with evaluating and compiling forms and files, and going to definitions. Languages are registered, as Lisp Studio's are.
 
+- Settled (D-109): a public repository, `crazymevt/skein-studio`, using skein-ui through `:deps` and CI like skein-ui's on macOS and Linux; highlighting by a lexer that follows Skein's reader's rules (line states, tolerant, incremental), the reader itself for structure; namespaces `skein.studio.*`; `./studio [folder]` to start it.
+- Steps, in order (D-109):
+  1. ✅ The repository and the workbench: `skein-studio` with its CI and `./studio`; a window with the explorer (`walk` with Git's ignore rules, refreshed by `watch`), editor tabs of code views on files (opening, saving, unsaved changes by the buffer's `:revision`, reloading files changed on disk), a status bar and menus; settings (EDN in `config-dir`) and Lisp Studio's light and dark themes; the session restored.
+  2. ✅ Languages and the Skein editor: registered languages (extensions, lexer, indenter, comments); Skein's lexer, with incremental highlighting, brackets colored by depth and the matching one shown, indentation by Skein's forms (bodies, bindings, `cond` and `case` pairs), comment toggling and auto-pairs; the lexer tested against `skein.compiler.reader` over Skein's sources.
+  3. ✅ Running the project: `skein dev` started for it with Swank on a free port, or a running Swank connected to; the REPL panel (history, completion, highlighted input), evaluating the form or file and compiling, the program's output; completion and argument hints in the editor.
+  4. ✅ Debugging: the debugger panel from SLDB's events (backtrace, locals, restarts, evaluating in a frame), the inspector, problems from compiler notes and read errors, underlined in the editor, and going to definitions.
+  5. ✅ Commands and search: the command palette, find and replace (regex), find in files, split editors, going to a line, file or symbol.
+  6. ✅ The scripted session in CI: a script that opens a sample project, runs it under `skein dev`, edits and evaluates, hits an error and restarts, on macOS and Linux.
+
 **Exit:** Skein Studio opens a Skein project, runs it under `skein dev`, and edits, evaluates and debugs it, on macOS and Linux; a scripted session checks it in CI.
 
 ### M3.8 Agents
 - Claude Code (stream-json) and Codex (app-server, JSON-RPC over stdio) through their CLIs, with the IDE's tools (evaluate in the program, describe, the problems, the open file), approvals and questions, models and effort, as Lisp Studio has.
+
+- Settled (D-110): `skein-markdown` (CommonMark and GFM's tables into Hiccup for the rich text widget) comes forward from M3.13, in its own repository; the IDE's tools are `skein_eval`, `skein_describe`, `ide_problems`, `ide_active_file`, `ide_open_file` and `repl_transcript`; Lisp Studio's whole agent panel (attachments, images and usage limits too), on the right of the editors with View ▸ Agent (Primary+J).
+- Steps, in order (D-110):
+  1. ✅ `skein-markdown`: its repository and CI; CommonMark's blocks and inlines and GFM's tables into Hiccup, checked against the CommonMark spec's examples (the Hiccup rendered to HTML); skein-ui's rich text gaining the elements Markdown needs that it lacks (quotes, rules, line breaks, strikethrough, images).
+  2. The agents' protocols: an adapter each for Claude Code (stream-json) and Codex (app-server JSON-RPC) giving one set of events, run through `skein.process` and `skein.json`; stand-in CLIs, Skein programs that speak each protocol from a script, and tests of both adapters against them.
+  3. The IDE's tools: their schemas and handlers (evaluating and describing through the program's Swank, the problems, the open file, opening a file at a line, the REPL's transcript), served to Claude as an SDK MCP server and to Codex as dynamic tools.
+  4. The agent panel: Claude and Codex at its top, the chat in rich text with streaming replies and tool activity, the composer (send, stop, send while busy), approvals and questions, models, effort and autonomy remembered per agent, resumed conversations, the open file and selection as context, attached files and images, usage limits.
+  5. Asking from elsewhere: Explain, Improve and Write Tests from the editor, Fix from the Problems panel, Ask Agent from the debugger; a reply's code blocks copied, inserted at the caret or run in the REPL.
+  6. The scripted session with the stand-in CLIs, for each protocol, in CI.
 
 **Exit:** a scripted session with a stand-in CLI that speaks each protocol; the real CLIs tried by Jessie.
 
@@ -602,10 +620,10 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 **Exit:** a shell runs in the panel on macOS and Linux, with its tests in CI.
 
 ### M3.13 Markdown and documentation
-- `skein-markdown` (CommonMark and GFM's tables into a tree) shown in the rich text widget (M3.6), with the editor's Source, Split and Preview; `skein-docset` for Dash docsets, searched and shown in the IDE.
-- A docset for Skein, built from Skein's own sources rather than downloaded (Jessie's): every public var of the standard library with its argument lists, docstring and source location, from the compiler's model of the namespaces (as Swank's documentation and `M-.` use it), and the language reference from DESIGN.md; generated by a tool in this repository and rebuilt with each release, so it matches the Skein it documents. It is a Dash docset (the SQLite index and HTML pages, so Dash and Zeal open it too), with each entry also kept as data beside the pages (name, argument lists, docstring as Markdown, source location), which Skein Studio shows natively. Libraries (skein-ui and the others) can build theirs the same way. The manual (D-109) already writes the entries as data, `build/manual/data/`, and the HTML pages; the docset is built from them.
+- Markdown files in the editor with Source, Split and Preview, the preview from `skein-markdown` (built in M3.8, D-110) in the rich text widget (M3.6); `skein-docset` for Dash docsets, searched and shown in the IDE.
+- A docset for Skein, built from Skein's own sources rather than downloaded (Jessie's): every public var of the standard library with its argument lists, docstring and source location, from the compiler's model of the namespaces (as Swank's documentation and `M-.` use it), and the language reference from DESIGN.md; generated by a tool in this repository and rebuilt with each release, so it matches the Skein it documents. It is a Dash docset (the SQLite index and HTML pages, so Dash and Zeal open it too), with each entry also kept as data beside the pages (name, argument lists, docstring as Markdown, source location), which Skein Studio shows natively. Libraries (skein-ui and the others) can build theirs the same way. The manual (D-111) already writes the entries as data, `build/manual/data/`, and the HTML pages; the docset is built from them.
 
-**Exit:** the CommonMark spec's examples pass; Skein's docset is generated from the checkout and covers every public var; docs open from the editor.
+**Exit:** Markdown files preview as they're edited; Skein's docset is generated from the checkout and covers every public var; docs open from the editor.
 
 ### M3.14 HTTP and the API workbench
 - `skein-curl` in its own repository (libcurl: HTTPS, redirects, proxies, streaming bodies); Xeon Studio's API workbench (`.http` collections, environments with secrets, the response view).
@@ -617,7 +635,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 
 **Exit:** Skein Studio installs and runs from its package on each platform, and Jessie uses it to work on Skein.
 
-### Track: the manual (D-109)
+### Track: the manual (D-111)
 A track beside the M3.x milestones, worked on in its own session; it doesn't come ahead of them.
 - Skein's manual, after Clojure's reference, ClojureDocs and the Common Lisp HyperSpec, as a static HTML site that a Skein program generates (`doc/manual.skn`, `make manual`, into `build/manual/`): a quick reference of every public function grouped by topic, as Clojure's cheatsheet; a page per namespace with an entry per var (syntax, arguments and values, description, examples, notes, see also); and the language reference from DESIGN.md.
 - The vars, argument lists, docstrings and source locations come from the compiler's model of the namespaces (as Swank's documentation does), in a program built with `--eval`. Examples, notes and topics are hand-written in `doc/`: `doc/examples/<ns>.skn` (code with `;=>` results and `;; prints:` output, which the tests run, so an example can't go stale), `doc/notes/<ns>.md`, `doc/topics.edn`.
@@ -720,8 +738,14 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - make test: the Swank and REPL host tests each build their own `--eval` program (about 12 s each, 13 of them); sharing one build per suite would cut Swank, now the longest part, but changes the programs some tests check backtraces of. Compiling the evaluator's C once per skeinc and linking it into each `--eval` program would speed those builds, and `skein run` and `dev`, everywhere.
 - skein-ui's GTK tests, run on macOS, fail about half the time in `popovers-and-completion-popups` ("the view keeps the keyboard") and then crash (exit 139), also before M3.6: a GTK window on macOS doesn't always get the keyboard, as other applications are in front. Linux CI, under Xvfb, passes; worth a look before relying on the Mac for GTK (M3.6).
 - skein-ui's text buffer copies its line index on every edit (1.4 ms at 10,000 lines, M3.6 step 3): chunked lines, as the code view's runs now are, would make it cost what the edit does, for files of 100,000 lines and more.
-- The manual (D-109) finds no docstring in the compiler's model for skein.core's built-in macros and special forms (`ns`, `defn`, `defmacro`, `in-ns`), its condition types (`type-error`...), `/` and `*1`–`*e`, nor for the accessors `defstruct` generates and a few generics in `skein.math` (`dot`, `lerp`...); giving them docstrings (the registry of the runtime's macros, `defcondition`'s and `defstruct`'s) would complete those entries.
-- Under the evaluator (`--eval`), `declaim` fails (`skein.core/%declaim` is unbound), and unbounded recursion ends the program with a segmentation fault instead of signaling `stack-overflow` (found by the manual's examples, D-109, which show both without running them).
-- `skein.math/determinant` gives an f32 for a mat3 but an f64 for a mat4 (found by the manual's examples, D-109).
-- The manual's examples for `skein.process` and `skein.io/run-process` start Unix programs (`sh`, `cat`, `sleep`, `ls`), so `make test` on Windows would fail on them; they could start a small Skein program instead, as the process tests do, or be skipped there (D-109).
-- The manual's examples of `defcfun`, `defcfun-ptr` and `defcallback` aren't run, since the evaluator can't define C functions (they need compiled C). The test suite could build an FFI namespace's examples with skeinc and compare their output instead (D-109).
+- `DEV-RUN-LOOP-PAUSED` (`host/tests/repl.lisp`) failed once on Linux CI (run 43223469952): the job's debugger showed "; resumed" at once and the main thread's error followed without "(in main thread)", so the test timed out waiting for it; a race in the test or in how `skein dev` resumes a job's debugger (M3.6).
+- `skein dev`'s Swank answers `frame-locals-and-catch-tags` with no locals, so Skein Studio's debugger (M3.7 step 4) shows none; the evaluator's frames would need to keep their bindings for it to.
+- skein-ui measures a Cocoa check box narrower than its label, which AppKit then truncates ("Match…"); Skein Studio's find bar gives its check boxes widths of their own meanwhile (M3.7 step 5).
+- `(vec s)` (and so `seq` over a string) takes time quadratic in the string's length where it isn't ASCII: 3 s for 96,000 characters (M3.8 step 1); skein-markdown walks cursors meanwhile.
+- Skein's regexes can't match at a position only: `^` marks the string's start, so a search from a cursor goes on to the end when the pattern fails there. skein-markdown matches `(pattern)|` meanwhile, whose empty alternative stops the search; a sticky flag, or `%re-exec` anchoring at its start, would do it directly.
+- `skein.string/lower-case` and `upper-case` say they take a character too, but fail on one ("%string-ascii-case needs a string").
+- The manual (D-111) finds no docstring in the compiler's model for skein.core's built-in macros and special forms (`ns`, `defn`, `defmacro`, `in-ns`), its condition types (`type-error`...), `/` and `*1`–`*e`, nor for the accessors `defstruct` generates and a few generics in `skein.math` (`dot`, `lerp`...); giving them docstrings (the registry of the runtime's macros, `defcondition`'s and `defstruct`'s) would complete those entries.
+- Under the evaluator (`--eval`), `declaim` fails (`skein.core/%declaim` is unbound), and unbounded recursion ends the program with a segmentation fault instead of signaling `stack-overflow` (found by the manual's examples, D-111, which show both without running them).
+- `skein.math/determinant` gives an f32 for a mat3 but an f64 for a mat4 (found by the manual's examples, D-111).
+- The manual's examples for `skein.process` and `skein.io/run-process` start Unix programs (`sh`, `cat`, `sleep`, `ls`), so `make test` on Windows would fail on them; they could start a small Skein program instead, as the process tests do, or be skipped there (D-111).
+- The manual's examples of `defcfun`, `defcfun-ptr` and `defcallback` aren't run, since the evaluator can't define C functions (they need compiled C). The test suite could build an FFI namespace's examples with skeinc and compare their output instead (D-111).

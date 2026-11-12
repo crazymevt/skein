@@ -1,7 +1,7 @@
 (ns skein.jobs.examples
   (:require [skein.jobs :as jobs]))
 
-;;; Examples for skein.jobs (D-109).
+;;; Examples for skein.jobs (D-111).
 ;;; `./skein run doc/manual.skn --check skein.jobs` runs them.
 
 ;;;; graph

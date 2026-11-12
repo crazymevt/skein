@@ -401,7 +401,7 @@ D-095) that Phase 0 can't fetch: the SDL examples and Driftrock's main and draw.
 
 (defun native-only-p (path)
   "True for the programs that only run natively: the manual's generator, its tests and
-its examples (doc/, D-109), which use regular expressions (D-105) and the evaluator."
+its examples (doc/, D-111), which use regular expressions (D-105) and the evaluator."
   (search "/doc/" (namestring path)))
 
 (test expander-in-skein-matches-phase-0-on-every-file

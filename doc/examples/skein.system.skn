@@ -3,7 +3,7 @@
             [skein.io :as io]
             [skein.string :as str]))
 
-;;; Examples for skein.system (D-109). Their values depend on the machine, so they show
+;;; Examples for skein.system (D-111). Their values depend on the machine, so they show
 ;;; what holds on every one.
 ;;; `./skein run doc/manual.skn --check skein.system` runs them.
 

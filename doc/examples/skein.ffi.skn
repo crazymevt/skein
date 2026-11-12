@@ -1,7 +1,7 @@
 (ns skein.ffi.examples
   (:require [skein.ffi :as ffi]))
 
-;;; Examples for skein.ffi (D-109). They call the C library every system has. defcfun,
+;;; Examples for skein.ffi (D-111). They call the C library every system has. defcfun,
 ;;; defcfun-ptr and defcallback need compiled C, so their examples are shown but not run
 ;;; here (an FFI program is built with skeinc); the memory functions run.
 ;;; `./skein run doc/manual.skn --check skein.ffi` runs them.

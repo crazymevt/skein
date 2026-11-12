@@ -2,7 +2,7 @@
   (:require [skein.io :as io]
             [skein.string :as str]))
 
-;;; Examples for skein.io (D-109). They work in a new temporary directory, dir.
+;;; Examples for skein.io (D-111). They work in a new temporary directory, dir.
 ;;; `./skein run doc/manual.skn --check skein.io` runs them.
 
 ;;;; temp-dir

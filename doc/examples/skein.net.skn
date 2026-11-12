@@ -2,7 +2,7 @@
   (:require [skein.net :as net]
             [skein.io :as io]))
 
-;;; Examples for skein.net (D-109). They talk to a server on localhost that they start.
+;;; Examples for skein.net (D-111). They talk to a server on localhost that they start.
 ;;; `./skein run doc/manual.skn --check skein.net` runs them.
 
 ;;;; listen

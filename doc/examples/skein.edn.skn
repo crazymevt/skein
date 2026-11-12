@@ -2,7 +2,7 @@
   (:require [skein.edn :as edn]
             [skein.io :as io]))
 
-;;; Examples for skein.edn (D-109).
+;;; Examples for skein.edn (D-111).
 ;;; `./skein run doc/manual.skn --check skein.edn` runs them.
 
 ;;;; read-string

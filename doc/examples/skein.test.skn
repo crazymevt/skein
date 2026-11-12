@@ -3,7 +3,7 @@
                                 test-ns]]
             [skein.test :as t]))
 
-;;; Examples for skein.test (D-109). Tests usually live in test/, one namespace a file,
+;;; Examples for skein.test (D-111). Tests usually live in test/, one namespace a file,
 ;;; and `skein test` runs them; here they run with run-tests.
 ;;; `./skein run doc/manual.skn --check skein.test` runs them.
 

@@ -1,7 +1,7 @@
 (ns skein.bytes.examples
   (:require [skein.bytes :as b]))
 
-;;; Examples for skein.bytes (D-109). Bytes are u8 arrays; a string stands for its UTF-8.
+;;; Examples for skein.bytes (D-111). Bytes are u8 arrays; a string stands for its UTF-8.
 ;;; `./skein run doc/manual.skn --check skein.bytes` runs them.
 
 ;;;; utf8

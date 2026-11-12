@@ -3,7 +3,7 @@
             [skein.io :as io]
             [skein.string :as str]))
 
-;;; Examples for skein.process (D-109). They start Unix programs (cat, sh, sleep, echo);
+;;; Examples for skein.process (D-111). They start Unix programs (cat, sh, sleep, echo);
 ;;; on Windows the same calls run its own.
 ;;; `./skein run doc/manual.skn --check skein.process` runs them.
 

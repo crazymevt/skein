@@ -1,7 +1,7 @@
 (ns skein.time.examples
   (:require [skein.time :as time]))
 
-;;; Examples for skein.time (D-109).
+;;; Examples for skein.time (D-111).
 ;;; `./skein run doc/manual.skn --check skein.time` runs them.
 
 ;;;; now

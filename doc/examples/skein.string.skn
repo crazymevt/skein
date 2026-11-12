@@ -1,7 +1,7 @@
 (ns skein.string.examples
   (:require [skein.string :as str]))
 
-;;; Examples for skein.string (D-109). `;;;; name` starts a var's examples; `;;` lines
+;;; Examples for skein.string (D-111). `;;;; name` starts a var's examples; `;;` lines
 ;;; before a form are the caption; `;=>` is the value and `;; prints:` the output.
 ;;; `./skein run doc/manual.skn --check skein.string` runs them.
 

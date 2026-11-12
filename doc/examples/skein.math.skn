@@ -1,7 +1,7 @@
 (ns skein.math.examples
   (:require [skein.math :as m]))
 
-;;; Examples for skein.math (D-109).
+;;; Examples for skein.math (D-111).
 ;;; `./skein run doc/manual.skn --check skein.math` runs them.
 
 ;;;; pi

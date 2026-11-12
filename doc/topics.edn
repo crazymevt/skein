@@ -1,4 +1,4 @@
-;; The quick reference's topics (D-109): sections of groups of var names, in the order
+;; The quick reference's topics (D-111): sections of groups of var names, in the order
 ;; the page shows them. A name is a public var of the section's :ns, or ns/name. A public
 ;; var that no group names is listed under its namespace's "Other", so the quick reference
 ;; always covers the whole library; `./skein run doc/manual.skn --check` checks the names.

@@ -1,7 +1,7 @@
 (ns skein.log.examples
   (:require [skein.log :as log]))
 
-;;; Examples for skein.log (D-109). They collect entries with a handler instead of
+;;; Examples for skein.log (D-111). They collect entries with a handler instead of
 ;;; writing them to stderr.
 ;;; `./skein run doc/manual.skn --check skein.log` runs them.
 

@@ -1,6 +1,6 @@
 (ns skein.core.examples)
 
-;;; Examples for skein.core (D-109), by topic as the quick reference groups it.
+;;; Examples for skein.core (D-111), by topic as the quick reference groups it.
 ;;; `./skein run doc/manual.skn --check skein.core` runs them.
 
 ;;; ------------------------------------------------------------------------------------

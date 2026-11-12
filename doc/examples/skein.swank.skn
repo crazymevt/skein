@@ -3,7 +3,7 @@
             [skein.net :as net]
             [skein.io :as io]))
 
-;;; Examples for skein.swank (D-109): the Swank server SLIME connects to. `skein dev`
+;;; Examples for skein.swank (D-111): the Swank server SLIME connects to. `skein dev`
 ;;; starts it on port 4005; M-x slime-connect connects Emacs.
 ;;; `./skein run doc/manual.skn --check skein.swank` runs them.
 

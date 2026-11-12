@@ -1,7 +1,7 @@
 (ns skein.game.examples
   (:require [skein.game :as game]))
 
-;;; Examples for skein.game (D-109).
+;;; Examples for skein.game (D-111).
 ;;; `./skein run doc/manual.skn --check skein.game` runs them.
 
 ;;;; run-loop

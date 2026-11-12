@@ -2,7 +2,7 @@
   (:require [skein.json :as json]
             [skein.io :as io]))
 
-;;; Examples for skein.json (D-109).
+;;; Examples for skein.json (D-111).
 ;;; `./skein run doc/manual.skn --check skein.json` runs them.
 
 ;;;; read-str

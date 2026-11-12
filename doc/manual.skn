@@ -1,5 +1,5 @@
 (ns manual
-  "Skein's manual (D-109): a static HTML site generated from the compiler's model of the
+  "Skein's manual (D-111): a static HTML site generated from the compiler's model of the
 standard library and from the hand-written files in doc/. Run from the repository's root:
 
   ./skein run doc/manual.skn [out-dir]       write the site (default build/manual)

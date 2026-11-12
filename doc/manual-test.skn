@@ -1,5 +1,5 @@
 (ns manual-test
-  "Tests of the manual's generator (D-109): its Markdown subset, the examples files'
+  "Tests of the manual's generator (D-111): its Markdown subset, the examples files'
 format, the model it reads and the pages it writes. Run from the repository's root with
 ./skein run doc/manual-test.skn; make test runs it, and the examples, through
 host/tools/bootstrap.sh."
@@ -174,7 +174,7 @@ host/tools/bootstrap.sh."
 
 (def complete
   "The namespaces documented completely: every public var with examples, arguments and
-values, and see also. All of them (step 2 of D-109)."
+values, and see also. All of them (step 2 of D-111)."
   manual/documented)
 
 (deftest documented-namespaces-are-complete

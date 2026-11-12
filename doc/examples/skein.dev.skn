@@ -3,7 +3,7 @@
             [skein.compiler.reader :as reader]
             [skein.string :as str]))
 
-;;; Examples for skein.dev (D-109): the REPL, debugger and dev loop of programs built
+;;; Examples for skein.dev (D-111): the REPL, debugger and dev loop of programs built
 ;;; with --eval. Most programs use it through `skein dev` and `skein repl` rather than
 ;;; calling it; the loops that take over the terminal are shown without being run.
 ;;; `./skein run doc/manual.skn --check skein.dev` runs the rest.
