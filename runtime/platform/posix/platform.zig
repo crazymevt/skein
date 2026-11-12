@@ -517,14 +517,19 @@ pub fn signalProcess(pid: i64, handle: ?*anyopaque, job: ?*anyopaque, kind: u8, 
         else => .KILL,
     };
     const target: c.pid_t = @intCast(pid);
-    if (tree) {
-        // On the heap: this may run on a fiber's small stack.
-        const buf = std.heap.c_allocator.alloc(c.pid_t, 4096) catch return;
-        defer std.heap.c_allocator.free(buf);
-        const n = descendants(target, buf);
-        for (buf[0..n]) |d| _ = std.c.kill(d, sig);
+    if (!tree) {
+        _ = std.c.kill(target, sig);
+        return;
     }
+    // The descendants are found first (once their parent has gone they can't be), then
+    // the program is signaled before them: signaled after, a shell could see its child
+    // end and finish its script in between (sh -c "sleep 10; echo late" exited 0).
+    // On the heap: this may run on a fiber's small stack.
+    const buf = std.heap.c_allocator.alloc(c.pid_t, 4096) catch return;
+    defer std.heap.c_allocator.free(buf);
+    const n = descendants(target, buf);
     _ = std.c.kill(target, sig);
+    for (buf[0..n]) |d| _ = std.c.kill(d, sig);
 }
 
 extern "c" fn proc_listchildpids(ppid: c.pid_t, buffer: ?*anyopaque, size: c_int) c_int;

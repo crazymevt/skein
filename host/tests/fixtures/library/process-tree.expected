@@ -5,4 +5,5 @@ child: started
 destroy-tree! ends all three: true
 destroy! leaves the grandchildren: true
 which end on their own: true
+destroy-tree! ends a script before it goes on: true
 after the end: 0

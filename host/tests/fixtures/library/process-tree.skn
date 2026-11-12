@@ -15,6 +15,8 @@
     "nap" (sleep 6)
     ;; Two grandchildren, which inherit this program's stdout and end within 6 seconds
     ;; on their own, then a long sleep.
+    ;; As sh -c "sleep 6; echo late": wait for a grandchild, then go on.
+    "script" (do @(process (self "nap")) (println "late"))
     "tree" (do (process (self "nap") {:out :inherit})
                (process (self "nap") {:out :inherit})
                (println "started")
@@ -56,6 +58,19 @@
     @(process/destroy! p)
     (println "destroy! leaves the grandchildren:" (not (ended-within? p 1)))
     (println "which end on their own:" (ended-within? p 15)))
+  ;; A tree's program is signaled before its descendants: signaled after, it could see its
+  ;; child end and go on in between (sh -c "sleep 10; echo late" exited 0 on loaded Linux).
+  ;; Twenty at once; the race showed only on a loaded machine (eight such programs at once
+  ;; in tools/linux's container), so this rarely sees it, but it checks the order holds.
+  (let [script (if (= :windows (system/os))
+                 (self "script")
+                 ;; sh itself on Unix: it sees its child end at once
+                 ["sh" "-c" "sleep 6; echo late"])
+        ps (vec (repeatedly 20 (fn [] (process script))))]
+    (sleep 0.3)
+    (doseq [p ps] (process/destroy-tree! p))
+    (println "destroy-tree! ends a script before it goes on:"
+             (every? (fn [p] (and (pos? (:exit @p)) (= "" (io/read-text (:out p))))) ps)))
   ;; Signals after the end do nothing.
   (let [p @(process (self "quick"))]
     (process/destroy! p)
