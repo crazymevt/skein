@@ -1,0 +1,214 @@
+(ns skein.string.examples
+  (:require [skein.string :as str]))
+
+;;; Examples for skein.string (D-109). `;;;; name` starts a var's examples; `;;` lines
+;;; before a form are the caption; `;=>` is the value and `;; prints:` the output.
+;;; `./skein run doc/manual.skn --check skein.string` runs them.
+
+;;;; append!
+;; append! takes any number of values, adding each as str prints it.
+(def b (str/builder))
+(str/append! b "x = " 42 \;)
+(str/build b)
+;=> "x = 42;"
+
+;;;; blank?
+(str/blank? "  \t\n")
+;=> true
+
+(str/blank? nil)
+;=> true
+
+(str/blank? " a ")
+;=> false
+
+;;;; build
+;; Building a string a piece at a time, without making the intermediate strings.
+(let [b (str/builder)]
+  (doseq [i (range 5)]
+    (str/append! b i " "))
+  (str/build b))
+;=> "0 1 2 3 4 "
+
+;;;; builder
+(-> (str/builder)
+    (str/append! "Hello")
+    (str/append! ", " "world")
+    (str/build))
+;=> "Hello, world"
+
+;;;; capitalize
+(str/capitalize "hELLO wORLD")
+;=> "Hello world"
+
+;;;; char-at
+(str/char-at "skein" (str/cursor "skein"))
+;=> \s
+
+;; At the end there is no character.
+(str/char-at "skein" (str/end "skein"))
+;=> nil
+
+;;;; cursor
+;; Walking a string by cursors: each step is O(1), even in text that isn't ASCII.
+(let [s "naïve"]
+  (loop [c (str/cursor s) chars []]
+    (if (str/end? s c)
+      chars
+      (recur (str/next s c) (conj chars (str/char-at s c))))))
+;=> [\n \a \ï \v \e]
+
+;; With an index, the cursor before the character at that index.
+(let [s "naïve"]
+  (str/slice s (str/cursor s 3)))
+;=> "ve"
+
+;;;; cursor->index
+(let [s "naïve"]
+  (str/cursor->index s (str/next s (str/next s (str/cursor s)))))
+;=> 2
+
+;;;; end
+(let [s "abc"]
+  (str/slice s (str/cursor s 1) (str/end s)))
+;=> "bc"
+
+;;;; end?
+(str/end? "" (str/cursor ""))
+;=> true
+
+;;;; ends-with?
+(str/ends-with? "game.skn" ".skn")
+;=> true
+
+;;;; escape
+;; Escape text for HTML.
+(str/escape "1 < 2 & 3" {\< "&lt;" \& "&amp;"})
+;=> "1 &lt; 2 &amp; 3"
+
+;;;; includes?
+(str/includes? "skein" "ei")
+;=> true
+
+(str/includes? "skein" \z)
+;=> false
+
+;;;; index-of
+(str/index-of "a,b,c" ",")
+;=> 1
+
+;; From an index.
+(str/index-of "a,b,c" \, 2)
+;=> 3
+
+(str/index-of "abc" "z")
+;=> nil
+
+;;;; join
+(str/join ", " ["apples" "pears" "plums"])
+;=> "apples, pears, plums"
+
+;; Without a separator; the elements needn't be strings.
+(str/join [1 :a \b nil "c"])
+;=> "1:abc"
+
+;;;; last-index-of
+(str/last-index-of "a/b/c.skn" "/")
+;=> 3
+
+;;;; lower-case
+(str/lower-case "Skein REPL")
+;=> "skein repl"
+
+;;;; next
+;; At the end, next gives the end again.
+(let [s "ab"]
+  (= (str/end s) (str/next s (str/end s))))
+;=> true
+
+;;;; replace
+;; A string or a character is replaced as it is.
+(str/replace "a-b-c" "-" "+")
+;=> "a+b+c"
+
+;; With a pattern, $1 in the replacement is the first group.
+(str/replace "2026-11-12" #"(\d+)-(\d+)-(\d+)" "$3/$2/$1")
+;=> "12/11/2026"
+
+;; Named groups, as ${name}.
+(str/replace "x=1, y=2" #"(?<k>\w)=(?<v>\d)" "${v}=${k}")
+;=> "1=x, 2=y"
+
+;; A function of the match, which is what re-find gives.
+(str/replace "a1b22c333" #"\d+" (fn [m] (str (count m))))
+;=> "a1b2c3"
+
+;;;; replace-first
+(str/replace-first "one two two" "two" "2")
+;=> "one 2 two"
+
+(str/replace-first "aaa" #"a" (fn [m] (str/upper-case m)))
+;=> "Aaa"
+
+;;;; reverse
+(str/reverse "stressed")
+;=> "desserts"
+
+;;;; slice
+(let [s "hello world"]
+  (str/slice s (str/cursor s 6)))
+;=> "world"
+
+;;;; split
+(str/split "a,b,c" ",")
+;=> ["a" "b" "c"]
+
+;; With a pattern; empty parts at the end are dropped.
+(str/split "a, b,  c,," #",\s*")
+;=> ["a" "b" "c"]
+
+;; A limit keeps the rest of the string in the last part.
+(str/split "key=value=more" "=" 2)
+;=> ["key" "value=more"]
+
+;;;; split-lines
+(str/split-lines "one\ntwo\r\nthree")
+;=> ["one" "two" "three"]
+
+;;;; starts-with?
+(str/starts-with? "skein.string" "skein.")
+;=> true
+
+;;;; trim
+(str/trim "  padded  ")
+;=> "padded"
+
+;;;; trim-newline
+;; Only newlines and carriage returns at the end, as read-line leaves them.
+(str/trim-newline "line\r\n")
+;=> "line"
+
+(str/trim-newline " spaced \n")
+;=> " spaced "
+
+;;;; triml
+(str/triml "  left")
+;=> "left"
+
+;;;; trimr
+(str/trimr "right  \n")
+;=> "right"
+
+;;;; upper-case
+;; Only ASCII letters change.
+(str/upper-case "café")
+;=> "CAFé"
+
+;;;; slice
+;; Printing what is between two cursors found by a search.
+(let [s "name: Skein"
+      from (str/cursor s (+ 2 (str/index-of s ":")))]
+  (println (str/slice s from)))
+;; prints:
+;; Skein
+;=> nil
