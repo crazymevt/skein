@@ -150,7 +150,7 @@ host/tools/bootstrap.sh."
 (def complete
   "The namespaces documented completely: every public var with examples, arguments and
 values, and see also."
-  ["skein.string" "skein.core" "skein.io" "skein.math" "skein.process" "skein.json" "skein.edn" "skein.bytes" "skein.system" "skein.time"])
+  ["skein.string" "skein.core" "skein.io" "skein.math" "skein.process" "skein.json" "skein.edn" "skein.bytes" "skein.system" "skein.time" "skein.net"])
 
 (deftest documented-namespaces-are-complete
   (doseq [ns complete
