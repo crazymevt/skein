@@ -579,7 +579,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
   2. ✅ Languages and the Skein editor: registered languages (extensions, lexer, indenter, comments); Skein's lexer, with incremental highlighting, brackets colored by depth and the matching one shown, indentation by Skein's forms (bodies, bindings, `cond` and `case` pairs), comment toggling and auto-pairs; the lexer tested against `skein.compiler.reader` over Skein's sources.
   3. ✅ Running the project: `skein dev` started for it with Swank on a free port, or a running Swank connected to; the REPL panel (history, completion, highlighted input), evaluating the form or file and compiling, the program's output; completion and argument hints in the editor.
   4. ✅ Debugging: the debugger panel from SLDB's events (backtrace, locals, restarts, evaluating in a frame), the inspector, problems from compiler notes and read errors, underlined in the editor, and going to definitions.
-  5. Commands and search: the command palette, find and replace (regex), find in files, split editors, going to a line, file or symbol.
+  5. ✅ Commands and search: the command palette, find and replace (regex), find in files, split editors, going to a line, file or symbol.
   6. The scripted session in CI: a script that opens a sample project, runs it under `skein dev`, edits and evaluates, hits an error and restarts, on macOS and Linux.
 
 **Exit:** Skein Studio opens a Skein project, runs it under `skein dev`, and edits, evaluates and debugs it, on macOS and Linux; a scripted session checks it in CI.
@@ -719,3 +719,4 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - skein-ui's text buffer copies its line index on every edit (1.4 ms at 10,000 lines, M3.6 step 3): chunked lines, as the code view's runs now are, would make it cost what the edit does, for files of 100,000 lines and more.
 - `DEV-RUN-LOOP-PAUSED` (`host/tests/repl.lisp`) failed once on Linux CI (run 43223469952): the job's debugger showed "; resumed" at once and the main thread's error followed without "(in main thread)", so the test timed out waiting for it; a race in the test or in how `skein dev` resumes a job's debugger (M3.6).
 - `skein dev`'s Swank answers `frame-locals-and-catch-tags` with no locals, so Skein Studio's debugger (M3.7 step 4) shows none; the evaluator's frames would need to keep their bindings for it to.
+- skein-ui measures a Cocoa check box narrower than its label, which AppKit then truncates ("Match…"); Skein Studio's find bar gives its check boxes widths of their own meanwhile (M3.7 step 5).
