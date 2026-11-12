@@ -623,7 +623,7 @@ A track beside the M3.x milestones, worked on in its own session; it doesn't com
 - The vars, argument lists, docstrings and source locations come from the compiler's model of the namespaces (as Swank's documentation does), in a program built with `--eval`. Examples, notes and topics are hand-written in `doc/`: `doc/examples/<ns>.skn` (code with `;=>` results and `;; prints:` output, which the tests run, so an example can't go stale), `doc/notes/<ns>.md`, `doc/topics.edn`.
 - Steps, in order:
   1. ✅ The generator, its `make` target and tests; the quick reference covering the whole standard library; `skein.string` complete as the model namespace, with its examples tested.
-  2. 🟨 Examples and notes for the rest of the standard library, namespace by namespace: `skein.core` ✅, `skein.io` ✅.
+  2. 🟨 Examples and notes for the rest of the standard library, namespace by namespace: `skein.core` ✅, `skein.io` ✅, `skein.math` ✅.
   3. ⬜ The entries as data (name, argument lists, docstring, source location, examples) beside the pages, which M3.13's docset reuses (D-102's "Later").
 
 **Exit:** `make manual` builds the site from the checkout; every public var has an entry; every namespace's examples pass in `make test`.
@@ -722,3 +722,4 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - skein-ui's text buffer copies its line index on every edit (1.4 ms at 10,000 lines, M3.6 step 3): chunked lines, as the code view's runs now are, would make it cost what the edit does, for files of 100,000 lines and more.
 - The manual (D-109) finds no docstring in the compiler's model for skein.core's built-in macros and special forms (`ns`, `defn`, `defmacro`, `in-ns`), its condition types (`type-error`...), `/` and `*1`–`*e`, nor for the accessors `defstruct` generates and a few generics in `skein.math` (`dot`, `lerp`...); giving them docstrings (the registry of the runtime's macros, `defcondition`'s and `defstruct`'s) would complete those entries.
 - Under the evaluator (`--eval`), `declaim` fails (`skein.core/%declaim` is unbound), and unbounded recursion ends the program with a segmentation fault instead of signaling `stack-overflow` (found by the manual's examples, D-109, which show both without running them).
+- `skein.math/determinant` gives an f32 for a mat3 but an f64 for a mat4 (found by the manual's examples, D-109).

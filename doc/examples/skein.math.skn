@@ -1,0 +1,558 @@
+(ns skein.math.examples
+  (:require [skein.math :as m]))
+
+;;; Examples for skein.math (D-109).
+;;; `./skein run doc/manual.skn --check skein.math` runs them.
+
+;;;; pi
+m/pi
+;=> 3.141592653589793
+
+;;;; tau
+(= m/tau (* 2 m/pi))
+;=> true
+
+;;;; sin
+(m/sin (/ m/pi 2))
+;=> 1.0
+
+;;;; cos
+(m/cos 0.0)
+;=> 1.0
+
+;; A float keeps its type.
+(m/cos (f32 0))
+;=> 1.0f
+
+;;;; tan
+(m/approx= (m/tan (/ m/pi 4)) 1.0)
+;=> true
+
+;;;; asin
+(m/asin 1.0)
+;=> 1.5707963267948966
+
+;;;; acos
+(m/acos 1.0)
+;=> 0.0
+
+;;;; atan
+(m/approx= (m/atan 1.0) (/ m/pi 4))
+;=> true
+
+;;;; atan2
+;; The angle of the point (x, y): note y comes first.
+[(m/atan2 1.0 0.0) (m/atan2 0.0 -1.0)]
+;=> [1.5707963267948966 3.141592653589793]
+
+;;;; exp
+(m/exp 0)
+;=> 1.0
+
+;;;; log
+(m/log (m/exp 2.0))
+;=> 2.0
+
+;;;; pow
+[(m/pow 2 10) (m/pow 9.0 0.5)]
+;=> [1024 3.0]
+
+;;;; floor
+[(m/floor 2.7) (m/floor -2.2)]
+;=> [2.0 -3.0]
+
+;;;; ceil
+[(m/ceil 2.1) (m/ceil -2.7)]
+;=> [3.0 -2.0]
+
+;;;; round
+;; Halves go away from zero.
+[(m/round 2.5) (m/round -2.5) (m/round 2.4)]
+;=> [3.0 -3.0 2.0]
+
+;;;; trunc
+[(m/trunc 2.7) (m/trunc -2.7)]
+;=> [2.0 -2.0]
+
+;;;; sign
+[(m/sign -3.5) (m/sign 0) (m/sign 7)]
+;=> [-1.0 0 1]
+
+;;;; clamp
+[(m/clamp 15 0 10) (m/clamp -1.5 0.0 1.0) (m/clamp 5 0 10)]
+;=> [10 0.0 5]
+
+;;;; lerp
+;; Numbers, and vectors of the same type.
+[(m/lerp 0.0 10.0 0.25) (m/lerp (m/vec2 0.0f 0.0f) (m/vec2 10.0f 20.0f) 0.5)]
+;=> [2.5 #<skein.math/vec2 {:x 5.0f, :y 10.0f}>]
+
+;;;; inverse-lerp
+(m/inverse-lerp 10.0 20.0 15.0)
+;=> 0.5
+
+;;;; remap
+;; A health of 30 out of 120, as the width of a 200-pixel bar.
+(m/remap 30.0 0.0 120.0 0.0 200.0)
+;=> 50.0
+
+;;;; smoothstep
+[(m/smoothstep 0.0 1.0 -1.0) (m/smoothstep 0.0 1.0 0.5) (m/smoothstep 0.0 1.0 2.0)]
+;=> [0.0 0.5 1.0]
+
+;;;; deg->rad
+(= (m/deg->rad 180.0) m/pi)
+;=> true
+
+;;;; rad->deg
+(m/rad->deg (/ m/pi 2))
+;=> 90.0
+
+;;;; wrap
+;; For worlds whose edges join: x stays in [0, n).
+[(m/wrap -1.0 10.0) (m/wrap 12.5 10.0) (m/wrap 3.0 10.0)]
+;=> [9.0 2.5 3.0]
+
+;;;; approx=
+[(= (+ 0.1 0.2) 0.3) (m/approx= (+ 0.1 0.2) 0.3) (m/approx= 1.0 1.1 0.2)]
+;=> [false true true]
+
+;;;; rand-range
+(every? (fn [x] (and (>= x -1.0) (< x 1.0))) (repeatedly 100 (fn [] (m/rand-range -1.0 1.0))))
+;=> true
+
+;;;; noise
+;; Smooth: nearby points give nearby values, and the same point the same value.
+(let [a (m/noise 1.5 2.5) b (m/noise 1.51 2.5)]
+  [(<= -1.0 a 1.0) (< (abs (- a b)) 0.1) (= a (m/noise 1.5 2.5))])
+;=> [true true true]
+
+(<= -1.0 (m/noise 0.3 0.7 0.9) 1.0)
+;=> true
+
+;;;; vec2
+(m/vec2 3.0f 4.0f)
+;=> #<skein.math/vec2 {:x 3.0f, :y 4.0f}>
+
+;; By field name, and read with a keyword or the accessor.
+(let [v (m/vec2 :x 1.0f :y 2.0f)]
+  [(:x v) (m/vec2-y v)])
+;=> [1.0f 2.0f]
+
+;;;; vec2-x
+(m/vec2-x (m/vec2 5.0f 6.0f))
+;=> 5.0f
+
+;;;; vec2-y
+(m/vec2-y (m/vec2 5.0f 6.0f))
+;=> 6.0f
+
+;;;; vec2?
+[(m/vec2? (m/vec2 0.0f 0.0f)) (m/vec2? (m/vec3 0.0f 0.0f 0.0f))]
+;=> [true false]
+
+;;;; vec2-zero
+(= m/vec2-zero (m/vec2 0.0f 0.0f))
+;=> true
+
+;;;; vec3
+(m/vec3 1.0f 2.0f 3.0f)
+;=> #<skein.math/vec3 {:x 1.0f, :y 2.0f, :z 3.0f}>
+
+;;;; vec3-x
+(m/vec3-x (m/vec3 1.0f 2.0f 3.0f))
+;=> 1.0f
+
+;;;; vec3-y
+(m/vec3-y (m/vec3 1.0f 2.0f 3.0f))
+;=> 2.0f
+
+;;;; vec3-z
+(m/vec3-z (m/vec3 1.0f 2.0f 3.0f))
+;=> 3.0f
+
+;;;; vec3?
+(m/vec3? (m/vec3 1.0f 2.0f 3.0f))
+;=> true
+
+;;;; vec3-zero
+m/vec3-zero
+;=> #<skein.math/vec3 {:x 0.0f, :y 0.0f, :z 0.0f}>
+
+;;;; vec4
+;; A color, or a point in homogeneous coordinates.
+(m/vec4 1.0f 0.5f 0.0f 1.0f)
+;=> #<skein.math/vec4 {:x 1.0f, :y 0.5f, :z 0.0f, :w 1.0f}>
+
+;;;; vec4-x
+(m/vec4-x (m/vec4 1.0f 2.0f 3.0f 4.0f))
+;=> 1.0f
+
+;;;; vec4-y
+(m/vec4-y (m/vec4 1.0f 2.0f 3.0f 4.0f))
+;=> 2.0f
+
+;;;; vec4-z
+(m/vec4-z (m/vec4 1.0f 2.0f 3.0f 4.0f))
+;=> 3.0f
+
+;;;; vec4-w
+(m/vec4-w (m/vec4 1.0f 2.0f 3.0f 4.0f))
+;=> 4.0f
+
+;;;; vec4?
+(m/vec4? (m/vec4 1.0f 2.0f 3.0f 4.0f))
+;=> true
+
+;;;; v+
+(m/v+ (m/vec2 1.0f 2.0f) (m/vec2 10.0f 20.0f))
+;=> #<skein.math/vec2 {:x 11.0f, :y 22.0f}>
+
+;; Moving a position by a velocity over a frame.
+(let [pos (m/vec2 0.0f 0.0f) vel (m/vec2 3.0f -1.0f) dt 0.5]
+  (m/v+ pos (m/v* vel dt)))
+;=> #<skein.math/vec2 {:x 1.5f, :y -0.5f}>
+
+;;;; v-
+(m/v- (m/vec3 5.0f 5.0f 5.0f) (m/vec3 1.0f 2.0f 3.0f))
+;=> #<skein.math/vec3 {:x 4.0f, :y 3.0f, :z 2.0f}>
+
+;;;; v*
+(m/v* (m/vec2 1.0f 2.0f) 3)
+;=> #<skein.math/vec2 {:x 3.0f, :y 6.0f}>
+
+;;;; vdiv
+(m/vdiv (m/vec2 3.0f 6.0f) 3)
+;=> #<skein.math/vec2 {:x 1.0f, :y 2.0f}>
+
+;;;; negate
+(m/negate (m/vec2 1.0f -2.0f))
+;=> #<skein.math/vec2 {:x -1.0f, :y 2.0f}>
+
+;;;; dot
+;; Zero for perpendicular vectors.
+[(m/dot (m/vec2 1.0f 0.0f) (m/vec2 0.0f 1.0f)) (m/dot (m/vec3 1.0f 2.0f 3.0f) (m/vec3 4.0f 5.0f 6.0f))]
+;=> [0.0f 32.0f]
+
+;;;; cross
+(m/cross (m/vec3 1.0f 0.0f 0.0f) (m/vec3 0.0f 1.0f 0.0f))
+;=> #<skein.math/vec3 {:x 0.0f, :y 0.0f, :z 1.0f}>
+
+;;;; length
+(m/length (m/vec2 3.0f 4.0f))
+;=> 5.0f
+
+;;;; length-sq
+;; Cheaper than length, for comparing distances.
+(m/length-sq (m/vec2 3.0f 4.0f))
+;=> 25.0f
+
+;;;; distance
+(m/distance (m/vec2 0.0f 0.0f) (m/vec2 3.0f 4.0f))
+;=> 5.0f
+
+;;;; normalize
+[(m/normalize (m/vec2 3.0f 4.0f)) (m/normalize m/vec2-zero)]
+;=> [#<skein.math/vec2 {:x 0.6f, :y 0.8f}> #<skein.math/vec2 {:x 0.0f, :y 0.0f}>]
+
+;;;; angle
+(m/angle (m/vec2 0.0f 1.0f))
+;=> 1.5707964f
+
+;;;; from-angle
+;; A velocity of length 2 pointing up.
+(m/approx= (m/vec2-y (m/from-angle (/ m/pi 2) 2)) 2.0)
+;=> true
+
+;;;; perp
+(= (m/perp (m/vec2 1.0f 0.0f)) (m/vec2 0.0f 1.0f))
+;=> true
+
+;;;; rotate
+(let [r (m/rotate (m/vec2 1.0f 0.0f) (/ m/pi 2))]
+  [(m/approx= (:x r) 0.0) (m/approx= (:y r) 1.0)])
+;=> [true true]
+
+;;;; mat3
+;; The columns in order: here a translation by (5, 7).
+(m/mat3 1.0f 0.0f 0.0f
+        0.0f 1.0f 0.0f
+        5.0f 7.0f 1.0f)
+;=> #<skein.math/mat3 {:m00 1.0f, :m01 0.0f, :m02 0.0f, :m10 0.0f, :m11 1.0f, :m12 0.0f, :m20 5.0f, :m21 7.0f, :m22 1.0f}>
+
+;;;; mat3?
+(m/mat3? m/mat3-identity)
+;=> true
+
+;;;; mat3-identity
+(= m/mat3-identity (m/mat3 1.0f 0.0f 0.0f 0.0f 1.0f 0.0f 0.0f 0.0f 1.0f))
+;=> true
+
+;;;; mat3-at
+;; Column 2, row 0 holds the x translation.
+(m/mat3-at (m/mat3-translation 5 7) 2 0)
+;=> 5.0f
+
+;;;; mat3-m00
+(m/mat3-m00 (m/mat3-scale 2 3))
+;=> 2.0f
+
+;;;; mat3-m01
+(m/mat3-m01 m/mat3-identity)
+;=> 0.0f
+
+;;;; mat3-m02
+(m/mat3-m02 m/mat3-identity)
+;=> 0.0f
+
+;;;; mat3-m10
+(m/mat3-m10 m/mat3-identity)
+;=> 0.0f
+
+;;;; mat3-m11
+(m/mat3-m11 (m/mat3-scale 2 3))
+;=> 3.0f
+
+;;;; mat3-m12
+(m/mat3-m12 m/mat3-identity)
+;=> 0.0f
+
+;;;; mat3-m20
+(m/mat3-m20 (m/mat3-translation 5 7))
+;=> 5.0f
+
+;;;; mat3-m21
+(m/mat3-m21 (m/mat3-translation 5 7))
+;=> 7.0f
+
+;;;; mat3-m22
+(m/mat3-m22 m/mat3-identity)
+;=> 1.0f
+
+;;;; mat3-translation
+(m/transform-point (m/mat3-translation 5 7) (m/vec2 1.0f 1.0f))
+;=> #<skein.math/vec2 {:x 6.0f, :y 8.0f}>
+
+;;;; mat3-rotation
+(let [p (m/transform-point (m/mat3-rotation (/ m/pi 2)) (m/vec2 1.0f 0.0f))]
+  [(m/approx= (:x p) 0.0) (m/approx= (:y p) 1.0)])
+;=> [true true]
+
+;;;; mat3-scale
+[(m/transform-point (m/mat3-scale 2) (m/vec2 1.0f 1.0f))
+ (m/transform-point (m/mat3-scale 2 3) (m/vec2 1.0f 1.0f))]
+;=> [#<skein.math/vec2 {:x 2.0f, :y 2.0f}> #<skein.math/vec2 {:x 2.0f, :y 3.0f}>]
+
+;;;; m*
+;; The right-hand matrix applies first: scale, then move.
+(m/transform-point (m/m* (m/mat3-translation 10 0) (m/mat3-scale 2)) (m/vec2 1.0f 1.0f))
+;=> #<skein.math/vec2 {:x 12.0f, :y 2.0f}>
+
+;;;; transform
+;; A vec3 by a mat3, a vec4 by a mat4; with a last component of 1 a point moves.
+(m/transform (m/mat3-translation 5 7) (m/vec3 1.0f 1.0f 1.0f))
+;=> #<skein.math/vec3 {:x 6.0f, :y 8.0f, :z 1.0f}>
+
+;;;; transform-point
+(m/transform-point (m/mat4-translation 1 2 3) (m/vec3 0.0f 0.0f 0.0f))
+;=> #<skein.math/vec3 {:x 1.0f, :y 2.0f, :z 3.0f}>
+
+;;;; transform-vector
+;; Directions ignore translation.
+(m/transform-vector (m/mat4-translation 1 2 3) (m/vec3 1.0f 0.0f 0.0f))
+;=> #<skein.math/vec3 {:x 1.0f, :y 0.0f, :z 0.0f}>
+
+;;;; transpose
+(= (m/transpose (m/mat3-translation 5 7)) (m/mat3 1.0f 0.0f 5.0f 0.0f 1.0f 7.0f 0.0f 0.0f 1.0f))
+;=> true
+
+;;;; determinant
+[(m/determinant (m/mat3-scale 2 3)) (m/determinant (m/mat4-scale 2 3 4))]
+;=> [6.0f 24.0]
+
+;;;; inverse
+(= (m/inverse (m/mat3-translation 5 7)) (m/mat3-translation -5 -7))
+;=> true
+
+;; A matrix that has none.
+(m/inverse (m/mat3-scale 0))
+;=> nil
+
+;;;; mat4
+(m/mat4? (m/mat4 1.0f 0.0f 0.0f 0.0f  0.0f 1.0f 0.0f 0.0f  0.0f 0.0f 1.0f 0.0f  0.0f 0.0f 0.0f 1.0f))
+;=> true
+
+;;;; mat4?
+(m/mat4? m/mat3-identity)
+;=> false
+
+;;;; mat4-identity
+(m/transform-point m/mat4-identity (m/vec3 1.0f 2.0f 3.0f))
+;=> #<skein.math/vec3 {:x 1.0f, :y 2.0f, :z 3.0f}>
+
+;;;; mat4-at
+(m/mat4-at (m/mat4-translation 1 2 3) 3 1)
+;=> 2.0f
+
+;;;; mat4-m00
+(m/mat4-m00 (m/mat4-scale 2 3 4))
+;=> 2.0f
+
+;;;; mat4-m01
+(m/mat4-m01 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m02
+(m/mat4-m02 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m03
+(m/mat4-m03 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m10
+(m/mat4-m10 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m11
+(m/mat4-m11 (m/mat4-scale 2 3 4))
+;=> 3.0f
+
+;;;; mat4-m12
+(m/mat4-m12 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m13
+(m/mat4-m13 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m20
+(m/mat4-m20 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m21
+(m/mat4-m21 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m22
+(m/mat4-m22 (m/mat4-scale 2 3 4))
+;=> 4.0f
+
+;;;; mat4-m23
+(m/mat4-m23 m/mat4-identity)
+;=> 0.0f
+
+;;;; mat4-m30
+(m/mat4-m30 (m/mat4-translation 1 2 3))
+;=> 1.0f
+
+;;;; mat4-m31
+(m/mat4-m31 (m/mat4-translation 1 2 3))
+;=> 2.0f
+
+;;;; mat4-m32
+(m/mat4-m32 (m/mat4-translation 1 2 3))
+;=> 3.0f
+
+;;;; mat4-m33
+(m/mat4-m33 m/mat4-identity)
+;=> 1.0f
+
+;;;; mat4-translation
+(m/transform-point (m/mat4-translation 1 2 3) (m/vec3 1.0f 1.0f 1.0f))
+;=> #<skein.math/vec3 {:x 2.0f, :y 3.0f, :z 4.0f}>
+
+;;;; mat4-scale
+(m/transform-point (m/mat4-scale 2 3 4) (m/vec3 1.0f 1.0f 1.0f))
+;=> #<skein.math/vec3 {:x 2.0f, :y 3.0f, :z 4.0f}>
+
+;;;; mat4-rotation
+;; A quarter turn around z takes x to y.
+(let [r (m/mat4-rotation (m/quat-from-axis-angle (m/vec3 0.0f 0.0f 1.0f) (/ m/pi 2)))
+      p (m/transform-point r (m/vec3 1.0f 0.0f 0.0f))]
+  [(m/approx= (:x p) 0.0) (m/approx= (:y p) 1.0)])
+;=> [true true]
+
+;;;; perspective
+;; A camera's projection: 60° tall, for a 16:9 window, seeing from 0.1 to 100.
+(m/mat4? (m/perspective (m/deg->rad 60) (/ 16 9) 0.1 100.0))
+;=> true
+
+;; A point on the near plane has depth 0, one on the far plane depth 1.
+(let [p (m/perspective 1.0 1.0 1.0 10.0)
+      depth (fn [z] (let [v (m/transform p (m/vec4 0.0f 0.0f (f32 z) 1.0f))] (/ (:z v) (:w v))))]
+  [(m/approx= (depth -1.0) 0.0) (m/approx= (depth -10.0) 1.0)])
+;=> [true true]
+
+;;;; ortho
+;; A 2D projection: pixels of an 800x600 window to clip space.
+(let [p (m/ortho 0 800 0 600 -1 1)
+      corner (m/transform-point p (m/vec3 800.0f 600.0f 0.0f))]
+  [(m/approx= (:x corner) 1.0) (m/approx= (:y corner) 1.0)])
+;=> [true true]
+
+;;;; look-at
+;; The camera's position goes to the origin.
+(let [view (m/look-at (m/vec3 0.0f 0.0f 5.0f) m/vec3-zero (m/vec3 0.0f 1.0f 0.0f))]
+  (m/length (m/transform-point view (m/vec3 0.0f 0.0f 5.0f))))
+;=> 0.0f
+
+;;;; quat
+;; x y z the vector part, w the scalar.
+(m/quat 0.0f 0.0f 0.0f 1.0f)
+;=> #<skein.math/quat {:x 0.0f, :y 0.0f, :z 0.0f, :w 1.0f}>
+
+;;;; quat-x
+(m/quat-x (m/quat 1.0f 2.0f 3.0f 4.0f))
+;=> 1.0f
+
+;;;; quat-y
+(m/quat-y (m/quat 1.0f 2.0f 3.0f 4.0f))
+;=> 2.0f
+
+;;;; quat-z
+(m/quat-z (m/quat 1.0f 2.0f 3.0f 4.0f))
+;=> 3.0f
+
+;;;; quat-w
+(m/quat-w (m/quat 1.0f 2.0f 3.0f 4.0f))
+;=> 4.0f
+
+;;;; quat?
+(m/quat? m/quat-identity)
+;=> true
+
+;;;; quat-identity
+(m/quat-rotate m/quat-identity (m/vec3 1.0f 2.0f 3.0f))
+;=> #<skein.math/vec3 {:x 1.0f, :y 2.0f, :z 3.0f}>
+
+;;;; quat-from-axis-angle
+;; The axis needn't be normalized.
+(let [q (m/quat-from-axis-angle (m/vec3 0.0f 0.0f 5.0f) (/ m/pi 2))
+      v (m/quat-rotate q (m/vec3 1.0f 0.0f 0.0f))]
+  [(m/approx= (:x v) 0.0) (m/approx= (:y v) 1.0)])
+;=> [true true]
+
+;;;; quat-rotate
+(let [q (m/quat-from-axis-angle (m/vec3 0.0f 1.0f 0.0f) m/pi)
+      v (m/quat-rotate q (m/vec3 1.0f 0.0f 0.0f))]
+  (m/approx= (:x v) -1.0))
+;=> true
+
+;;;; quat-normalize
+(m/quat-normalize (m/quat 0.0f 0.0f 0.0f 2.0f))
+;=> #<skein.math/quat {:x 0.0f, :y 0.0f, :z 0.0f, :w 1.0f}>
+
+;;;; conjugate
+;; A rotation, then its conjugate, gets back where it started.
+(let [q (m/quat-from-axis-angle (m/vec3 1.0f 1.0f 0.0f) 0.7)
+      v (m/quat-rotate (m/conjugate q) (m/quat-rotate q (m/vec3 1.0f 2.0f 3.0f)))]
+  (m/approx= (:z v) 3.0 1e-4))
+;=> true
+
+;;;; slerp
+;; Halfway between no turn and a half turn around y is a quarter turn.
+(let [q (m/slerp m/quat-identity (m/quat-from-axis-angle (m/vec3 0.0f 1.0f 0.0f) m/pi) 0.5)
+      v (m/quat-rotate q (m/vec3 1.0f 0.0f 0.0f))]
+  (m/approx= (:z v) -1.0 1e-4))
+;=> true
