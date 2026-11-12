@@ -260,6 +260,11 @@ const Stream = struct {
     /// timed_out, and the reading function signals net-timeout.
     read_timeout: u64 = 0,
     timed_out: bool = false,
+    /// A socket this side has shut down: a read's error is its end (Windows fails reads
+    /// after shutdown where POSIX returns the end).
+    shut: bool = false,
+    /// Why a read or write failed: the system's error's name, for the error message.
+    why: []const u8 = "",
     /// What read-line or read-text had gathered when a read timed out, which the next
     /// read starts with, so a timeout loses nothing.
     carry: std.ArrayList(u8) = .empty,
@@ -336,6 +341,7 @@ fn shutdownBlocking(arg: ?*anyopaque) void {
 pub fn shutdownSocket(h: Value) void {
     const s = streamOf(h);
     var call: ShutdownCall = .{ .sock = s.sock orelse rt.raise(.@"error", "the stream isn't a socket", .{}) };
+    s.shut = true;
     @import("sched.zig").blocking(shutdownBlocking, &call);
 }
 
@@ -389,7 +395,10 @@ fn fillSocketBlocking(arg: ?*anyopaque) void {
             s.timed_out = true;
             return;
         }
-        s.failed = true;
+        if (!s.shut) {
+            s.failed = true;
+            s.why = @errorName(err);
+        }
         s.eof = true;
         return;
     };
@@ -477,7 +486,10 @@ fn takeCarry(s: *Stream, out: *std.ArrayList(u8)) bool {
 }
 
 fn checkFailed(s: *Stream) void {
-    if (s.failed) rt.raise(.@"error", "the stream couldn't be read or written", .{});
+    if (s.failed) {
+        if (s.why.len > 0) rt.raise(.@"error", "the stream couldn't be read or written ({s})", .{s.why});
+        rt.raise(.@"error", "the stream couldn't be read or written", .{});
+    }
 }
 
 /// The next line (without its newline, or a \r before it), or nil at the end.
@@ -597,10 +609,12 @@ fn flushBlocking(arg: ?*anyopaque) void {
         var w = std.Io.net.Stream.Writer.init(sock, io.stdIo(), &buf);
         w.interface.writeAll(s.pending.items) catch {
             s.failed = true;
+            s.why = if (w.err) |e| @errorName(e) else "the write failed";
             return;
         };
         w.interface.flush() catch {
             s.failed = true;
+            s.why = if (w.err) |e| @errorName(e) else "the write failed";
             return;
         };
         s.pending.clearRetainingCapacity();
