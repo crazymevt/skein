@@ -331,9 +331,19 @@ fn exitOf(h: Value) Value {
 // ---------------------------------------------------------------------------------------
 // The environment and this program
 
-/// (%environment): this program's environment, a map of strings.
+const EnvironCall = struct { map: ?std.process.Environ.Map = null };
+
+fn environBlocking(arg: ?*anyopaque) void {
+    const c: *EnvironCall = @ptrCast(@alignCast(arg));
+    c.map = platform.processEnviron().createMap(alloc) catch null;
+}
+
+/// (%environment): this program's environment, a map of strings. Read as a path call
+/// (io.pathBlocking): on Windows it takes wide-character buffers too big for a fiber.
 fn environment() Value {
-    var map = platform.processEnviron().createMap(alloc) catch rt.fatal("out of memory", .{});
+    var call: EnvironCall = .{};
+    io.pathBlocking(environBlocking, &call);
+    var map = call.map orelse rt.fatal("out of memory", .{});
     defer map.deinit();
     var result = coll.mapOf(&.{});
     var it = map.iterator();
@@ -344,11 +354,20 @@ fn environment() Value {
     return result;
 }
 
-/// (%executable-path): this program's executable, with / as separators.
+const ExeCall = struct { buf: [2048]u8 = undefined, n: ?usize = null };
+
+fn exeBlocking(arg: ?*anyopaque) void {
+    const c: *ExeCall = @ptrCast(@alignCast(arg));
+    c.n = std.process.executablePath(io.stdIo(), &c.buf) catch null;
+}
+
+/// (%executable-path): this program's executable, with / as separators. A path call
+/// (io.pathBlocking): on Windows, Zig's buffers for it are too big for a fiber's stack.
 fn executablePath() Value {
-    var buf: [2048]u8 = undefined;
-    const n = std.process.executablePath(io.stdIo(), &buf) catch
-        rt.raise(.@"error", "cannot find the program's executable", .{});
+    var call: ExeCall = .{};
+    io.pathBlocking(exeBlocking, &call);
+    const buf = &call.buf;
+    const n = call.n orelse rt.raise(.@"error", "cannot find the program's executable", .{});
     for (buf[0..n]) |*ch| if (ch.* == '\\') {
         ch.* = '/';
     };

@@ -224,10 +224,19 @@ fn listDirectory(path: Value) Value {
 /// The directory holding the program's assets, ending with / (skein.io/resource-dir,
 /// D-073): the executable's directory, or a macOS app's Contents/Resources. Separators
 /// are /, which every OS accepts.
+const DirCall = struct { buf: [2048]u8 = undefined, n: ?usize = null };
+
+fn dirBlocking(arg: ?*anyopaque) void {
+    const c: *DirCall = @ptrCast(@alignCast(arg));
+    c.n = std.process.executableDirPath(stdIo(), c.buf[0..1024]) catch null;
+}
+
 fn resourceDir() Value {
-    var buf: [2048]u8 = undefined;
-    const n = std.process.executableDirPath(stdIo(), buf[0..1024]) catch
-        rt.raise(.@"error", "cannot find the program's executable", .{});
+    // A path call: on Windows, Zig's buffers for it are too big for a fiber's stack.
+    var call: DirCall = .{};
+    pathBlocking(dirBlocking, &call);
+    const buf = &call.buf;
+    const n = call.n orelse rt.raise(.@"error", "cannot find the program's executable", .{});
     for (buf[0..n]) |*c| if (c.* == '\\') {
         c.* = '/';
     };
