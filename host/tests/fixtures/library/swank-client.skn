@@ -32,7 +32,8 @@
 (defn -main [& args]
   (let [p (process/process [(skeinc) "dev" "--no-server" "--swank-port" "0"
                             "host/tests/fixtures/library/support/swank-target.skn"]
-                           {:err :out})
+                           ;; Its errors go to ours: :err :out isn't on Windows yet.
+                           {:err :inherit})
         lines (io/line-seq (:out p))
         port (swank-port lines)]
     (println "skein dev's Swank port:" (pos? port))
