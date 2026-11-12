@@ -108,7 +108,8 @@ __asm__(
  * if it had called it. platform.zig closes the zone again once the fiber's stack is
  * shallow, and keeps these thread-locals right for the running fiber. */
 
-/* The running fiber's soft zone [low, high); 0 when the thread runs on its own stack. */
+/* The running fiber's soft zone [low, high): the thread's own stack has one too if
+ * platform.zig's guardThreadStack made it (the main thread's), else 0. */
 _Thread_local uintptr_t sk_fiber_soft_low, sk_fiber_soft_high;
 /* Set once its soft zone is open (until platform.zig closes it). */
 _Thread_local int sk_fiber_overflowed;
@@ -181,3 +182,15 @@ void sk_fiber_set_zone(uintptr_t low, uintptr_t high, int overflowed) {
 }
 
 int sk_fiber_overflowed_now(void) { return sk_fiber_overflowed; }
+
+/* cond.zig, as a frame is popped: once an overflow's unwind has left the soft zone, with
+ * room to spare for mprotect's own frames, close it again, so the next overflow is caught
+ * too. (Switching fibers closes a fiber's as well: platform.zig.) */
+void sk_stack_unwound(void) {
+    if (!sk_fiber_overflowed) return;
+    volatile char here = 0;
+    if ((uintptr_t)&here > sk_fiber_soft_high + 16 * 1024) {
+        mprotect((void *)sk_fiber_soft_low, sk_fiber_soft_high - sk_fiber_soft_low, PROT_NONE);
+        sk_fiber_overflowed = 0;
+    }
+}

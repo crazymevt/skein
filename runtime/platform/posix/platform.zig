@@ -346,11 +346,70 @@ pub fn prepareThreadForFibers() void {
     sk_fiber_prepare_thread();
 }
 
+/// The calling thread's own stack's soft zone, if guardThreadStack made one, and the
+/// stack's size.
+threadlocal var thread_soft_low: usize = 0;
+threadlocal var thread_soft_high: usize = 0;
+threadlocal var thread_stack_size: usize = 0;
+
+/// Catch an overflow of the calling thread's own stack as a fiber's is caught (the main
+/// thread's, from sk_init): a soft zone near the bottom of the stack, which fibers.c
+/// watches while the thread runs its own stack. Does nothing if the zone can't be made.
+pub fn guardThreadStack() void {
+    sk_fiber_prepare_thread();
+    const bounds = currentStackBounds();
+    const page = pageSize();
+    const soft = std.mem.alignForward(usize, soft_zone_size, page);
+    // A page above the bottom, so the zone stays clear of whatever is below the stack.
+    const low = std.mem.alignForward(usize, bounds.low, page) + page;
+    const high = low + soft;
+    var marker: usize = 0;
+    std.mem.doNotOptimizeAway(&marker);
+    if (high + 4 * soft > @intFromPtr(&marker)) return; // too small a stack to bother
+    switch (builtin.os.tag) {
+        // macOS maps the main thread's whole stack up front.
+        .macos => if (c.mprotect(@ptrFromInt(low), soft, .{}) != 0) return,
+        // Linux grows it as it's used: map the zone in its way. A stack's growth stops
+        // short of an accessible mapping, but not of an inaccessible one like this.
+        else => {
+            const flags: posix.MAP = .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .FIXED_NOREPLACE = true, .NORESERVE = true };
+            const mem = posix.mmap(@ptrFromInt(low), soft, .{}, flags, -1, 0) catch return;
+            if (@intFromPtr(mem.ptr) != low) {
+                posix.munmap(mem);
+                return;
+            }
+        },
+    }
+    thread_soft_low = low;
+    thread_soft_high = high;
+    thread_stack_size = bounds.high - bounds.low;
+    sk_fiber_set_zone(low, high, 0);
+}
+
+/// Whether `ctx` stands for a thread's own stack (initThreadFiber), not a fiber's.
+pub fn isThreadContext(ctx: *const FiberContext) bool {
+    return ctx.stack.len == 0;
+}
+
+/// The size of the calling thread's own stack, if guardThreadStack guards it; else 0.
+pub fn guardedThreadStackSize() usize {
+    return thread_stack_size;
+}
+
+extern fn sk_stack_unwound() void;
+
+/// A frame is popped (cond.zig), maybe where an unwind landed: close the soft zone that
+/// an overflow opened, once the stack is out of it.
+pub inline fn stackUnwound() void {
+    sk_stack_unwound();
+}
+
 /// The running fiber `ctx` is being switched away from, with its stack at `sp`: note an
 /// overflow, and close its soft zone again once nothing on the stack is in it.
 pub fn fiberSwitchingOut(ctx: *FiberContext, sp: usize) void {
-    if (sk_fiber_overflowed_now() != 0) ctx.overflowed = true;
-    if (ctx.overflowed and sp > ctx.soft_high) {
+    ctx.overflowed = sk_fiber_overflowed_now() != 0;
+    // With room to spare for mprotect's own frames.
+    if (ctx.overflowed and sp > ctx.soft_high + 16 * 1024) {
         _ = c.mprotect(@ptrFromInt(ctx.soft_low), ctx.soft_high - ctx.soft_low, .{});
         ctx.overflowed = false;
     }
@@ -369,7 +428,12 @@ pub fn destroyFiber(ctx: *FiberContext) void {
 
 /// Make `ctx` stand for the calling thread's own stack, so a fiber can switch back to it.
 pub fn initThreadFiber(ctx: *FiberContext) void {
-    ctx.* = .{ .high = currentStackBounds().high };
+    ctx.* = .{
+        .high = currentStackBounds().high,
+        .soft_low = thread_soft_low,
+        .soft_high = thread_soft_high,
+        .overflowed = thread_soft_high != 0 and sk_fiber_overflowed_now() != 0,
+    };
 }
 
 /// Save the running context into `from` and resume `to`. Returns when something switches

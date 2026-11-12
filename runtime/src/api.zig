@@ -2,6 +2,7 @@
 //! inlines the fixnum fast paths; everything else comes here.
 
 const std = @import("std");
+const platform = @import("platform");
 const rt = @import("rt.zig");
 const num = @import("num.zig");
 const string = @import("string.zig");
@@ -28,6 +29,8 @@ comptime {
 extern fn sk_mv_buffer() [*]Value;
 
 export fn sk_init() void {
+    // An overflow of the main thread's stack signals stack-overflow, as a fiber's does.
+    platform.guardThreadStack();
     @import("mathtime.zig").init();
     @import("verify.zig").install();
     _ = gc.attachThread();

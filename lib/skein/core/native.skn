@@ -707,6 +707,15 @@ f from init: f must be associative, with init as its identity."
                                           (recur (inc i) (f acc (nth items i)))
                                           acc)))))))
 
+(defn %declaim
+  "declaim's work at run time (D-056's native typed code): the declaration's form is
+checked, as Phase 0 checks it; the native compiler doesn't use ftype declarations yet."
+  [spec]
+  (when-not (and (seq? spec) (symbol? (first spec)) (= "ftype" (name (first spec))))
+    (error (str "declaim supports (ftype (fn [arg-types] return-type) names...), not "
+                (pr-str spec))))
+  nil)
+
 (defn %pdotimes
   "pdotimes: call (f i) for each i from 0 below n, in parallel."
   [n f]

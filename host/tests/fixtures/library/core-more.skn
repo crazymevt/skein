@@ -97,4 +97,13 @@
     (is (= 30000 (count (vec s))))
     (is (= \é (nth (vec s) 29995)))))
 
+(defn- deep [n] (inc (deep (inc n))))
+
+(deftest stack-overflow-caught
+  ;; On the main thread's own stack as on a fiber's, again and again: the room opened to
+  ;; signal one overflow closes once the unwind has left it.
+  (dotimes [_ 3]
+    (is (= :caught (handler-case (deep 0) (stack-overflow [_] :caught)))))
+  (is (= :caught @(future (handler-case (deep 0) (stack-overflow [_] :caught))))))
+
 (prn (select-keys (run-tests 'core-more) [:test :fail :error]))

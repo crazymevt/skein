@@ -184,6 +184,8 @@ pub fn pushRestarts(f: *Frame, restart_names: []Value, fns: [*]const Value, repo
 
 pub fn popFrame(f: *Frame) void {
     setTop(f.prev);
+    // Where a stack overflow's unwind lands, the stack's soft zone can close again.
+    platform.stackUnwound();
 }
 
 pub fn topFrame() ?*Frame {

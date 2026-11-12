@@ -328,12 +328,14 @@ extern fn sk_stack_overflow_trampoline() callconv(.c) noreturn;
 /// Whether this thread runs a fiber now (not its own stack), and whether it overflowed.
 threadlocal var in_fiber = false;
 threadlocal var overflowed_now = false;
+/// The size of the thread's own stack, if guardThreadStack guards it; else 0.
+threadlocal var thread_stack_size: usize = 0;
 
 fn onException(info: *std.os.windows.EXCEPTION_POINTERS) callconv(.winapi) c_long {
     const EXCEPTION_CONTINUE_EXECUTION: c_long = -1;
     const EXCEPTION_CONTINUE_SEARCH: c_long = 0;
     if (info.ExceptionRecord.ExceptionCode != std.os.windows.EXCEPTION_STACK_OVERFLOW or
-        !in_fiber or overflowed_now) return EXCEPTION_CONTINUE_SEARCH;
+        !(in_fiber or thread_stack_size != 0) or overflowed_now) return EXCEPTION_CONTINUE_SEARCH;
     overflowed_now = true;
     const ctx = info.ContextRecord;
     switch (builtin.cpu.arch) {
@@ -361,11 +363,37 @@ pub fn prepareThreadForFibers() void {
     if (!handler_installed.swap(true, .acq_rel)) _ = AddVectoredExceptionHandler(1, onException);
 }
 
+/// Catch an overflow of the calling thread's own stack as a fiber's is caught (the main
+/// thread's, from sk_init): the handler, and the stack guarantee to signal it in.
+pub fn guardThreadStack() void {
+    prepareThreadForFibers();
+    var guarantee = overflow_guarantee;
+    if (SetThreadStackGuarantee(&guarantee) == 0) return;
+    const bounds = currentStackBounds();
+    thread_stack_size = bounds.high - bounds.low;
+}
+
+/// Whether `ctx` stands for a thread's own stack (initThreadFiber), not a fiber's.
+pub fn isThreadContext(ctx: *const FiberContext) bool {
+    return ctx.is_thread;
+}
+
+/// The size of the calling thread's own stack, if guardThreadStack guards it; else 0.
+pub fn guardedThreadStackSize() usize {
+    return thread_stack_size;
+}
+
+/// A frame is popped (cond.zig), maybe where an unwind landed: put Windows' guard page
+/// back after an overflow.
+pub inline fn stackUnwound() void {
+    if (overflowed_now and _resetstkoflw() != 0) overflowed_now = false;
+}
+
 /// The running fiber `ctx` is being switched away from, with its stack at `sp`: note an
 /// overflow, and put Windows' guard page back once the stack is shallow.
 pub fn fiberSwitchingOut(ctx: *FiberContext, sp: usize) void {
     _ = sp;
-    if (overflowed_now) ctx.overflowed = true;
+    ctx.overflowed = overflowed_now;
     if (ctx.overflowed and _resetstkoflw() != 0) ctx.overflowed = false;
 }
 
@@ -397,7 +425,12 @@ threadlocal var thread_fiber: ?*anyopaque = null;
 /// Make `ctx` stand for the calling thread's own stack, so a fiber can switch back to it.
 pub fn initThreadFiber(ctx: *FiberContext) void {
     if (thread_fiber == null) thread_fiber = ConvertThreadToFiberEx(null, FIBER_FLAG_FLOAT_SWITCH);
-    ctx.* = .{ .handle = thread_fiber, .high = currentStackBounds().high, .is_thread = true };
+    ctx.* = .{
+        .handle = thread_fiber,
+        .high = currentStackBounds().high,
+        .is_thread = true,
+        .overflowed = overflowed_now,
+    };
 }
 
 /// Save the running context into `from` and resume `to`. Returns when something switches

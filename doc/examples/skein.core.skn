@@ -50,7 +50,7 @@
 ;; Declares the types of a function's arguments and result for the compiler, in a
 ;; compiled file (DESIGN §12.2).
 (declaim (ftype (fn [f64 f64] f64) hypot))
-;; not run
+;=> nil
 
 ;;;; ns
 ;; The first form of a file: the namespace's name, docstring and what it requires.
@@ -2177,7 +2177,7 @@
 ;;;; stack-overflow
 (defn deep [n] (inc (deep (inc n))))
 (handler-case (deep 0) (stack-overflow [_] :caught))
-;; not run
+;=> :caught
 
 ;;;; task-cancelled-error
 ;; What deref of a cancelled task signals.

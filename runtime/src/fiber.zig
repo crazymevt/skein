@@ -203,9 +203,12 @@ pub fn yield() void {
     switchTo(current().resumer.?);
 }
 
-/// Where a fiber that overflowed its stack continues, in the room the platform opened
-/// below it (D-024): signal the error there, like any other.
+/// Where a fiber, or a thread whose stack is guarded (the main thread's), that overflowed
+/// its stack continues, in the room the platform opened below it (D-024): signal the error
+/// there, like any other.
 export fn sk_stack_overflow() callconv(.c) noreturn {
+    const thread = if (current_fiber) |f| platform.isThreadContext(&f.ctx) else true;
+    if (thread) rt.raise(.stack_overflow, "stack overflow: the thread used all of its {d} KB stack", .{platform.guardedThreadStackSize() / 1024});
     rt.raise(.stack_overflow, "stack overflow: the fiber used all of its {d} KB stack", .{default_stack_size / 1024});
 }
 
