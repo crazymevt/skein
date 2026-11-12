@@ -391,6 +391,9 @@ more."]
 names, and the old values."]
    ["close" "([x])"
     "Close x: a generic function, which skein.io's streams specialize, and with-open calls."]
+   ["re-pattern" "([s])"
+    "The regular expression pattern compiled from the string s, in Java's syntax (a pattern
+is itself), as the literal #\"...\" is: re-find, re-seq and re-matches use it (D-105)."]
    ["deref-object" "([x timeout timeout-value])"
     "What deref (@) gives for an instance: a generic function that classes specialize to join
 @, as Clojure's IDeref; timeout and timeout-value are nil when deref had none

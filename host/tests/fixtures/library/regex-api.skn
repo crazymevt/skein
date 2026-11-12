@@ -1,0 +1,36 @@
+;; skein.core's regex functions (M3.3 step 2, D-105), natively: Clojure's results from
+;; re-find, re-matches and re-seq, a matcher, empty matches, patterns as values, and
+;; errors for what isn't a pattern.
+(ns regex-api)
+
+(defn- err [f] (try (f) :no-error (catch error e (condition-message e))))
+
+(defn -main [& args]
+  (let [digits (re-pattern "\\d+")
+        date (re-pattern "(\\d{4})-(\\d\\d)(-(\\d\\d))?")]
+    ;; Results: the text without groups, a vector with them.
+    (println (re-find digits "abc 123 45") (re-find date "on 2026-11 and 2026-11-12"))
+    (println (re-find digits "none") (re-find "b+" "abbbc"))
+    (println (re-matches digits "123") (re-matches digits "123a") (re-matches date "2026-11-12"))
+    (println (re-seq digits "1 22 333") (re-seq date "2026-11 2025-01-02"))
+    (println (re-seq (re-pattern "x") "none"))
+    ;; Empty matches move on a character, as Java's do.
+    (println (re-seq (re-pattern "a*") "baac") (re-seq (re-pattern "") "ab"))
+    (println (re-seq (re-pattern "\\b") "hi you") (count (re-seq (re-pattern "\\w*") "héllo")))
+    ;; A matcher.
+    (let [m (re-matcher date "2026-11 and 2025-01-02")]
+      (println (re-find m) (re-groups m))
+      (println (re-find m) (re-groups m))
+      (println (re-find m) (err (fn [] (re-groups m)))))
+    ;; Patterns as values.
+    (println (pr-str digits) (str (re-pattern "a\"b")) (class-name (class-of digits)))
+    (println "equal only to itself:" (= digits digits) (= digits (re-pattern "\\d+"))
+             (count #{digits (re-pattern "\\d+")}) (identical? digits (re-pattern digits)))
+    (println "named groups:" (%re-names (re-pattern "(?<y>\\d+)-(?<m>\\d+)")))
+    ;; Unicode: code points, not bytes.
+    (println (re-seq (re-pattern ".") "a😀é") (re-find (re-pattern "[é-ë]+") "xêëy"))
+    ;; Errors.
+    (doseq [bad ["(" "a)" "[a" "*a" "a{2,1}" "a**" "\\k<nope>" "(a)\\2" "(?<=a)b" "a++"
+                 "[a&&b]" "\\q" "a{1001}"]]
+      (println (pr-str bad) "->" (err (fn [] (re-pattern bad)))))
+    (println (err (fn [] (re-find 42 "x"))))))

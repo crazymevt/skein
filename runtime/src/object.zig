@@ -168,6 +168,9 @@ pub const TypeId = enum(u16) {
     tree_node = 59,
     /// A seq over a sorted map or set: [stack (list of nodes), flags].
     tseq = 60,
+    // M3.3's regular expressions (D-105; regex.zig).
+    /// A pattern: [source (string), program handle (fixnum), identity hash].
+    pattern = 61,
     _,
 };
 

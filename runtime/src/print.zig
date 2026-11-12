@@ -123,6 +123,7 @@ pub fn write(v: Value, out: *std.ArrayList(u8), readably: bool) void {
             put(out, ">");
         },
         .foreign_ptr, .owned_ptr, .ctype => @import("ffi.zig").write(v, out),
+        .pattern => @import("regex.zig").write(v, out, readably),
         else => put(out, "#<object>"),
     }
 }

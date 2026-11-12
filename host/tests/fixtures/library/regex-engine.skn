@@ -1,0 +1,15 @@
+;; The regex engine (M3.3 step 1, D-105), natively, against the reference model: every
+;; case in regex-cases.edn (written by host/tools/regex-cases.py from Python's re, and
+;; Java's results for syntax Python lacks) finds the same match and groups.
+(ns regex-engine
+  (:require [skein.edn :as edn]
+            [skein.io :as io]))
+
+(defn -main [& args]
+  (let [cases (edn/read-string (io/read-file "host/tests/fixtures/library/regex-cases.edn"))
+        result (fn [[p s _]] (when-let [v (%re-exec (re-pattern p) s 0 false)] (subvec v 1)))
+        wrong (remove (fn [c] (= (nth c 2) (result c))) cases)]
+    (println "cases:" (count cases))
+    (println "mismatches:" (count wrong))
+    (doseq [[p s e :as c] (take 20 wrong)]
+      (println (pr-str p) (pr-str s) "expected" (pr-str e) "got" (pr-str (result c))))))

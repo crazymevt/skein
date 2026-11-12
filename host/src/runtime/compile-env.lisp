@@ -201,6 +201,27 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore f))
   nil)
 
+;; Regular expressions (M3.3, D-105) are native only.
+(defcore "re-pattern" (s)
+  (declare (ignore s))
+  (error "regular expressions are native only (D-105)"))
+
+(defcore "%re-exec" (p s start full)
+  (declare (ignore p s start full))
+  (error "regular expressions are native only (D-105)"))
+
+(defcore "%re-names" (p)
+  (declare (ignore p))
+  (error "regular expressions are native only (D-105)"))
+
+(defcore "%re-source" (p)
+  (declare (ignore p))
+  (error "regular expressions are native only (D-105)"))
+
+(defcore "%pattern?" (x)
+  (declare (ignore x))
+  (error "regular expressions are native only (D-105)"))
+
 ;; skein.json (M3.2, D-104) is native only.
 (defcore "%json-read" (s key-fn value-fn)
   (declare (ignore s key-fn value-fn))

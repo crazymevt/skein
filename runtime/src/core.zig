@@ -369,8 +369,9 @@ fn strFn(a: Args) Value {
     defer out.deinit(rt.scratch);
     for (a) |x| {
         if (x == Value.nil) continue;
-        // Strings and chars as they are; everything else as pr prints it.
-        print.write(x, &out, !(string.isString(x) or x.isChar()));
+        // Strings and chars as they are, a pattern as its source (as Clojure's str gives
+        // it); everything else as pr prints it.
+        print.write(x, &out, !(string.isString(x) or x.isChar() or x.isObjectOf(.pattern)));
     }
     return string.make(out.items);
 }
@@ -1707,7 +1708,7 @@ const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(watch.entries)
     entriesOf(evaluate.entries) ++ entriesOf(devio.entries) ++
     entriesOf(@import("stm.zig").entries) ++ entriesOf(string.entries) ++
     entriesOf(@import("process.zig").entries) ++ entriesOf(@import("bytes.zig").entries) ++
-    entriesOf(@import("json.zig").entries);
+    entriesOf(@import("json.zig").entries) ++ entriesOf(@import("regex.zig").entries);
 
 fn entriesOf(comptime from: anytype) [from.len]Entry {
     var t: [from.len]Entry = undefined;

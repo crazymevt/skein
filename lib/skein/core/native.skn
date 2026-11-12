@@ -1191,3 +1191,66 @@ width and a precision (%-8s, %05d, %.2f), and %% and %n."
                     (recur (inc j) (rest args)
                            (conj out (format-one conversion flags width precision
                                                  (first args)))))))))))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Regular expressions (M3.3, D-105): re-pattern and the matcher are the runtime's
+;;; (regex.zig); these give Clojure's results. A result is the match's text when the
+;;; pattern has no groups, else a vector of it and its groups (nil for one that didn't
+;;; take part).
+
+(defn- re-result [v]
+  (if (= 2 (count v)) (nth v 1) (subvec v 1)))
+
+(defn re-matches
+  "The match of the pattern re (or a string, compiled) with the whole string s, or nil."
+  [re s]
+  (when-let [v (%re-exec (re-pattern re) s 0 true)]
+    (re-result v)))
+
+(defn- re-step
+  "Where a search goes on after the match v: past it, or a character on after an empty
+match; nil at the end."
+  [s v]
+  (let [end (nth v 0)]
+    (if (= "" (nth v 1))
+      (when (< end (%string-end s)) (%string-next s end))
+      end)))
+
+(defn re-seq
+  "A lazy seq of the successive matches of the pattern re in the string s."
+  [re s]
+  (let [re (re-pattern re)]
+    ((fn step [start]
+       (lazy-seq
+        (when-let [v (%re-exec re s start false)]
+          (cons (re-result v) (when-let [next (re-step s v)] (step next))))))
+     0)))
+
+(defn re-matcher
+  "A matcher of the pattern re over the string s, which re-find advances a match at a
+time and re-groups reads the last match of."
+  [re s]
+  (atom {::matcher true ::re (re-pattern re) ::s s ::next 0 ::last nil}))
+
+(defn re-find
+  "The first match of the pattern re (or a string, compiled) in the string s, or nil;
+with a matcher (re-matcher), its next match, or nil once there are no more."
+  ([m]
+   (let [{re ::re s ::s start ::next} @m]
+     (when-not (and (map? @m) (::matcher @m))
+       (error (str "re-find needs a matcher, not " (pr-str m))))
+     (when start
+       (if-let [v (%re-exec re s start false)]
+         (do (swap! m assoc ::next (re-step s v) ::last v)
+             (re-result v))
+         (do (swap! m assoc ::next nil ::last nil) nil)))))
+  ([re s]
+   (when-let [v (%re-exec (re-pattern re) s 0 false)]
+     (re-result v))))
+
+(defn re-groups
+  "The last match a matcher (re-matcher) found with re-find, as re-find gave it."
+  [m]
+  (let [v (::last @m)]
+    (when-not v (error "re-groups: the matcher has no match"))
+    (re-result v)))

@@ -1,0 +1,28 @@
+123 [2026-11 2026 11 nil nil]
+nil bbb
+123 nil [2026-11-12 2026 11 -12 12]
+(1 22 333) ([2026-11 2026 11 nil nil] [2025-01-02 2025 01 -02 02])
+()
+( aa  ) (  )
+(   ) 4
+[2026-11 2026 11 nil nil] [2026-11 2026 11 nil nil]
+[2025-01-02 2025 01 -02 02] [2025-01-02 2025 01 -02 02]
+nil re-groups: the matcher has no match
+#"\d+" a"b pattern
+equal only to itself: true false 2 true
+named groups: {y 1, m 2}
+(a 😀 é) êë
+"(" -> bad regex "(": a group without its ) at 1
+"a)" -> bad regex "a)": an unmatched ) at 1
+"[a" -> bad regex "[a": a class without its ] at 2
+"*a" -> bad regex "*a": nothing to repeat at 1
+"a{2,1}" -> bad regex "a{2,1}": a quantifier's maximum is below its minimum at 6
+"a**" -> bad regex "a**": a quantifier can't follow a quantifier at 2
+"\\k<nope>" -> bad regex "\\k<nope>": \k<name> names no group at 8
+"(a)\\2" -> bad regex "(a)\\2": a back reference to a group that doesn't exist at 5
+"(?<=a)b" -> bad regex "(?<=a)b": lookbehind isn't supported at 3
+"a++" -> bad regex "a++": possessive quantifiers aren't supported at 2
+"[a&&b]" -> bad regex "[a&&b]": class intersections (&&) aren't supported at 2
+"\\q" -> bad regex "\\q": an unknown escape at 2
+"a{1001}" -> bad regex "a{1001}": a quantifier over 1000 isn't supported at 7
+re-pattern needs a string, not 42

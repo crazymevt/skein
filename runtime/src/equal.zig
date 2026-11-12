@@ -205,6 +205,7 @@ pub fn hashOf(v: Value) u32 {
         .ref => @import("stm.zig").hashOf(v),
         .promise, .delay => @import("tasks.zig").promiseHash(v),
         .@"volatile" => @intCast(coll.get(v, 1).toFixnum()),
+        .pattern => @intCast(coll.get(v, 2).toFixnum()),
         .condition, .condition_type, .restart => @import("cond.zig").hashOf(v),
         // Identity: a function's code pointer, or for other objects... (permanent ones
         // never move, so their address will do).
