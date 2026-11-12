@@ -42,6 +42,26 @@ or nil."
              (string? (:datum (nth items 3))))
     (:datum (nth items 3))))
 
+(defn- struct-entries
+  "[name info] for the functions a (defstruct name :value? doc? (field type)...) form
+defines: its constructor, name? and an accessor per field."
+  [items loc]
+  (let [sname (name (:datum (second items)))
+        rest-items (drop 2 items)
+        rest-items (if (= :value (:datum (first rest-items))) (rest rest-items) rest-items)
+        doc (when (string? (:datum (first rest-items))) (:datum (first rest-items)))
+        fields (map (fn [f] (name (:datum (first (:datum f)))))
+                    (filter (fn [f] (= :list (:kind f))) rest-items))]
+    (concat
+     [[sname {:doc (str (or doc (str "A " sname ".")) "\n\nMake one from its fields in order, "
+                        "or by name: (" sname " :" (first fields) " ...).")
+              :arglists (str "([" (str/join " " fields) "] [& field-values])")
+              :loc loc}]
+      [(str sname "?") {:doc (str "True if x is a " sname ".") :arglists "([x])" :loc loc}]]
+     (for [f fields]
+       [(str sname "-" f) {:doc (str "The " f " field of the " sname " s; (:" f " s) reads it too.")
+                           :arglists "([s])" :loc loc}]))))
+
 (defn- source-forms
   "name -> {:doc :arglists :loc} for the top-level definitions with a docstring in the
 source file at path of namespace ns, read with Skein's reader: a fallback for vars the
@@ -51,36 +71,45 @@ program, and the classes and condition types defclass and defcondition define)."
   (if-not (and path (io/file-exists? path))
     {}
     (into {}
-          (keep (fn [form]
-                  (let [items (:datum form)
-                        head (when (and (= :list (:kind form)) (>= (count items) 3)
-                                        (symbol? (:datum (first items))))
-                               (name (:datum (first items))))]
-                    (cond
-                      (and (contains? #{"defn" "defmacro" "defgeneric" "def"} head)
-                           (string? (:datum (nth items 2))))
-                      (let [nm (name (:datum (second items)))
-                            params (filter (fn [s] (= :vector (:kind s))) (drop 3 items))
-                            bodies (filter (fn [s] (and (= :list (:kind s))
-                                                        (= :vector (:kind (first (:datum s))))))
-                                           (drop 3 items))
-                            vectors (if (seq params)
-                                      [(first params)]
-                                      (map (fn [b] (first (:datum b))) bodies))]
-                        [nm {:doc (:datum (nth items 2))
-                             :arglists (when (seq vectors)
-                                         (str "(" (str/join " " (map reader/syntax-to-string
-                                                                     vectors))
-                                              ")"))
-                             :loc (str path ":" (:line (:loc form)) ":1")}])
+          (mapcat (fn [form]
+                    (let [items (:datum form)
+                          head (when (and (= :list (:kind form)) (>= (count items) 3)
+                                          (symbol? (:datum (first items))))
+                                 (name (:datum (first items))))]
+                      (cond
+                        (and (contains? #{"defn" "defmacro" "defgeneric" "def"} head)
+                             (string? (:datum (nth items 2))))
+                        (let [nm (name (:datum (second items)))
+                              params (filter (fn [s] (= :vector (:kind s))) (drop 3 items))
+                              bodies (filter (fn [s] (and (= :list (:kind s))
+                                                          (= :vector (:kind (first (:datum s))))))
+                                             (drop 3 items))
+                              vectors (if (seq params)
+                                        [(first params)]
+                                        (map (fn [b] (first (:datum b))) bodies))]
+                          [[nm {:doc (:datum (nth items 2))
+                                :arglists (when (seq vectors)
+                                            (str "(" (str/join " " (map reader/syntax-to-string
+                                                                        vectors))
+                                                 ")"))
+                                :loc (str path ":" (:line (:loc form)) ":1")}]])
 
-                      (and (contains? #{"defclass" "defcondition"} head) (type-docstring items))
-                      [(name (:datum (second items)))
-                       {:doc (type-docstring items)
-                        :loc (str path ":" (:line (:loc form)) ":1")}]
+                        (and (= "defgeneric" head) (type-docstring items))
+                        [[(name (:datum (second items)))
+                          {:doc (type-docstring items)
+                           :arglists (str "(" (reader/syntax-to-string (nth items 2)) ")")
+                           :loc (str path ":" (:line (:loc form)) ":1")}]]
 
-                      :else nil)))
-                (reader/read-string-forms (io/read-file path) {:file path :namespace ns})))))
+                        (and (contains? #{"defclass" "defcondition"} head) (type-docstring items))
+                        [[(name (:datum (second items)))
+                          {:doc (type-docstring items)
+                           :loc (str path ":" (:line (:loc form)) ":1")}]]
+
+                        (= "defstruct" head)
+                        (struct-entries items (str path ":" (:line (:loc form)) ":1"))
+
+                        :else nil)))
+                  (reader/read-string-forms (io/read-file path) {:file path :namespace ns})))))
 
 (defn- var-info
   "{:doc :arglists :loc} of a var: the model's, else skein.core.native's for a skein.core

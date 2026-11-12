@@ -108,6 +108,15 @@ host/tools/bootstrap.sh."
                                                (:vars (manual/namespace-model "skein.io"))))))]
       (is (str/starts-with? (doc-of "stream") "An open file"))
       (is (str/starts-with? (doc-of "io-error") "A file that can't be read"))))
+  (testing "what defstruct defines, and generics with a docstring after their parameters"
+    (let [info (fn [nm] (first (filter (fn [v] (= nm (:name v)))
+                                       (:vars (manual/namespace-model "skein.math")))))]
+      (is (str/starts-with? (:doc (info "vec2")) "A 2D vector."))
+      (is (= [["x" "y"] ["&" "field-values"]] (:arglists (info "vec2"))))
+      (is (= "True if x is a vec2." (:doc (info "vec2?"))))
+      (is (str/starts-with? (:doc (info "mat3-m21")) "The m21 field of the mat3"))
+      (is (= "The dot product of two vectors of the same type." (:doc (info "dot"))))
+      (is (= [["a" "b"]] (:arglists (info "dot"))))))
   (is (= ["skein.core" "str"] (manual/resolve-name "skein.string" "str")))
   (is (= ["skein.string" "join"] (manual/resolve-name "skein.string" "join")))
   (is (= ["skein.io" "line-seq"] (manual/resolve-name "skein.string" "skein.io/line-seq")))
@@ -141,7 +150,7 @@ host/tools/bootstrap.sh."
 (def complete
   "The namespaces documented completely: every public var with examples, arguments and
 values, and see also."
-  ["skein.string" "skein.core" "skein.io"])
+  ["skein.string" "skein.core" "skein.io" "skein.math"])
 
 (deftest documented-namespaces-are-complete
   (doseq [ns complete
