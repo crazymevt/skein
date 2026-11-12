@@ -1,0 +1,78 @@
+;; skein.io's watch (M3.5 step 3, D-107), natively: changes in a watched temporary tree
+;; arrive as events. Platforms differ in what they merge (FSEvents reports a new file
+;; written at once as :created, inotify as :created then :modified), so each check waits
+;; for an event about the path whose kind is one of those the change can give.
+(ns fswatch
+  (:require [skein.io :as io]))
+
+(defn- wait-for
+  "The first event on the watcher about path rel with a kind in kinds, skipping others,
+within 10 seconds; the events skipped on the way are added to seen."
+  [w root rel kinds seen]
+  (let [p (io/path root rel)]
+    (loop []
+      (let [[e ch] (alts! [(:events w) (timeout-chan 10)])]
+        (cond (nil? e) (if (= ch (:events w)) :closed :timed-out)
+              (and (= p (:path e)) (contains? kinds (:kind e))) (:kind e)
+              :else (do (swap! seen conj e) (recur)))))))
+
+(def ^:private written #{:created :modified})
+
+(defn -main [& args]
+  (let [root (io/temp-dir "skein-watch-")
+        seen (atom [])]
+    (io/write-file (io/path root "old.txt") "old")
+    (io/make-dirs (io/path root "sub"))
+    (io/write-file (io/path root ".gitignore") "ignored/\n*.log\n")
+    ;; What happened before the watcher started isn't reported (FSEvents looks back a
+    ;; little): let it settle.
+    (sleep 0.5)
+    (let [w (io/watch root)]
+      (sleep 0.3)
+      (io/write-file (io/path root "new.txt") "new")
+      (println "a new file:" (contains? written (wait-for w root "new.txt" written seen)))
+      (io/append-file (io/path root "old.txt") " and more")
+      (println "a changed file:" (contains? written (wait-for w root "old.txt" written seen)))
+      (io/write-file (io/path root "sub/inner.txt") "inner")
+      (println "in a directory:" (contains? written (wait-for w root "sub/inner.txt" written seen)))
+      (io/make-dirs (io/path root "fresh/deeper"))
+      (sleep 0.2)
+      (io/write-file (io/path root "fresh/deeper/x.txt") "x")
+      (println "in a new directory:"
+               (contains? written (wait-for w root "fresh/deeper/x.txt" written seen)))
+      (io/delete (io/path root "old.txt"))
+      (println "a deleted file:" (wait-for w root "old.txt" #{:deleted} seen))
+      (io/rename (io/path root "new.txt") (io/path root "renamed.txt"))
+      (println "renamed, the new name:"
+               (contains? written (wait-for w root "renamed.txt" written seen)))
+      ;; The old name's deletion may come before the new name's event: look at both.
+      (println "renamed, the old name:"
+               (or (some (fn [e] (and (= (io/path root "new.txt") (:path e))
+                                      (= :deleted (:kind e))))
+                         @seen)
+                   (= :deleted (wait-for w root "new.txt" #{:deleted} seen))))
+      ;; Ignored paths make no events; a marker written after them shows they'd have come.
+      (reset! seen [])
+      (io/write-file (io/path root "x.log") "log")
+      (io/make-dirs (io/path root "ignored"))
+      (io/write-file (io/path root "ignored/y.txt") "y")
+      (sleep 0.3)
+      (io/write-file (io/path root "marker.txt") "m")
+      (println "the marker:" (contains? written (wait-for w root "marker.txt" written seen)))
+      (println "nothing ignored came:"
+               (not-any? (fn [e] (or (= (io/path root "x.log") (:path e))
+                                     (= (io/path root "ignored") (:path e))
+                                     (= (io/path root "ignored/y.txt") (:path e))))
+                         @seen))
+      (io/stop-watch! w)
+      (println "stopped, the channel closes:"
+               (= :closed (loop [] (let [[e ch] (alts! [(:events w) (timeout-chan 10)])]
+                                     (cond e (recur)
+                                           (= ch (:events w)) :closed
+                                           :else :timed-out)))))
+      (io/stop-watch! w)
+      (println "stopping again is harmless: true"))
+    (io/delete-tree root)
+    (println "a missing directory:"
+             (try (io/watch (io/path root "nothing")) :watching
+                  (catch io/io-error e :io-error)))))

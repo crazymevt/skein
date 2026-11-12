@@ -1,0 +1,12 @@
+a new file: true
+a changed file: true
+in a directory: true
+in a new directory: true
+a deleted file: :deleted
+renamed, the new name: true
+renamed, the old name: true
+the marker: true
+nothing ignored came: true
+stopped, the channel closes: true
+stopping again is harmless: true
+a missing directory: :io-error

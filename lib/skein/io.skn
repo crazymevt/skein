@@ -21,6 +21,8 @@ M2.11, D-093). Failures signal io-error.
   (resource-dir)                the directory holding the program's assets
   (walk root opts?)             the paths under root, with Git's ignore rules (native)
   (ignore-matcher root) (ignored? matcher path dir?)
+  (watch root opts?) (stop-watch! watcher)
+                                changes under root, as maps on (:events watcher) (native)
   (temp-file prefix? suffix?) (temp-dir prefix?)
                                 a new file or directory only you may use; its path
   (owner-only! path)            let only you read and write it (nothing on Windows)
@@ -488,6 +490,56 @@ files."
                                :else [(apply path root ps)])))
                      names)))]
      (lazy-seq (entries [])))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Watching a tree (M3.5, D-107): the platform's watcher (FSEvents, inotify or
+;;; ReadDirectoryChangesW) reports changes on a thread of its own; a fiber here takes them
+;;; a batch at a time, drops what Git's rules ignore, and puts the rest on the channel.
+
+(defn- watch-events
+  "The events of a batch from the runtime ([kind relative-path] each), as maps, with the
+ignore rules (m, or nil), repeats in a row dropped."
+  [root m batch]
+  (loop [batch batch prev nil out []]
+    (if-let [[kind rel :as e] (first batch)]
+      (cond
+        (= e prev) (recur (rest batch) prev out)
+        (= kind :rescan) (recur (rest batch) e (conj out {:kind :modified :path root}))
+        (and m (ignored? @m rel (when (= kind :deleted) false))) (recur (rest batch) e out)
+        :else (recur (rest batch) e (conj out {:kind kind :path (path root rel)})))
+      out)))
+
+(defn watch
+  "Watch the directory tree at root for changes: a watcher, whose :events is a channel of
+{:kind :created|:modified|:deleted :path p} (p is root joined with the path under it).
+Events come promptly but can repeat, merge or (on Linux) arrive for files in a new
+directory as :created; when the system loses some, an event says root is :modified, to
+look again. Treat them as hints to look at a path. opts: :gitignore (true), dropping what
+Git's ignore rules ignore (and .git always); :buffer, the channel's size (1024). Native
+only; stop-watch! stops it."
+  ([root] (watch root {}))
+  ([root opts]
+   (let [h (or (%fswatch-start root) (fail root "cannot watch " root))
+         m (when (get opts :gitignore true) (atom (ignore-matcher root)))
+         events (chan (get opts :buffer 1024))]
+     (future
+       (loop []
+         (if-let [batch (%fswatch-next h 0)]
+           (do
+             ;; A changed .gitignore changes the rules.
+             (when (and m (some (fn [[_ rel]] (= ".gitignore" (file-name rel))) batch))
+               (reset! m (ignore-matcher root)))
+             (doseq [e (watch-events root m batch)] (>! events e))
+             (recur))
+           (close! events))))
+     {::handle h :root root :events events})))
+
+(defn stop-watch!
+  "Stop the watcher: its :events channel closes once what was reported is taken. Returns
+nil."
+  [w]
+  (%fswatch-stop (::handle w))
+  nil)
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Streams (M2.11, D-093): text readers and writers, and byte inputs and outputs. close

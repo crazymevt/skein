@@ -406,6 +406,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%write-stderr"
     ;; Temporary files and permissions (M3.5, D-107)
     "%make-temp" "%owner-only" "%permissions"
+    ;; Watching files (M3.5, D-107)
+    "%fswatch-start" "%fswatch-next" "%fswatch-stop"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

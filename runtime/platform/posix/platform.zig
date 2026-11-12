@@ -596,3 +596,323 @@ pub fn makePipe() ?[2]std.Io.File {
 pub fn seekToEnd(handle: std.posix.fd_t) void {
     _ = std.c.lseek(handle, 0, std.c.SEEK.END);
 }
+
+// ---------------------------------------------------------------------------------------
+// File system watchers (M3.5, D-107): FSEvents on macOS, inotify on Linux. A watcher
+// reports each change to a sink as a kind and a path relative to the watched root ("" for
+// the root); `rescan` says events were lost or merged, so the reader should look again.
+// After stopWatch returns, the sink is never called again.
+
+pub const WatchKind = enum(u8) { created, modified, deleted, rescan };
+
+pub const WatchSink = struct {
+    context: *anyopaque,
+    report: *const fn (context: *anyopaque, kind: WatchKind, relative: []const u8) void,
+};
+
+pub const Watch = if (builtin.os.tag == .macos) FsEventsWatch else InotifyWatch;
+
+/// Start watching the directory tree at `root`; null if it can't be watched.
+pub fn startWatch(root: [:0]const u8, sink: WatchSink) ?*Watch {
+    return Watch.start(root, sink);
+}
+
+/// Stop the watcher and free it.
+pub fn stopWatch(w: *Watch) void {
+    w.stop();
+}
+
+const watch_alloc = std.heap.c_allocator;
+
+/// The path relative to `root` of `path` under it, or null if it isn't under it.
+fn relativeTo(root: []const u8, path: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, path, root)) return "";
+    if (path.len > root.len and std.mem.startsWith(u8, path, root) and path[root.len] == '/')
+        return path[root.len + 1 ..];
+    return null;
+}
+
+// macOS: an FSEvents stream with file-level events on a dispatch queue of its own.
+// CoreServices is loaded when the first watcher starts, so programs that never watch
+// don't link or load it.
+
+const FsEventsCallback = *const fn (stream: ?*anyopaque, info: ?*anyopaque, count: usize, paths: ?*anyopaque, flags: [*]const u32, ids: [*]const u64) callconv(.c) void;
+
+const FsEventsContext = extern struct {
+    version: isize = 0,
+    info: ?*anyopaque,
+    retain: ?*anyopaque = null,
+    release: ?*anyopaque = null,
+    copy_description: ?*anyopaque = null,
+};
+
+const FsEventsApi = struct {
+    CFStringCreateWithCString: *const fn (?*anyopaque, [*:0]const u8, u32) callconv(.c) ?*anyopaque,
+    CFArrayCreate: *const fn (?*anyopaque, [*]const ?*anyopaque, isize, ?*const anyopaque) callconv(.c) ?*anyopaque,
+    CFRelease: *const fn (?*anyopaque) callconv(.c) void,
+    kCFTypeArrayCallBacks: *const anyopaque,
+    FSEventStreamCreate: *const fn (?*anyopaque, FsEventsCallback, *FsEventsContext, ?*anyopaque, u64, f64, u32) callconv(.c) ?*anyopaque,
+    FSEventStreamSetDispatchQueue: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void,
+    FSEventStreamStart: *const fn (?*anyopaque) callconv(.c) u8,
+    FSEventStreamStop: *const fn (?*anyopaque) callconv(.c) void,
+    FSEventStreamInvalidate: *const fn (?*anyopaque) callconv(.c) void,
+    FSEventStreamRelease: *const fn (?*anyopaque) callconv(.c) void,
+};
+
+var fsevents_api: ?FsEventsApi = null;
+var fsevents_lock: Mutex = .{};
+
+fn fseventsApi() ?FsEventsApi {
+    fsevents_lock.lock();
+    defer fsevents_lock.unlock();
+    if (fsevents_api) |a| return a;
+    var why: [256]u8 = undefined;
+    const h = loadLibrary("/System/Library/Frameworks/CoreServices.framework/CoreServices", &why) orelse return null;
+    var api: FsEventsApi = undefined;
+    inline for (@typeInfo(FsEventsApi).@"struct".field_names) |name| {
+        const p = librarySymbol(h, name) orelse return null;
+        @field(api, name) = @ptrCast(@alignCast(p));
+    }
+    fsevents_api = api;
+    return api;
+}
+
+extern "c" fn dispatch_queue_create(label: [*:0]const u8, attr: ?*anyopaque) ?*anyopaque;
+extern "c" fn dispatch_sync_f(queue: ?*anyopaque, context: ?*anyopaque, work: *const fn (?*anyopaque) callconv(.c) void) void;
+extern "c" fn dispatch_release(object: ?*anyopaque) void;
+
+const kFSEventStreamCreateFlagNoDefer: u32 = 0x02;
+const kFSEventStreamCreateFlagWatchRoot: u32 = 0x04;
+const kFSEventStreamCreateFlagFileEvents: u32 = 0x10;
+const kFSEventStreamEventFlagMustScanSubDirs: u32 = 0x01;
+const kFSEventStreamEventFlagUserDropped: u32 = 0x02;
+const kFSEventStreamEventFlagKernelDropped: u32 = 0x04;
+const kFSEventStreamEventFlagRootChanged: u32 = 0x20;
+const kFSEventStreamEventFlagItemCreated: u32 = 0x100;
+const kFSEventStreamEventFlagItemRenamed: u32 = 0x800;
+
+const FsEventsWatch = struct {
+    api: FsEventsApi,
+    stream: ?*anyopaque,
+    queue: ?*anyopaque,
+    sink: WatchSink,
+    /// The root with its links resolved, as FSEvents reports paths.
+    real_root: []u8,
+    context: FsEventsContext,
+
+    fn start(root: [:0]const u8, sink: WatchSink) ?*FsEventsWatch {
+        const api = fseventsApi() orelse return null;
+        var buf: [1024]u8 = undefined;
+        const real = std.mem.span(c.realpath(root.ptr, &buf) orelse return null);
+        const w = watch_alloc.create(FsEventsWatch) catch return null;
+        w.* = .{ .api = api, .stream = null, .queue = null, .sink = sink, .real_root = watch_alloc.dupe(u8, real) catch return null, .context = .{ .info = w } };
+        const path = api.CFStringCreateWithCString(null, real.ptr, 0x08000100) orelse return w.fail();
+        defer api.CFRelease(path);
+        const paths = api.CFArrayCreate(null, @ptrCast(&path), 1, api.kCFTypeArrayCallBacks) orelse return w.fail();
+        defer api.CFRelease(paths);
+        // Since now; at most 50 ms late.
+        w.stream = api.FSEventStreamCreate(null, callback, &w.context, paths, 0xFFFFFFFFFFFFFFFF, 0.05, kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagFileEvents) orelse return w.fail();
+        w.queue = dispatch_queue_create("skein.watch", null);
+        api.FSEventStreamSetDispatchQueue(w.stream, w.queue);
+        if (api.FSEventStreamStart(w.stream) == 0) {
+            api.FSEventStreamInvalidate(w.stream);
+            api.FSEventStreamRelease(w.stream);
+            dispatch_release(w.queue);
+            return w.fail();
+        }
+        return w;
+    }
+
+    fn fail(w: *FsEventsWatch) ?*FsEventsWatch {
+        watch_alloc.free(w.real_root);
+        watch_alloc.destroy(w);
+        return null;
+    }
+
+    fn callback(_: ?*anyopaque, info: ?*anyopaque, count: usize, paths: ?*anyopaque, flags: [*]const u32, _: [*]const u64) callconv(.c) void {
+        const w: *FsEventsWatch = @ptrCast(@alignCast(info));
+        const list: [*]const [*:0]const u8 = @ptrCast(@alignCast(paths));
+        for (0..count) |i| {
+            const f = flags[i];
+            if (f & (kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged) != 0) {
+                w.sink.report(w.sink.context, .rescan, "");
+                continue;
+            }
+            const path = std.mem.span(list[i]);
+            const rel = relativeTo(w.real_root, path) orelse continue;
+            if (rel.len == 0) continue;
+            // An event's flags gather what happened to the path lately: whether it exists
+            // now says which of them is the latest.
+            const kind: WatchKind = if (c.access(list[i], 0) != 0)
+                .deleted
+            else if (f & (kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRenamed) != 0)
+                .created
+            else
+                .modified;
+            w.sink.report(w.sink.context, kind, rel);
+        }
+    }
+
+    fn drained(_: ?*anyopaque) callconv(.c) void {}
+
+    fn stop(w: *FsEventsWatch) void {
+        w.api.FSEventStreamStop(w.stream);
+        w.api.FSEventStreamInvalidate(w.stream);
+        // A callback already queued runs before this returns.
+        dispatch_sync_f(w.queue, null, drained);
+        w.api.FSEventStreamRelease(w.stream);
+        dispatch_release(w.queue);
+        watch_alloc.free(w.real_root);
+        watch_alloc.destroy(w);
+    }
+};
+
+// Linux: inotify, a watch on each directory of the tree (added as directories appear),
+// read by a thread of the watcher's own, which a pipe wakes to stop.
+
+const InotifyWatch = struct {
+    fd: i32,
+    wake: [2]c.fd_t,
+    sink: WatchSink,
+    root: []u8,
+    /// Each watch's directory, relative to the root.
+    dirs: std.AutoHashMapUnmanaged(i32, []u8) = .empty,
+    lock: Mutex = .{},
+    done_cond: Condition = .{},
+    done: bool = false,
+
+    const linux = std.os.linux;
+    const mask: u32 = linux.IN.CREATE | linux.IN.DELETE | linux.IN.MODIFY | linux.IN.CLOSE_WRITE |
+        linux.IN.ATTRIB | linux.IN.MOVED_FROM | linux.IN.MOVED_TO | linux.IN.DELETE_SELF |
+        linux.IN.MOVE_SELF | linux.IN.ONLYDIR | linux.IN.DONT_FOLLOW;
+
+    fn start(root: [:0]const u8, sink: WatchSink) ?*InotifyWatch {
+        const fd = linux.inotify_init1(linux.IN.CLOEXEC);
+        if (@as(isize, @bitCast(fd)) < 0) return null;
+        const w = watch_alloc.create(InotifyWatch) catch return null;
+        w.* = .{ .fd = @intCast(fd), .wake = undefined, .sink = sink, .root = watch_alloc.dupe(u8, root) catch return null };
+        if (c.pipe(&w.wake) != 0) {
+            _ = c.close(w.fd);
+            watch_alloc.free(w.root);
+            watch_alloc.destroy(w);
+            return null;
+        }
+        if (!w.addTree("", false)) {
+            w.free();
+            return null;
+        }
+        // 2 MB: more than the program's thread-local storage (D-103).
+        if (!spawnThread(run, w, 2 << 20)) {
+            w.free();
+            return null;
+        }
+        return w;
+    }
+
+    fn free(w: *InotifyWatch) void {
+        _ = c.close(w.fd);
+        _ = c.close(w.wake[0]);
+        _ = c.close(w.wake[1]);
+        var it = w.dirs.valueIterator();
+        while (it.next()) |d| watch_alloc.free(d.*);
+        w.dirs.deinit(watch_alloc);
+        watch_alloc.free(w.root);
+        watch_alloc.destroy(w);
+    }
+
+    fn join(a: []const u8, b: []const u8) ?[:0]u8 {
+        if (a.len == 0) return watch_alloc.dupeSentinel(u8, b, 0) catch null;
+        if (b.len == 0) return watch_alloc.dupeSentinel(u8, a, 0) catch null;
+        return std.fmt.allocPrintSentinel(watch_alloc, "{s}/{s}", .{ a, b }, 0) catch null;
+    }
+
+    /// Watch the directory rel and those below it; with `report`, report what's in them
+    /// as created (they appeared before their watches did). False if rel can't be watched.
+    fn addTree(w: *InotifyWatch, rel: []const u8, report: bool) bool {
+        const full = join(w.root, rel) orelse return false;
+        defer watch_alloc.free(full);
+        const wd = linux.inotify_add_watch(w.fd, full.ptr, mask);
+        if (@as(isize, @bitCast(wd)) < 0) return false;
+        const owned = watch_alloc.dupe(u8, rel) catch return false;
+        const gop = w.dirs.getOrPut(watch_alloc, @intCast(wd)) catch return false;
+        if (gop.found_existing) watch_alloc.free(gop.value_ptr.*);
+        gop.value_ptr.* = owned;
+        const dir = c.opendir(full.ptr) orelse return true;
+        defer _ = c.closedir(dir);
+        while (c.readdir(dir)) |entry| {
+            const name = std.mem.sliceTo(&entry.name, 0);
+            if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) continue;
+            const sub = join(rel, name) orelse continue;
+            defer watch_alloc.free(sub);
+            if (report) w.sink.report(w.sink.context, .created, sub);
+            // A watch added with ONLYDIR and DONT_FOLLOW fails for anything but a real
+            // directory, which is all an entry of unknown type needs.
+            if (entry.type == c.DT.DIR or entry.type == c.DT.UNKNOWN) _ = w.addTree(sub, report);
+        }
+        return true;
+    }
+
+    fn run(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
+        const w: *InotifyWatch = @ptrCast(@alignCast(arg));
+        var buf: [65536]u8 align(@alignOf(linux.inotify_event)) = undefined;
+        loop: while (true) {
+            var fds = [_]c.pollfd{
+                .{ .fd = w.fd, .events = c.POLL.IN, .revents = 0 },
+                .{ .fd = w.wake[0], .events = c.POLL.IN, .revents = 0 },
+            };
+            if (c.poll(&fds, 2, -1) < 0) continue;
+            if (fds[1].revents != 0) break;
+            const n = c.read(w.fd, &buf, buf.len);
+            if (n <= 0) continue;
+            var at: usize = 0;
+            while (at + @sizeOf(linux.inotify_event) <= @as(usize, @intCast(n))) {
+                const e: *const linux.inotify_event = @ptrCast(@alignCast(&buf[at]));
+                at += @sizeOf(linux.inotify_event) + e.len;
+                w.handle(e);
+                if (e.mask & linux.IN.Q_OVERFLOW != 0) continue :loop;
+            }
+        }
+        w.lock.lock();
+        w.done = true;
+        w.done_cond.signal();
+        w.lock.unlock();
+        return null;
+    }
+
+    fn handle(w: *InotifyWatch, e: *const linux.inotify_event) void {
+        if (e.mask & linux.IN.Q_OVERFLOW != 0) {
+            w.sink.report(w.sink.context, .rescan, "");
+            return;
+        }
+        if (e.mask & linux.IN.IGNORED != 0) {
+            if (w.dirs.fetchRemove(e.wd)) |kv| watch_alloc.free(kv.value);
+            return;
+        }
+        const dir = w.dirs.get(e.wd) orelse return;
+        const name = e.getName() orelse {
+            // The watched directory itself went: its parent reports that, but the root
+            // has no parent here.
+            if (dir.len == 0 and e.mask & (linux.IN.DELETE_SELF | linux.IN.MOVE_SELF) != 0)
+                w.sink.report(w.sink.context, .rescan, "");
+            return;
+        };
+        const rel = join(dir, name) orelse return;
+        defer watch_alloc.free(rel);
+        if (e.mask & (linux.IN.CREATE | linux.IN.MOVED_TO) != 0) {
+            w.sink.report(w.sink.context, .created, rel);
+            if (e.mask & linux.IN.ISDIR != 0) _ = w.addTree(rel, true);
+        } else if (e.mask & (linux.IN.DELETE | linux.IN.MOVED_FROM) != 0) {
+            w.sink.report(w.sink.context, .deleted, rel);
+        } else if (e.mask & (linux.IN.MODIFY | linux.IN.CLOSE_WRITE | linux.IN.ATTRIB) != 0) {
+            w.sink.report(w.sink.context, .modified, rel);
+        }
+    }
+
+    fn stop(w: *InotifyWatch) void {
+        _ = c.write(w.wake[1], "x", 1);
+        w.lock.lock();
+        while (!w.done) w.done_cond.wait(&w.lock);
+        w.lock.unlock();
+        w.free();
+    }
+};

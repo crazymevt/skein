@@ -1709,7 +1709,7 @@ const table = base_table ++ entriesOf(tasks.entries) ++ entriesOf(watch.entries)
     entriesOf(@import("stm.zig").entries) ++ entriesOf(string.entries) ++
     entriesOf(@import("process.zig").entries) ++ entriesOf(@import("bytes.zig").entries) ++
     entriesOf(@import("json.zig").entries) ++ entriesOf(@import("regex.zig").entries) ++
-    entriesOf(@import("net.zig").entries);
+    entriesOf(@import("net.zig").entries) ++ entriesOf(@import("fswatch.zig").entries);
 
 fn entriesOf(comptime from: anytype) [from.len]Entry {
     var t: [from.len]Entry = undefined;

@@ -552,7 +552,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 - Steps, in order (D-107):
   1. ✅ Git's ignore rules and `walk`: the pattern matcher, nested `.gitignore` files and `.git/info/exclude`, `ignore-matcher`, `ignored?` and `walk`; a table of cases made with `git check-ignore` (a script, random trees and patterns) that a native test checks.
   2. ✅ Temporary files and permissions: `temp-file` and `temp-dir` (exclusive creation, owner-only) and `owner-only!`.
-  3. Watching: a watcher in the runtime for each platform, and `watch` and `stop-watch!`, with the ignore rules; native tests that create, change, rename and delete files in a watched tree.
+  3. ✅ Watching: a watcher in the runtime for each platform, and `watch` and `stop-watch!`, with the ignore rules; native tests that create, change, rename and delete files in a watched tree.
   4. `skein.system`'s `config-dir`, `data-dir`, `cache-dir` and `open!`; `skein.time`'s `format-iso8601` and `parse-iso8601`, with randomized round trips.
 
 **Exit:** native tests on the three platforms.

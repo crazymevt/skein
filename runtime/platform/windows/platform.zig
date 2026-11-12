@@ -541,3 +541,159 @@ extern "kernel32" fn SetFilePointerEx(file: *anyopaque, distance: i64, new_posit
 pub fn seekToEnd(handle: *anyopaque) void {
     _ = SetFilePointerEx(handle, 0, null, 2); // FILE_END
 }
+
+// ---------------------------------------------------------------------------------------
+// File system watchers (M3.5, D-107): ReadDirectoryChangesW on the root, with its whole
+// tree, read by a thread of the watcher's own, which an event wakes to stop. A watcher
+// reports each change to a sink as a kind and a path relative to the root (with /); `rescan`
+// says events were lost (the buffer overflowed), so the reader should look again. After
+// stopWatch returns, the sink is never called again.
+
+pub const WatchKind = enum(u8) { created, modified, deleted, rescan };
+
+pub const WatchSink = struct {
+    context: *anyopaque,
+    report: *const fn (context: *anyopaque, kind: WatchKind, relative: []const u8) void,
+};
+
+const OVERLAPPED = extern struct {
+    internal: usize = 0,
+    internal_high: usize = 0,
+    offset: u32 = 0,
+    offset_high: u32 = 0,
+    event: ?*anyopaque = null,
+};
+
+extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: u32, share: u32, security: ?*anyopaque, disposition: u32, flags: u32, template: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn ReadDirectoryChangesW(dir: *anyopaque, buffer: *anyopaque, length: u32, subtree: i32, filter: u32, returned: ?*u32, overlapped: *OVERLAPPED, routine: ?*anyopaque) callconv(.winapi) i32;
+extern "kernel32" fn CreateEventW(security: ?*anyopaque, manual_reset: i32, initial: i32, name: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn SetEvent(event: *anyopaque) callconv(.winapi) i32;
+extern "kernel32" fn WaitForMultipleObjects(count: u32, handles: [*]const ?*anyopaque, wait_all: i32, milliseconds: u32) callconv(.winapi) u32;
+extern "kernel32" fn GetOverlappedResult(file: *anyopaque, overlapped: *OVERLAPPED, transferred: *u32, wait: i32) callconv(.winapi) i32;
+extern "kernel32" fn CancelIoEx(file: *anyopaque, overlapped: ?*OVERLAPPED) callconv(.winapi) i32;
+
+const INVALID_HANDLE: usize = std.math.maxInt(usize);
+const FILE_LIST_DIRECTORY: u32 = 0x0001;
+const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
+const OPEN_EXISTING: u32 = 3;
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
+const FILE_FLAG_OVERLAPPED: u32 = 0x40000000;
+const NOTIFY_FILTER: u32 = 0x1 | 0x2 | 0x8 | 0x10 | 0x40; // file and directory names, size, last write, creation
+
+const watch_alloc = std.heap.c_allocator;
+
+pub const Watch = struct {
+    dir: *anyopaque,
+    io_event: *anyopaque,
+    stop_event: *anyopaque,
+    sink: WatchSink,
+    buffer: [65536]u8 align(4) = undefined,
+    lock: Mutex = .{},
+    done_cond: Condition = .{},
+    done: bool = false,
+};
+
+/// Start watching the directory tree at `root`; null if it can't be watched.
+pub fn startWatch(root: [:0]const u8, sink: WatchSink) ?*Watch {
+    const wide = std.unicode.utf8ToUtf16LeAllocZ(watch_alloc, root) catch return null;
+    defer watch_alloc.free(wide);
+    const dir = CreateFileW(wide.ptr, FILE_LIST_DIRECTORY, FILE_SHARE_ALL, null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, null) orelse return null;
+    if (@intFromPtr(dir) == INVALID_HANDLE) return null;
+    const io_event = CreateEventW(null, 1, 0, null) orelse {
+        _ = CloseHandle(dir);
+        return null;
+    };
+    const stop_event = CreateEventW(null, 1, 0, null) orelse {
+        _ = CloseHandle(io_event);
+        _ = CloseHandle(dir);
+        return null;
+    };
+    const w = watch_alloc.create(Watch) catch return null;
+    w.* = .{ .dir = dir, .io_event = io_event, .stop_event = stop_event, .sink = sink };
+    if (!spawnThread(watchThread, w, 1 << 20)) {
+        closeWatch(w);
+        return null;
+    }
+    return w;
+}
+
+fn closeWatch(w: *Watch) void {
+    _ = CloseHandle(w.dir);
+    _ = CloseHandle(w.io_event);
+    _ = CloseHandle(w.stop_event);
+    watch_alloc.destroy(w);
+}
+
+fn watchThread(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const w: *Watch = @ptrCast(@alignCast(arg));
+    while (true) {
+        var ov: OVERLAPPED = .{ .event = w.io_event };
+        if (ReadDirectoryChangesW(w.dir, &w.buffer, w.buffer.len, 1, NOTIFY_FILTER, null, &ov, null) == 0) break;
+        const handles = [_]?*anyopaque{ w.io_event, w.stop_event };
+        const which = WaitForMultipleObjects(2, &handles, 0, INFINITE);
+        var n: u32 = 0;
+        if (which != 0) {
+            // Stopping: cancel the read and wait for it to end, so the buffer is free.
+            _ = CancelIoEx(w.dir, &ov);
+            _ = GetOverlappedResult(w.dir, &ov, &n, 1);
+            break;
+        }
+        if (GetOverlappedResult(w.dir, &ov, &n, 0) == 0) break;
+        resetEvent(w.io_event);
+        if (n == 0) {
+            // The changes didn't fit the buffer.
+            w.sink.report(w.sink.context, .rescan, "");
+            continue;
+        }
+        reportChanges(w, w.buffer[0..n]);
+    }
+    w.lock.lock();
+    w.done = true;
+    w.done_cond.signal();
+    w.lock.unlock();
+    return null;
+}
+
+extern "kernel32" fn ResetEvent(event: *anyopaque) callconv(.winapi) i32;
+
+fn resetEvent(event: *anyopaque) void {
+    _ = ResetEvent(event);
+}
+
+/// Report each FILE_NOTIFY_INFORMATION record in `data`.
+fn reportChanges(w: *Watch, data: []const u8) void {
+    var at: usize = 0;
+    while (at + 12 <= data.len) {
+        const next = std.mem.readInt(u32, data[at..][0..4], .little);
+        const action = std.mem.readInt(u32, data[at + 4 ..][0..4], .little);
+        const name_len = std.mem.readInt(u32, data[at + 8 ..][0..4], .little);
+        const name_bytes = data[at + 12 .. @min(data.len, at + 12 + name_len)];
+        var wide: [4096]u16 = undefined;
+        const units = @min(name_bytes.len / 2, wide.len);
+        for (0..units) |i| wide[i] = std.mem.readInt(u16, name_bytes[2 * i ..][0..2], .little);
+        var utf8: [16384]u8 = undefined;
+        const len = std.unicode.utf16LeToUtf8(&utf8, wide[0..units]) catch 0;
+        const path = utf8[0..len];
+        for (path) |*ch| {
+            if (ch.* == '\\') ch.* = '/';
+        }
+        const kind: ?WatchKind = switch (action) {
+            1, 5 => .created, // added, renamed to
+            2, 4 => .deleted, // removed, renamed from
+            3 => .modified,
+            else => null,
+        };
+        if (kind) |k| if (len > 0) w.sink.report(w.sink.context, k, path);
+        if (next == 0) break;
+        at += next;
+    }
+}
+
+/// Stop the watcher and free it.
+pub fn stopWatch(w: *Watch) void {
+    _ = SetEvent(w.stop_event);
+    w.lock.lock();
+    while (!w.done) w.done_cond.wait(&w.lock);
+    w.lock.unlock();
+    closeWatch(w);
+}
