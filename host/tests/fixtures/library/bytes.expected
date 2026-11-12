@@ -1,0 +1,23 @@
+utf8: [195 169 226 130 172] héllo, 世界
+not utf8: :error
+""  
+"f" Zg== f
+"fo" Zm8= fo
+"foo" Zm9v foo
+"foob" Zm9vYg== foob
+"fooba" Zm9vYmE= fooba
+"foobar" Zm9vYmFy foobar
+not base64: :error
+hex: 666f6f [0 255 127] deadbeef
+not hex: :error :error
+sha1 0 da39a3ee5e6b4b0d3255bfef95601890afd80709
+sha256 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+sha1 3 a9993e364706816aba3e25717850c26c9cd0d89d
+sha256 3 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+sha1 56 84983e441c3bd26ebaae4aa1f95129e5e54670f1
+sha256 56 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+md5 "" d41d8cd98f00b204e9800998ecf8427e
+md5 "abc" 900150983cd24fb0d6963f7d28e17f72
+md5 "message digest" f96b697d7cb7938d525a2f31aaf161d0
+same digest: true
+digest sizes: 20 32 16

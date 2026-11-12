@@ -1,0 +1,28 @@
+;; skein.bytes (M3.2 step 1, D-104), natively, against published test vectors: RFC 4648's
+;; for base64, and NIST's (FIPS 180) and RFC 1321's for the hashes.
+(ns bytes-test
+  (:require [skein.bytes :as bytes]))
+
+(defn- try-it [f] (try (f) (catch error e :error)))
+
+(defn -main [& args]
+  ;; UTF-8.
+  (println "utf8:" (vec (bytes/utf8 "é€")) (bytes/utf8-string (bytes/utf8 "héllo, 世界")))
+  (println "not utf8:" (try-it (fn [] (bytes/utf8-string (bytes/unhex "ff")))))
+  ;; base64 (RFC 4648 section 10), and back.
+  (doseq [s ["" "f" "fo" "foo" "foob" "fooba" "foobar"]]
+    (println (pr-str s) (bytes/base64 s) (bytes/utf8-string (bytes/unbase64 (bytes/base64 s)))))
+  (println "not base64:" (try-it (fn [] (bytes/unbase64 "Zm9v!"))))
+  ;; hex.
+  (println "hex:" (bytes/hex "foo") (vec (bytes/unhex "00ff7F")) (bytes/hex (bytes/unhex "DEADbeef")))
+  (println "not hex:" (try-it (fn [] (bytes/unhex "abc"))) (try-it (fn [] (bytes/unhex "zz"))))
+  ;; SHA-1 and SHA-256 (FIPS 180's examples), MD5 (RFC 1321's).
+  (let [long "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"]
+    (doseq [s ["" "abc" long]]
+      (println "sha1" (pr-str (count s)) (bytes/hex (bytes/sha1 s)))
+      (println "sha256" (pr-str (count s)) (bytes/hex (bytes/sha256 s)))))
+  (doseq [s ["" "abc" "message digest"]]
+    (println "md5" (pr-str s) (bytes/hex (bytes/md5 s))))
+  ;; A u8 array hashes as the string whose UTF-8 it is.
+  (println "same digest:" (= (vec (bytes/sha256 "héllo")) (vec (bytes/sha256 (bytes/utf8 "héllo")))))
+  (println "digest sizes:" (count (bytes/sha1 "x")) (count (bytes/sha256 "x")) (count (bytes/md5 "x"))))

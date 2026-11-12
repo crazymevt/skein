@@ -1,0 +1,55 @@
+(ns skein.bytes
+  "Bytes (M3.2, D-104): UTF-8, base64 and hex encodings, and SHA-1, SHA-256 and MD5. Bytes
+are u8 arrays; where bytes are taken, a string stands for its UTF-8 (and a byte view
+works too):
+  (utf8 \"héllo\")  (utf8-string a)
+  (base64 x)  (unbase64 s)  standard base64 (RFC 4648), with padding
+  (hex x)  (unhex s)  lowercase hex
+  (sha1 x)  (sha256 x)  (md5 x)  digests, as u8 arrays: (hex (sha256 \"abc\"))
+Native only.")
+
+(defn utf8
+  "The UTF-8 of the string s, a u8 array."
+  [s]
+  (%utf8 s))
+
+(defn utf8-string
+  "The string whose UTF-8 is the bytes a; an error if they aren't UTF-8."
+  [a]
+  (%utf8-string a))
+
+(defn base64
+  "The base64 of the bytes x (a u8 array, or a string's UTF-8): standard (RFC 4648), padded."
+  [x]
+  (%base64 x))
+
+(defn unbase64
+  "The bytes the base64 text s encodes, a u8 array; an error if it isn't base64."
+  [s]
+  (%unbase64 s))
+
+(defn hex
+  "The bytes x (a u8 array, or a string's UTF-8) as lowercase hex."
+  [x]
+  (%hex x))
+
+(defn unhex
+  "The bytes the hex text s encodes (either case), a u8 array; an error if it isn't hex."
+  [s]
+  (%unhex s))
+
+(defn sha1
+  "The SHA-1 digest of the bytes x (a u8 array, or a string's UTF-8): 20 bytes."
+  [x]
+  (%sha1 x))
+
+(defn sha256
+  "The SHA-256 digest of the bytes x (a u8 array, or a string's UTF-8): 32 bytes."
+  [x]
+  (%sha256 x))
+
+(defn md5
+  "The MD5 digest of the bytes x (a u8 array, or a string's UTF-8): 16 bytes. Not for
+security, which MD5 no longer gives: for checksums and caches."
+  [x]
+  (%md5 x))

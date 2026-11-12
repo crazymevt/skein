@@ -201,6 +201,43 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore f))
   nil)
 
+;; skein.bytes (M3.2, D-104) is native only.
+(defcore "%utf8" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
+(defcore "%utf8-string" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
+(defcore "%base64" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
+(defcore "%unbase64" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
+(defcore "%hex" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
+(defcore "%unhex" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
+(defcore "%sha1" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
+(defcore "%sha256" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
+(defcore "%md5" (x)
+  (declare (ignore x))
+  (error "skein.bytes is native only (D-104)"))
+
 ;; skein.process (M3.1, D-103) is native only.
 (defcore "%process-start" (argv dir env in out err)
   (declare (ignore argv dir env in out err))
