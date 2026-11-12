@@ -1,0 +1,155 @@
+(ns skein.test.examples
+  (:require [skein.test :refer [deftest is are testing run-tests successful? use-fixtures
+                                test-ns]]
+            [skein.test :as t]))
+
+;;; Examples for skein.test (D-109). Tests usually live in test/, one namespace a file,
+;;; and `skein test` runs them; here they run with run-tests.
+;;; `./skein run doc/manual.skn --check skein.test` runs them.
+
+;;;; deftest
+(deftest addition
+  (is (= 4 (+ 2 2)))
+  (is (= 0 (+ -1 1))))
+(run-tests 'skein.test.examples)
+;; prints:
+;;
+;; Testing skein.test.examples
+;;
+;; Ran 1 tests containing 2 assertions.
+;; 0 failures, 0 errors.
+;=> {:test 1, :pass 2, :fail 0, :error 0}
+
+;; A test is a function too: call it on its own at the REPL.
+(addition)
+;=> nil
+
+;;;; is
+;; Outside a run, is only returns the form's value.
+(is (= 2 (inc 1)))
+;=> true
+
+;; A failing call reports the arguments' values.
+(deftest broken
+  (is (= 5 (+ 2 2)) "arithmetic"))
+(with-out-str (run-tests 'skein.test.examples))
+;=> "\nTesting skein.test.examples\n\nFAIL in (broken)\narithmetic\nexpected: (= 5 (+ 2 2))\n  actual: (not (= 5 4))\n\nRan 2 tests containing 3 assertions.\n1 failures, 0 errors.\n"
+
+;; (thrown? type body...) checks that the body signals a condition of the type, and
+;; returns it; thrown-with-msg? also checks its message.
+(condition? (is (thrown? arithmetic-error (quot 1 0))))
+;=> true
+
+(condition? (is (thrown-with-msg? error "not found" (error "file not found"))))
+;=> true
+
+;;;; testing
+(deftest broken
+  (testing "with negative numbers"
+    (is (pos? (- 3)))))
+(with-out-str (run-tests 'skein.test.examples))
+;=> "\nTesting skein.test.examples\n\nFAIL in (broken)\nwith negative numbers\nexpected: (pos? (- 3))\n  actual: (not (pos? -3))\n\nRan 2 tests containing 3 assertions.\n1 failures, 0 errors.\n"
+
+;;;; are
+;; An is for each group of values.
+(deftest broken
+  (are [s n] (= n (count s))
+    "" 0
+    "abc" 3
+    [1 2] 2))
+(let [counts (atom nil)]
+  (with-out-str (reset! counts (run-tests 'skein.test.examples)))
+  @counts)
+;=> {:test 2, :pass 5, :fail 0, :error 0}
+
+;;;; run-tests
+;; Several namespaces; returns the counts.
+(let [counts (atom nil)]
+  (with-out-str (reset! counts (run-tests "skein.test.examples")))
+  (:test @counts))
+;=> 2
+
+;;;; successful?
+[(successful? {:test 1 :pass 3 :fail 0 :error 0})
+ (successful? {:test 1 :pass 2 :fail 1 :error 0})]
+;=> [true false]
+
+;;;; use-fixtures
+;; :each wraps every test, :once all of them: functions of a function that runs them.
+(def log (atom []))
+(use-fixtures :each (fn [run] (swap! log conj :setup) (run) (swap! log conj :teardown)))
+(with-out-str (run-tests 'skein.test.examples))
+@log
+;=> [:setup :teardown :setup :teardown]
+
+;;;; set-fixtures!
+;; What use-fixtures calls; an empty vector removes them.
+(t/set-fixtures! "skein.test.examples" :each [])
+(reset! log [])
+(with-out-str (run-tests 'skein.test.examples))
+@log
+;=> []
+
+;;;; test-ns
+;; Runs one namespace's tests without the report, inside run-tests' counters or alone.
+(binding [t/*counters* (atom {:test 0 :pass 0 :fail 0 :error 0})]
+  (test-ns "skein.test.examples")
+  @t/*counters*)
+;=> {:test 2, :pass 5, :fail 0, :error 0}
+
+;;;; *counters*
+;; The run's counts, an atom, while run-tests runs; nil outside.
+t/*counters*
+;=> nil
+
+;;;; *testing-names*
+(deftest names-inside
+  (is (= '[names-inside] t/*testing-names*)))
+(let [counts (atom nil)]
+  (with-out-str (reset! counts (run-tests 'skein.test.examples)))
+  (successful? @counts))
+;=> true
+
+;;;; *testing-contexts*
+(testing "outer"
+  (testing "inner"
+    t/*testing-contexts*))
+;=> ["outer" "inner"]
+
+;;;; message-has?
+;; What thrown-with-msg? checks a message with.
+[(t/message-has? "file not found: a.txt" "not found") (t/message-has? "ok" "error")]
+;=> [true false]
+
+;;;; register-test!
+;; What deftest calls: a function registered under a namespace's name.
+(t/register-test! "my.generated" 'generated (fn [] (t/run-test-body 'generated
+                                                                     (fn [] (is true)))))
+(let [counts (atom nil)]
+  (with-out-str (reset! counts (run-tests "my.generated")))
+  @counts)
+;=> {:test 1, :pass 1, :fail 0, :error 0}
+
+;;;; run-test-body
+;; Runs a test's body: counts it and reports an error it signals.
+(binding [t/*counters* (atom {:test 0 :pass 0 :fail 0 :error 0})]
+  (with-out-str (t/run-test-body 'failing (fn [] (error "boom"))))
+  @t/*counters*)
+;=> {:test 1, :pass 0, :fail 0, :error 1}
+
+;;;; report-pass
+(binding [t/*counters* (atom {:test 0 :pass 0 :fail 0 :error 0})]
+  (t/report-pass)
+  (:pass @t/*counters*))
+;=> 1
+
+;;;; report-fail
+;; For assertions of your own, as is reports them.
+(binding [t/*testing-names* '[custom]]
+  (with-out-str (t/report-fail "colors differ" :red :blue)))
+;=> "\nFAIL in (custom)\ncolors differ\nexpected: :red\n  actual: :blue\n"
+
+;;;; report-error
+(binding [t/*testing-names* '[custom]]
+  (with-out-str (handler-case (error "boom") (error [c] (t/report-error nil nil c)))))
+;=> "\nERROR in (custom)\n  actual: boom\n"
