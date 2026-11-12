@@ -85,6 +85,7 @@ These are defined in M0.1; update this section if they change.
 | `./skein test [path...]` | run a project's skein.test tests natively (default: its `:test-paths`, else `test/`); exits with 1 on a failure |
 | `./skein deps [update [lib...]]` | fetch the project's dependencies (`:deps`, git and local folders) into the cache, `SKEIN_DEPS_DIR` or `~/.skein/deps`; `update` moves `skein.lock` to the tags' current commits (D-094) |
 | `make bench` | run the benchmarks in `bench/` |
+| `make manual` | generate Skein's manual into `build/manual/` (`doc/manual.skn`, D-109); `./skein run doc/manual.skn --check [ns...]` runs its examples |
 | `./skein bindgen <headers> --prefix P --ns NS ...` | generate FFI bindings from C headers (needs clang) |
 
 ## 9. When to ask Jessie

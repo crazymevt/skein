@@ -1,0 +1,843 @@
+(ns manual
+  "Skein's manual (D-109): a static HTML site generated from the compiler's model of the
+standard library and from the hand-written files in doc/. Run from the repository's root:
+
+  ./skein run doc/manual.skn [out-dir]       write the site (default build/manual)
+  ./skein run doc/manual.skn --check [ns...]  run the examples in doc/examples, and check
+                                              doc/topics.edn; exit 1 on a failure
+
+This program is built with --eval (as ./skein run builds it), so the namespaces it requires
+are in the compiler's model with their vars' argument lists, docstrings and source
+locations, as Swank sees them, and it can evaluate the examples."
+  (:require [skein.string :as str]
+            [skein.io :as io]
+            [skein.edn :as edn]
+            [skein.compiler.reader :as reader]
+            ;; The documented namespaces, so that they are in the model.
+            [skein.bytes] [skein.dev] [skein.edn] [skein.ffi] [skein.game] [skein.jobs]
+            [skein.json] [skein.log] [skein.math] [skein.net] [skein.process] [skein.swank]
+            [skein.system] [skein.test] [skein.time]))
+
+;;; ------------------------------------------------------------------------------------
+;;; The model
+
+(def documented
+  "The namespaces the manual documents, in the order of its sidebar."
+  ["skein.core" "skein.string" "skein.math" "skein.io" "skein.process" "skein.system"
+   "skein.net" "skein.json" "skein.edn" "skein.bytes" "skein.time" "skein.log"
+   "skein.jobs" "skein.test" "skein.ffi" "skein.game" "skein.dev" "skein.swank"])
+
+(defn- relative-path
+  "path relative to the current directory (the repository's root), if it is inside it."
+  [path]
+  (let [root (str (io/absolute-path ".") "/")
+        root (if (str/ends-with? root "/./") (subs root 0 (- (count root) 2)) root)]
+    (if (and path (str/starts-with? path root)) (subs path (count root)) path)))
+
+(defn- source-forms
+  "name -> {:doc :arglists :loc} for the top-level definitions with a docstring in the
+source file at path, read with Skein's reader: a fallback for vars the model has no
+information for (the macros of lib/skein/core.skn, compiled into every program)."
+  [path]
+  (if-not (io/file-exists? path)
+    {}
+    (into {}
+          (keep (fn [form]
+                  (let [items (:datum form)]
+                    (when (and (= :list (:kind form)) (>= (count items) 3)
+                               (symbol? (:datum (first items)))
+                               (contains? #{"defn" "defmacro" "defgeneric" "def"}
+                                          (name (:datum (first items))))
+                               (string? (:datum (nth items 2))))
+                      (let [nm (name (:datum (second items)))
+                            params (filter (fn [s] (= :vector (:kind s))) (drop 3 items))
+                            bodies (filter (fn [s] (and (= :list (:kind s))
+                                                        (= :vector (:kind (first (:datum s))))))
+                                           (drop 3 items))
+                            vectors (if (seq params)
+                                      [(first params)]
+                                      (map (fn [b] (first (:datum b))) bodies))]
+                        [nm {:doc (:datum (nth items 2))
+                             :arglists (when (seq vectors)
+                                         (str "(" (str/join " " (map reader/syntax-to-string
+                                                                     vectors))
+                                              ")"))
+                             :loc (str path ":" (:line (:loc form)) ":1")}]))))
+                (reader/read-string-forms (io/read-file path)
+                                          {:file path :namespace "skein.core"})))))
+
+(defn- var-info
+  "{:doc :arglists :loc} of a var: the model's, else skein.core.native's for a skein.core
+function written in Skein (as Swank does), else from fallback."
+  [var fallback]
+  (let [info (%var-info var)]
+    (if (or (:doc info) (:arglists info))
+      info
+      (or (when (= "skein.core" (%namespace-name (%var-namespace var)))
+            (when-let [lib (some-> (%find-namespace "skein.core.native")
+                                   (%find-own-var (%var-name var)))]
+              (let [i (%var-info lib)] (when (or (:doc i) (:arglists i)) i))))
+          (get fallback (%var-name var))
+          info))))
+
+(defn- parse-arglists
+  "The parameter vectors of an arglists string, each a vector of strings."
+  [text]
+  (when text
+    (handler-case
+        (mapv (fn [v] (mapv reader/syntax-to-string (:datum v)))
+              (:datum (reader/read-string-form text)))
+      (error [_] nil))))
+
+(defn- ns-docstring
+  "The docstring of the ns form at the start of the file at path, or nil."
+  [path]
+  (when (and path (io/file-exists? path))
+    (let [form (reader/read-form (reader/make-reader (io/read-file path) {:file path}))
+          items (:datum form)]
+      (when (and (>= (count items) 3) (string? (:datum (nth items 2))))
+        (:datum (nth items 2))))))
+
+(defn namespace-model
+  "{:name :doc :file :vars} of the namespace called nm, :vars sorted by name, each
+{:name :ns :arglists (vectors of strings) :doc :loc (file:line, relative) :macro?}."
+  [nm]
+  (let [ns (%find-namespace nm)
+        file (if (= nm "skein.core") "lib/skein/core.skn" (relative-path (%namespace-file ns)))
+        fallback (if (= nm "skein.core") (source-forms "lib/skein/core.skn") {})]
+    {:name nm
+     :file file
+     :doc (ns-docstring file)
+     :vars (->> (:mappings @ns)
+                (keep (fn [[vname var]]
+                        (when (and (identical? ns (%var-namespace var))
+                                   (not (%var-private? var))
+                                   (not (str/starts-with? vname "%")))
+                          (let [info (var-info var fallback)
+                                loc (relative-path (:loc info))]
+                            {:name vname
+                             :ns nm
+                             :arglists (parse-arglists (:arglists info))
+                             :doc (:doc info)
+                             :loc (when loc (str/replace loc #":\d+$" ""))
+                             :macro? (boolean (%var-macro var))}))))
+                (sort-by :name)
+                vec)}))
+
+(defn model
+  "The model of every documented namespace."
+  []
+  (mapv namespace-model documented))
+
+;;; ------------------------------------------------------------------------------------
+;;; HTML
+
+(defn h
+  "s with &, <, > and \" escaped for HTML."
+  [s]
+  (str/escape (str s) {\& "&amp;" \< "&lt;" \> "&gt;" \" "&quot;"}))
+
+(defn slug
+  "A heading's anchor as GitHub makes it: lower case, punctuation dropped, spaces as -."
+  [text]
+  (-> (str/lower-case text)
+      (str/replace #"<[^>]*>" "")
+      (str/replace #"[^a-z0-9 _-]" "")
+      (str/replace " " "-")))
+
+(defn var-id
+  "The anchor of a var's entry on its namespace's page."
+  [nm]
+  (str "v-" (str/escape nm {\? "_q" \! "_b" \* "_s" \< "_lt" \> "_gt" \= "_eq" \/ "_sl"
+                            \+ "_p" \& "_a" \% "_pc" \' "_t" \. "_d"})))
+
+(defn var-url
+  "The page and anchor of a var's entry, from a page at the site's root."
+  [ns nm]
+  (str "ns/" ns ".html#" (var-id nm)))
+
+(defn qualified?
+  "True if nm is ns/name (and not the var /)."
+  [nm]
+  (and (str/includes? nm "/") (> (count nm) 1)))
+
+(defn resolve-name
+  "[ns name] of the public var a see-also name means on ns's page: \"name\" in ns, else
+in skein.core; \"ns/name\" in that namespace. nil if there is none."
+  [ns nm]
+  (let [public? (fn [vns vname]
+                  (when-let [v (some-> (%find-namespace vns) (%find-own-var vname))]
+                    (when-not (%var-private? v) [vns vname])))]
+    (if (qualified? nm)
+      (public? (namespace (symbol nm)) (name (symbol nm)))
+      (or (public? ns nm) (public? "skein.core" nm)))))
+
+;;; ------------------------------------------------------------------------------------
+;;; A small Markdown subset (until M3.13's Markdown library): headings, paragraphs,
+;;; lists, block quotes, fenced code, tables, rules; inline code, links, bold, emphasis.
+
+(defn- inline-text
+  "Markdown inline syntax outside code spans, as HTML."
+  [s link-fn]
+  (-> (h s)
+      (str/replace #"\[([^\]]+)\]\(([^)\s]+)\)"
+                   (fn [[_ text url]] (str "<a href=\"" (link-fn url) "\">" text "</a>")))
+      (str/replace #"\*\*([^*]+)\*\*" (fn [[_ t]] (str "<strong>" t "</strong>")))
+      (str/replace #"(^|[\s(])\*([^*\s][^*]*)\*" (fn [[_ pre t]] (str pre "<em>" t "</em>")))))
+
+(defn inline
+  "A line of Markdown's inline syntax as HTML. link-fn maps a link's URL."
+  ([s] (inline s identity))
+  ([s link-fn]
+   ;; A link whose text is code, [`x`](url), keeps its code; split on backticks otherwise.
+   (let [s (str/replace s #"\[`([^`]+)`\]\(([^)\s]+)\)"
+                        (fn [[_ code url]] (str "\u0001" url "\u0002" code "\u0003")))
+         parts (str/split s "`")]
+     (apply str
+            (map-indexed
+             (fn [i part]
+               (if (odd? i)
+                 (str "<code>" (h part) "</code>")
+                 (-> (inline-text part link-fn)
+                     (str/replace #"\u0001([^\u0002]*)\u0002([^\u0003]*)\u0003"
+                                  (fn [[_ url code]]
+                                    (str "<a href=\"" (link-fn url) "\"><code>" code
+                                         "</code></a>"))))))
+             parts)))))
+
+(defn- table-cells
+  "The cells of a Markdown table row."
+  [line]
+  (let [t (str/trim line)
+        t (if (str/starts-with? t "|") (subs t 1) t)
+        t (if (str/ends-with? t "|") (subs t 0 (dec (count t))) t)]
+    (mapv str/trim (str/split (str/replace t "\\|" "\u0004") "|"))))
+
+(defn- list-item?
+  [line]
+  (re-find #"^\s*([-*+]|\d+[.)])\s+" line))
+
+(defn- highlight
+  "Skein code as HTML, with comments, strings and keywords marked."
+  [code]
+  (->> (re-seq #"(;[^\n]*)|(\"(?:[^\"\\]|\\.)*\")|(:[^\s()\[\]{}\",;]+)|([^;\":]+|[\":])"
+               code)
+       (map (fn [[all comment string kw]]
+              (cond comment (str "<span class=\"c\">" (h comment) "</span>")
+                    string (str "<span class=\"s\">" (h string) "</span>")
+                    kw (str "<span class=\"k\">" (h kw) "</span>")
+                    :else (h all))))
+       (apply str)))
+
+(defn markdown
+  "Markdown text (the subset above) as HTML. Options: :link-fn maps a link's URL,
+:heading-shift adds to a heading's level."
+  ([text] (markdown text {}))
+  ([text {:keys [link-fn heading-shift] :or {link-fn identity heading-shift 0}}]
+   (let [lines (vec (str/split-lines text))
+         n (count lines)
+         il (fn [s] (inline s link-fn))]
+     (loop [i 0 out []]
+       (if (>= i n)
+         (apply str out)
+         (let [line (nth lines i)]
+           (cond
+             (str/blank? line) (recur (inc i) out)
+
+             (str/starts-with? (str/triml line) "```")
+             (let [lang (str/trim (subs (str/triml line) 3))
+                   end (or (some (fn [j] (when (str/starts-with? (str/triml (nth lines j)) "```")
+                                           j))
+                                 (range (inc i) n))
+                           n)
+                   code (str/join "\n" (subvec lines (inc i) end))]
+               (recur (inc end)
+                      (conj out "<pre><code>"
+                            (if (contains? #{"" "skein" "clojure" "lisp"} lang)
+                              (highlight code)
+                              (h code))
+                            "</code></pre>\n")))
+
+             (re-find #"^#{1,6} " line)
+             (let [[_ hashes title] (re-find #"^(#+)\s+(.*?)\s*#*$" line)
+                   level (min 6 (+ heading-shift (count hashes)))]
+               (recur (inc i)
+                      (conj out "<h" level " id=\"" (slug title) "\">" (il title)
+                            "</h" level ">\n")))
+
+             (re-find #"^\s*(---+|\*\*\*+)\s*$" line) (recur (inc i) (conj out "<hr>\n"))
+
+             (and (str/starts-with? (str/triml line) "|") (< (inc i) n)
+                  (re-find #"^\s*\|?\s*:?-+" (nth lines (inc i))))
+             (let [end (or (some (fn [j] (when-not (str/starts-with? (str/triml (nth lines j))
+                                                                       "|")
+                                           j))
+                                 (range (+ i 2) n))
+                           n)
+                   cell (fn [tag c] (str "<" tag ">" (il (str/replace c "\u0004" "|"))
+                                         "</" tag ">"))
+                   row (fn [tag l] (str "<tr>" (apply str (map (fn [c] (cell tag c))
+                                                               (table-cells l)))
+                                        "</tr>\n"))]
+               (recur end
+                      (conj out "<table>\n<thead>" (row "th" line) "</thead>\n<tbody>\n"
+                            (apply str (map (fn [l] (row "td" l)) (subvec lines (+ i 2) end)))
+                            "</tbody></table>\n")))
+
+             (str/starts-with? line ">")
+             (let [end (or (some (fn [j] (when-not (str/starts-with? (nth lines j) ">") j))
+                                 (range i n))
+                           n)
+                   inner (str/join "\n" (map (fn [l] (str/replace l #"^>\s?" ""))
+                                             (subvec lines i end)))]
+               (recur end (conj out "<blockquote>" (markdown inner {:link-fn link-fn})
+                                "</blockquote>\n")))
+
+             (list-item? line)
+             (let [ordered? (re-find #"^\s*\d" line)
+                   ;; Items, with their continuation lines (indented, or not starting a block).
+                   [items end]
+                   (loop [j i items []]
+                     (cond
+                       (>= j n) [items j]
+                       (list-item? (nth lines j))
+                       (recur (inc j) (conj items (str/replace (nth lines j)
+                                                               #"^\s*([-*+]|\d+[.)])\s+" "")))
+                       (and (seq items) (not (str/blank? (nth lines j)))
+                            (not (re-find #"^(#|```|\||>)" (str/triml (nth lines j)))))
+                       (recur (inc j) (conj (pop items) (str (peek items) " "
+                                                            (str/trim (nth lines j)))))
+                       :else [items j]))
+                   tag (if ordered? "ol" "ul")]
+               (recur end (conj out "<" tag ">\n"
+                                (apply str (map (fn [it] (str "<li>" (il it) "</li>\n")) items))
+                                "</" tag ">\n")))
+
+             :else
+             (let [end (or (some (fn [j] (let [l (nth lines j)]
+                                           (when (or (str/blank? l) (list-item? l)
+                                                     (re-find #"^(#{1,6} |```|\||>)"
+                                                              (str/triml l)))
+                                             j)))
+                                 (range (inc i) n))
+                           n)]
+               (recur end (conj out "<p>" (il (str/join "\n" (subvec lines i end)))
+                                "</p>\n"))))))))))
+
+(defn docstring-html
+  "A docstring as HTML: its paragraphs, with the names of known vars in it linked."
+  [doc]
+  (if (str/blank? doc)
+    "<p class=\"missing\">No docstring.</p>\n"
+    (->> (str/split doc #"\n\s*\n")
+         (map (fn [para]
+                (if (re-find #"(?m)^  " para)
+                  (str "<pre>" (h para) "</pre>\n")
+                  (str "<p>" (h para) "</p>\n"))))
+         (apply str))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Hand-written files: notes, examples, topics
+
+(defn notes
+  "The notes of a namespace from doc/notes/<ns>.md: var name -> {:args :notes :see-also}
+(:args and :notes as Markdown, :see-also a vector of names), with the text before the
+first var under :intro. A var's section starts with `## name`; within it `### Arguments
+and values` starts its arguments, `See also:` names related vars, and the rest is notes."
+  [ns]
+  (let [path (str "doc/notes/" ns ".md")]
+    (if-not (io/file-exists? path)
+      {}
+      (loop [lines (str/split-lines (io/read-file path)) current :intro section :notes
+             acc {}]
+        (if (empty? lines)
+          acc
+          (let [line (first lines)]
+            (cond
+              (str/starts-with? line "## ")
+              (recur (rest lines) (str/trim (subs line 3)) :notes acc)
+
+              (and (not= current :intro) (re-find #"^###\s+Arguments" line))
+              (recur (rest lines) current :args acc)
+
+              (and (not= current :intro) (re-find #"^###\s+Notes" line))
+              (recur (rest lines) current :notes acc)
+
+              (and (not= current :intro) (str/starts-with? line "See also:"))
+              (recur (rest lines) current section
+                     (assoc-in acc [current :see-also]
+                               (->> (str/split (subs line 9) #"[,\s]+")
+                                    (map (fn [s] (str/replace s #"`" "")))
+                                    (remove str/blank?)
+                                    vec)))
+
+              (= current :intro)
+              (recur (rest lines) current section (update acc :intro (fn [t] (str t line "\n"))))
+
+              :else
+              (recur (rest lines) current section
+                     (update-in acc [current section] (fn [t] (str t line "\n")))))))))))
+
+(defn- result-line? [line]
+  (or (str/starts-with? line ";=>") (str/starts-with? line ";; prints:")))
+
+(defn- results
+  "The result block of the lines starting at index i: {:value :prints :lines :end}, where
+:value is the text after ;=> (with its continuation lines), :prints what ;; prints:
+announces (nil if neither), :lines the block's lines and :end the index after it."
+  [lines i]
+  (loop [j i value nil prints nil mode nil]
+    (let [line (when (< j (count lines)) (nth lines j))]
+      (cond
+        (nil? line) {:value value :prints prints :lines (subvec lines i j) :end j}
+        (str/starts-with? line ";=>")
+        (recur (inc j) (str/trim (subs line 3)) prints :value)
+        (str/starts-with? line ";; prints:")
+        (recur (inc j) value (let [t (str/trim (subs line 10))] (if (= t "") [] [t])) :prints)
+        (and (= mode :prints) (str/starts-with? line ";;") (not (str/starts-with? line ";;;")))
+        (recur (inc j) value (conj prints (str/replace line #"^;; ?" "")) mode)
+        (and (= mode :value) (re-find #"^;\s" line))
+        (recur (inc j) (str value " " (str/trim (subs line 1))) prints mode)
+        :else {:value value :prints prints :lines (subvec lines i j) :end j}))))
+
+(defn parse-examples
+  "The examples in text, the examples file of namespace ns at path (see examples)."
+  [text path ns]
+  (let [lines (vec (str/split-lines text))
+        forms (reader/read-string-forms text {:file path :namespace (str ns ".examples")})
+        ;; Each form's source and the lines from it to the next form's start.
+        spans (map-indexed (fn [k f]
+                             {:form f
+                              :start (dec (:line (:loc f)))
+                              :end (:end-line (:loc f))})
+                           forms)]
+    (loop [spans spans prev-end 0 current nil ex nil acc {:ns-form nil :vars {}}]
+      (if (empty? spans)
+        (if (and current ex) (update-in acc [:vars current] (fnil conj []) ex) acc)
+        (let [{:keys [form start end]} (first spans)
+              between (subvec lines prev-end start)
+              heading (some (fn [l] (when (str/starts-with? l ";;;; ")
+                                      (str/trim (subs l 5))))
+                            (reverse between))
+              after-heading (if heading
+                              (reverse (take-while (fn [l] (not (str/starts-with? l ";;;; ")))
+                                                   (reverse between)))
+                              between)
+              caption (->> after-heading
+                           (filter (fn [l] (and (str/starts-with? l ";;")
+                                                (not (str/starts-with? l ";;;")))))
+                           (map (fn [l] (str/replace l #"^;; ?" "")))
+                           (str/join "\n"))
+              new? (or heading (seq caption) (some str/blank? between))
+              code (str/join "\n" (subvec lines start end))
+              {res-lines :lines res-end :end value :value prints :prints} (results lines end)
+              step {:code code :value value :prints prints :line (inc start)
+                    :shown (str/join "\n" (into [code] res-lines))}
+              acc (if (and new? current ex)
+                    (update-in acc [:vars current] (fnil conj []) ex)
+                    acc)
+              current (or heading current)]
+          (cond
+            (nil? (:ns-form acc))
+            (recur (rest spans) res-end current nil (assoc acc :ns-form code))
+            new?
+            (recur (rest spans) res-end current {:caption caption :steps [step]} acc)
+            :else
+            (recur (rest spans) res-end current
+                   (if ex (update ex :steps conj step) {:caption "" :steps [step]})
+                   acc)))))))
+
+(defn examples
+  "The examples of a namespace from doc/examples/<ns>.skn: {:ns-form text :vars {name
+[example...]}}, an example being {:caption (Markdown) :steps [{:code :value :prints
+:line :shown}]}. `;;;; name` starts a var's examples; `;;` lines before a form are a new
+example's caption, as is a blank line; `;=>` and `;; prints:` lines after a form are its
+value and output."
+  [ns]
+  (let [path (str "doc/examples/" ns ".skn")]
+    (when (io/file-exists? path)
+      (parse-examples (io/read-file path) path ns))))
+
+(defn topics
+  "doc/topics.edn: a vector of sections {:title :ns :groups [[title [name...]]...]}."
+  []
+  (edn/read-string (io/read-file "doc/topics.edn")))
+
+;;; ------------------------------------------------------------------------------------
+;;; Running the examples
+
+(defn- normalize [s] (str/trim (str/replace (str s) #"\s+" " ")))
+
+(defn check-step
+  "Evaluate an example's step; nil if its value and output are as written, else a
+message."
+  [path step]
+  (let [out (atom nil)
+        result (handler-case
+                   (let [v (atom nil)]
+                     (reset! out (with-out-str (reset! v (eval (read-string (:code step))))))
+                     {:value @v})
+                 (error [c] {:error (condition-message c)}))
+        where (str path ":" (:line step))]
+    (cond
+      (:error result)
+      (str where ": " (:code step) "\n  signaled: " (:error result))
+
+      (and (:value step) (not= (normalize (:value step)) (normalize (pr-str (:value result)))))
+      (str where ": " (:code step) "\n  expected: " (:value step)
+           "\n  got:      " (pr-str (:value result)))
+
+      (and (:prints step)
+           (not= (str/trimr (str/join "\n" (:prints step))) (str/trimr @out)))
+      (str where ": " (:code step) "\n  expected to print: " (pr-str (str/join "\n" (:prints step)))
+           "\n  printed:           " (pr-str @out))
+
+      :else nil)))
+
+(defn check-examples
+  "Run the examples of namespace ns; a vector of failure messages. Every example must
+belong to a public var of ns."
+  [ns-model]
+  (let [ns (:name ns-model)
+        path (str "doc/examples/" ns ".skn")
+        exs (examples ns)
+        names (set (map :name (:vars ns-model)))]
+    (if-not exs
+      []
+      (do
+        (eval (read-string (:ns-form exs)))
+        (vec (concat
+              (for [nm (keys (:vars exs)) :when (not (contains? names nm))]
+                (str path ": examples for " nm ", which isn't a public var of " ns))
+              (for [[_ exs] (:vars exs) ex exs step (:steps ex)
+                    :let [failure (check-step path step)] :when failure]
+                failure)))))))
+
+(defn check-topics
+  "Failures in doc/topics.edn: names that aren't public vars of their section's namespace."
+  [models]
+  (let [by-ns (into {} (map (fn [m] [(:name m) (set (map :name (:vars m)))]) models))]
+    (vec (for [section (topics) [title names] (:groups section) nm names
+               :let [ns (or (namespace (symbol nm)) (:ns section))
+                     plain (name (symbol nm))]
+               :when (not (contains? (get by-ns ns #{}) plain))]
+           (str "doc/topics.edn: " nm " in " (:title section) " / " title
+                " isn't a public var of " ns)))))
+
+(defn check-notes
+  "Failures in the notes: sections and see-also names that aren't public vars."
+  [ns-model]
+  (let [names (set (map :name (:vars ns-model)))
+        ns (:name ns-model)]
+    (vec (for [[nm entry] (notes ns) :when (not= nm :intro)
+               bad (cons (when-not (contains? names nm) nm)
+                         (remove (fn [s] (resolve-name ns s))
+                                 (:see-also entry)))
+               :when bad]
+           (str "doc/notes/" ns ".md: " bad " (under " nm ") isn't a public var of " ns)))))
+
+(defn check
+  "Run every check, or only those of the namespaces named; print the failures. True if
+there were none."
+  [only]
+  (let [models (model)
+        models' (if (seq only) (filter (fn [m] (contains? (set only) (:name m))) models) models)
+        failures (concat (check-topics models)
+                         (mapcat check-notes models')
+                         (mapcat check-examples models'))
+        n (reduce + (for [m models' :let [exs (examples (:name m))] :when exs
+                          [_ es] (:vars exs) e es]
+                      (count (:steps e))))]
+    (doseq [f failures] (println "FAIL" f))
+    (println (str "manual: " n " example steps in " (count models') " namespaces, "
+                  (count failures) " failures"))
+    (empty? failures)))
+
+;;; ------------------------------------------------------------------------------------
+;;; Pages
+
+(def css
+  "The site's stylesheet."
+  ":root{--bg:#fdfcf9;--fg:#1f2328;--muted:#656d76;--line:#e4e1d8;--side:#f4f1ea;
+--accent:#7a3e9d;--code:#f2efe7;--c:#6a737d;--s:#0a6b3c;--k:#8b4a00;--card:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#16161a;--fg:#e6e4df;--muted:#9a978f;
+--line:#2d2c30;--side:#1d1c21;--accent:#c79bf2;--code:#232228;--c:#8b949e;--s:#7ee2a8;
+--k:#f0b072;--card:#1b1a1f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,
+'Segoe UI',sans-serif}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+code,pre{font:14px/1.45 ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+code{background:var(--code);padding:1px 4px;border-radius:4px}
+pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow-x:auto}
+pre code{background:none;padding:0}
+.c{color:var(--c)}.s{color:var(--s)}.k{color:var(--k)}
+.layout{display:flex;min-height:100vh}
+nav.side{width:250px;flex:none;background:var(--side);border-right:1px solid var(--line);
+padding:18px 16px;position:sticky;top:0;height:100vh;overflow-y:auto}
+nav.side .brand{font-weight:700;font-size:20px;color:var(--fg);display:block;margin-bottom:12px}
+nav.side h4{margin:18px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;
+color:var(--muted)}
+nav.side ul{list-style:none;margin:0;padding:0}nav.side li{margin:2px 0}
+nav.side a.here{font-weight:700}
+main{flex:1;min-width:0;padding:28px 40px 80px;max-width:1000px}
+#search{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:6px;
+background:var(--bg);color:var(--fg);font:inherit}
+#results{list-style:none;margin:6px 0 0;padding:0;max-height:50vh;overflow-y:auto}
+#results li{padding:2px 0;font-size:14px}#results small{color:var(--muted)}
+h1{font-size:30px;margin:0 0 8px}h2{margin-top:36px;border-bottom:1px solid var(--line);
+padding-bottom:4px}
+.lede{color:var(--muted)}
+.index{columns:4 160px;font-size:14px;margin:8px 0 24px}.index a{display:block}
+.entry{background:var(--card);border:1px solid var(--line);border-radius:10px;
+padding:16px 20px;margin:22px 0;scroll-margin-top:16px}
+.entry h2{border:none;margin:0;padding:0;font-size:22px;display:flex;
+align-items:baseline;gap:10px;flex-wrap:wrap}
+.entry h2 a.name{color:var(--fg)}
+.kind{font-size:12px;font-weight:500;color:var(--muted);border:1px solid var(--line);
+border-radius:10px;padding:0 8px}
+.src{margin-left:auto;font-size:12px;font-weight:400;color:var(--muted)}
+.entry h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+margin:16px 0 6px}
+.syntax code{display:block;background:none;padding:1px 0;font-size:15px}
+.missing{color:var(--muted);font-style:italic}
+.example{margin:10px 0}.example p{margin:4px 0}
+.see a{margin-right:10px}
+.qr{columns:2 420px;column-gap:28px}
+.qr section{break-inside:avoid;margin:0 0 18px;background:var(--card);
+border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.qr h2{font-size:18px;margin:0 0 6px;border:none}
+.qr table{border-collapse:collapse;width:100%}
+.qr td{vertical-align:top;padding:3px 0;font-size:14px;border-top:1px solid var(--line)}
+.qr td:first-child{width:118px;color:var(--muted);padding-right:8px}
+.qr td a{margin-right:9px;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;
+font-size:13px}
+table{border-collapse:collapse;margin:12px 0}th,td{border:1px solid var(--line);
+padding:4px 8px;text-align:left;vertical-align:top}
+blockquote{border-left:3px solid var(--line);margin:0;padding:0 14px;color:var(--muted)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.cards a{display:block;background:var(--card);border:1px solid var(--line);border-radius:10px;
+padding:12px 14px;color:var(--fg)}.cards a:hover{border-color:var(--accent);text-decoration:none}
+.cards b{color:var(--accent)}.cards span{display:block;color:var(--muted);font-size:14px}
+@media (max-width:760px){.layout{display:block}nav.side{width:auto;height:auto;
+position:static;border-right:none;border-bottom:1px solid var(--line)}
+main{padding:20px 16px 60px}}
+")
+
+(def search-js
+  "The search box: filters the index in search-index.js as the user types."
+  "(function(){var box=document.getElementById('search'),out=document.getElementById('results');
+if(!box||!window.SKEIN_INDEX)return;var root=document.body.getAttribute('data-root')||'';
+box.addEventListener('input',function(){var q=box.value.trim().toLowerCase();out.innerHTML='';
+if(!q)return;var hits=[];SKEIN_INDEX.forEach(function(e){var n=e[0].toLowerCase(),i=n.indexOf(q);
+if(i>=0)hits.push([i===0?(n===q?0:1):2,n.length,e]);});
+hits.sort(function(a,b){return a[0]-b[0]||a[1]-b[1];});
+hits.slice(0,40).forEach(function(x){var e=x[2],li=document.createElement('li');
+li.innerHTML='<a href=\"'+root+e[2]+'\"></a> <small></small>';li.firstChild.textContent=e[0];
+li.lastChild.textContent=e[1];out.appendChild(li);});});
+box.addEventListener('keydown',function(ev){if(ev.key==='Enter'){var a=out.querySelector('a');
+if(a)location.href=a.href;}});})();
+")
+
+(defn- page
+  "A whole page. root is the path from it to the site's root (\"\" or \"../\")."
+  [{:keys [title root here]} body]
+  (str "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+       "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
+       "<title>" (h title) " — Skein manual</title>\n"
+       "<link rel=\"stylesheet\" href=\"" root "style.css\"></head>\n"
+       "<body data-root=\"" root "\"><div class=\"layout\">\n<nav class=\"side\">"
+       "<a class=\"brand\" href=\"" root "index.html\">Skein manual</a>\n"
+       "<input id=\"search\" type=\"search\" placeholder=\"Search vars…\" autocomplete=\"off\">"
+       "<ul id=\"results\"></ul>\n"
+       "<h4>Guide</h4><ul>"
+       (apply str (for [[file label] [["index.html" "Overview"]
+                                      ["quickref.html" "Quick reference"]
+                                      ["reference.html" "Language reference"]]]
+                    (str "<li><a" (when (= here file) " class=\"here\"") " href=\"" root file
+                         "\">" label "</a></li>")))
+       "</ul>\n<h4>Namespaces</h4><ul>"
+       (apply str (for [ns documented]
+                    (str "<li><a" (when (= here ns) " class=\"here\"") " href=\"" root "ns/" ns
+                         ".html\">" ns "</a></li>")))
+       "</ul></nav>\n<main>\n" body "\n</main></div>\n"
+       "<script src=\"" root "search-index.js\"></script>\n"
+       "<script src=\"" root "search.js\"></script>\n</body></html>\n"))
+
+(defn- first-sentence [doc]
+  (when doc
+    (let [s (str/replace (str/trim doc) #"\s+" " ")
+          [_ m] (re-find #"^(.*?[.:])(\s|$)" s)]
+      (or m s))))
+
+(defn- link-var
+  "A link to the var a see-also name means (resolve-name), from a page at root."
+  [root ns nm]
+  (if-let [[vns vname] (resolve-name ns nm)]
+    (str "<a href=\"" root (var-url vns vname) "\"><code>" (h nm) "</code></a>")
+    (str "<code>" (h nm) "</code>")))
+
+(defn entry-html
+  "A var's entry on its namespace's page."
+  [v note exs]
+  (let [{:keys [name ns arglists doc loc macro?]} v]
+    (str "<section class=\"entry\" id=\"" (var-id name) "\">\n"
+         "<h2><a class=\"name\" href=\"#" (var-id name) "\">" (h name) "</a>"
+         "<span class=\"kind\">" (if macro? "macro" "function") "</span>"
+         (when loc (str "<span class=\"src\">" (h loc) "</span>"))
+         "</h2>\n"
+         (when (seq arglists)
+           (str "<h3>Syntax</h3><div class=\"syntax\">"
+                (apply str (for [a arglists]
+                             (str "<code>(" (h name) (apply str (map (fn [p] (str " " (h p))) a))
+                                  ")</code>")))
+                "</div>\n"))
+         (when (:args note)
+           (str "<h3>Arguments and values</h3>\n" (markdown (:args note) {:heading-shift 3})))
+         "<h3>Description</h3>\n" (docstring-html doc)
+         (when (seq exs)
+           (str "<h3>Examples</h3>\n"
+                (apply str (for [ex exs]
+                             (str "<div class=\"example\">"
+                                  (when-not (str/blank? (:caption ex)) (markdown (:caption ex)))
+                                  "<pre><code>"
+                                  (highlight (str/join "\n\n" (map :shown (:steps ex))))
+                                  "</code></pre></div>\n")))))
+         (when-not (str/blank? (:notes note))
+           (str "<h3>Notes</h3>\n" (markdown (:notes note) {:heading-shift 3})))
+         (when (seq (:see-also note))
+           (str "<h3>See also</h3><p class=\"see\">"
+                (apply str (map (fn [s] (link-var "../" ns s)) (:see-also note)))
+                "</p>\n"))
+         "</section>\n")))
+
+(defn namespace-page
+  "The page of a namespace."
+  [m]
+  (let [ns (:name m)
+        ns-notes (notes ns)
+        exs (:vars (examples ns))]
+    (page {:title ns :root "../" :here ns}
+          (str "<h1>" ns "</h1>\n"
+               (when (:file m) (str "<p class=\"lede\">Source: <code>" (h (:file m))
+                                    "</code> · " (count (:vars m)) " public vars</p>\n"))
+               (docstring-html (:doc m))
+               (when-not (str/blank? (:intro ns-notes)) (markdown (:intro ns-notes)))
+               "<div class=\"index\">"
+               (apply str (for [v (:vars m)]
+                            (str "<a href=\"#" (var-id (:name v)) "\">" (h (:name v)) "</a>")))
+               "</div>\n"
+               (apply str (for [v (:vars m)]
+                            (entry-html v (get ns-notes (:name v)) (get exs (:name v)))))))))
+
+(defn quickref-page
+  "The quick reference: every public var, grouped by topic (doc/topics.edn), with the vars
+no topic names under their namespace's \"Other\"."
+  [models]
+  (let [sections (topics)
+        listed (set (for [s sections [_ names] (:groups s) nm names]
+                      (if (qualified? nm) nm (str (:ns s) "/" nm))))
+        by-ns (into {} (map (fn [m] [(:name m) m]) models))
+        doc-of (fn [ns nm] (some (fn [v] (when (= nm (:name v)) (:doc v)))
+                                 (:vars (get by-ns ns))))
+        row (fn [ns title names]
+              (str "<tr><td>" (h title) "</td><td>"
+                   (apply str (for [nm names
+                                    :let [[vns vname] (if (qualified? nm)
+                                                        [(namespace (symbol nm))
+                                                         (name (symbol nm))]
+                                                        [ns nm])]]
+                                (str "<a href=\"" (var-url vns vname) "\" title=\""
+                                     (h (first-sentence (doc-of vns vname))) "\">" (h vname)
+                                     "</a> ")))
+                   "</td></tr>\n"))
+        others (fn [ns]
+                 (let [rest (remove (fn [v] (contains? listed (str ns "/" (:name v))))
+                                    (:vars (get by-ns ns)))]
+                   (when (seq rest) (row ns "Other" (map :name rest)))))
+        ns-sections (set (map :ns sections))]
+    (page {:title "Quick reference" :root "" :here "quickref.html"}
+          (str "<h1>Quick reference</h1>\n<p class=\"lede\">Every public var of the standard "
+               "library, by topic. Hover over a name for its first sentence.</p>\n"
+               "<div class=\"qr\">\n"
+               (apply str
+                      (for [[i s] (map-indexed vector sections)
+                            :let [last-of-ns? (not-any? (fn [t] (= (:ns t) (:ns s)))
+                                                        (drop (inc i) sections))]]
+                        (str "<section><h2>" (h (:title s)) " <small><a href=\"ns/" (:ns s)
+                             ".html\">" (:ns s) "</a></small></h2><table>\n"
+                             (apply str (for [[title names] (:groups s)] (row (:ns s) title names)))
+                             (when last-of-ns? (others (:ns s)))
+                             "</table></section>\n")))
+               (apply str
+                      (for [m models :when (not (contains? ns-sections (:name m)))
+                            :let [o (others (:name m))] :when o]
+                        (str "<section><h2><a href=\"ns/" (:name m) ".html\">" (:name m)
+                             "</a></h2><table>\n" o "</table></section>\n")))
+               "</div>\n"))))
+
+(defn- design-link
+  "A link in DESIGN.md, made to work from reference.html."
+  [url]
+  (cond
+    (re-find #"^(https?:|#)" url) url
+    (str/starts-with? url "DESIGN.md#") (subs url 9)
+    ;; The other documents, from build/manual/ in the checkout.
+    :else (str "../../docs/" url)))
+
+(defn reference-page
+  "The language reference: docs/DESIGN.md."
+  []
+  (page {:title "Language reference" :root "" :here "reference.html"}
+        (markdown (io/read-file "docs/DESIGN.md") {:link-fn design-link})))
+
+(defn index-page
+  "The overview."
+  [models]
+  (page {:title "Overview" :root "" :here "index.html"}
+        (str "<h1>Skein manual</h1>\n<p class=\"lede\">Skein is a Lisp for games and desktop "
+             "apps. This manual is generated from the standard library's own docstrings and "
+             "argument lists, with examples that the test suite runs.</p>\n"
+             "<div class=\"cards\">"
+             "<a href=\"quickref.html\"><b>Quick reference</b><span>Every function by topic"
+             "</span></a>"
+             "<a href=\"reference.html\"><b>Language reference</b><span>Syntax, semantics and "
+             "the runtime (DESIGN.md)</span></a></div>\n"
+             "<h2>Namespaces</h2>\n<div class=\"cards\">"
+             (apply str (for [m models]
+                          (str "<a href=\"ns/" (:name m) ".html\"><b>" (:name m) "</b><span>"
+                               (h (first-sentence (:doc m))) "</span></a>")))
+             "</div>\n")))
+
+(defn- js-string [s]
+  (str "\"" (str/escape s {\" "\\\"" \\ "\\\\" \< "\\u003c" \newline "\\n"}) "\""))
+
+(defn search-index
+  "search-index.js: [name, namespace, url] for every var."
+  [models]
+  (str "window.SKEIN_INDEX=[\n"
+       (str/join ",\n" (for [m models v (:vars m)]
+                         (str "[" (js-string (:name v)) "," (js-string (:name m)) ","
+                              (js-string (var-url (:name m) (:name v))) "]")))
+       "];\n"))
+
+(defn generate
+  "Write the site into out."
+  [out]
+  (let [models (model)]
+    (io/make-dirs (io/path out "ns"))
+    (io/write-file (io/path out "style.css") css)
+    (io/write-file (io/path out "search.js") search-js)
+    (io/write-file (io/path out "search-index.js") (search-index models))
+    (io/write-file (io/path out "index.html") (index-page models))
+    (io/write-file (io/path out "quickref.html") (quickref-page models))
+    (io/write-file (io/path out "reference.html") (reference-page))
+    (doseq [m models]
+      (io/write-file (io/path out "ns" (str (:name m) ".html")) (namespace-page m)))
+    (println (str "manual: wrote " out "/ (" (count models) " namespaces, "
+                  (reduce + (map (comp count :vars) models)) " vars)"))))
+
+(defn -main [& args]
+  (if (= "--check" (first args))
+    (when-not (check (rest args)) (%exit 1))
+    (generate (or (first args) "build/manual"))))
