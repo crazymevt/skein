@@ -52,7 +52,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M3.4 Networking and the Swank client | ✅ |
 | M3.5 Files and the system | ✅ |
 | M3.6 skein-ui for the IDE | ✅ |
-| M3.7 Skein Studio's core | ⬜ |
+| M3.7 Skein Studio's core | 🟨 |
 | M3.8 Agents | ⬜ |
 | M3.9 Source control | ⬜ |
 | M3.10 C sources in projects | ⬜ |
@@ -580,7 +580,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
   3. ✅ Running the project: `skein dev` started for it with Swank on a free port, or a running Swank connected to; the REPL panel (history, completion, highlighted input), evaluating the form or file and compiling, the program's output; completion and argument hints in the editor.
   4. ✅ Debugging: the debugger panel from SLDB's events (backtrace, locals, restarts, evaluating in a frame), the inspector, problems from compiler notes and read errors, underlined in the editor, and going to definitions.
   5. ✅ Commands and search: the command palette, find and replace (regex), find in files, split editors, going to a line, file or symbol.
-  6. The scripted session in CI: a script that opens a sample project, runs it under `skein dev`, edits and evaluates, hits an error and restarts, on macOS and Linux.
+  6. ✅ The scripted session in CI: a script that opens a sample project, runs it under `skein dev`, edits and evaluates, hits an error and restarts, on macOS and Linux.
 
 **Exit:** Skein Studio opens a Skein project, runs it under `skein dev`, and edits, evaluates and debugs it, on macOS and Linux; a scripted session checks it in CI.
 
