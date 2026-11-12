@@ -268,6 +268,10 @@ const Stream = struct {
     /// What read-line or read-text had gathered when a read timed out, which the next
     /// read starts with, so a timeout loses nothing.
     carry: std.ArrayList(u8) = .empty,
+    /// The program's stdin, stdout or stderr (skein.io's stdin, stdout and stderr, D-112):
+    /// written through, so it keeps its place among println's lines, and left open by
+    /// close, which only flushes it.
+    standard: bool = false,
 };
 
 var serials = std.atomic.Value(u64).init(1);
@@ -320,6 +324,32 @@ pub fn registerPipe(file: std.Io.File) struct { Value, u64 } {
     s.* = .{ .file = file, .offset = 0, .pipe = true };
     const h = register(s);
     return .{ h, s.serial };
+}
+
+var standard_handles: [3]Value = .{ Value.nil, Value.nil, Value.nil };
+
+/// (%std-stream n): the handle of the program's stdin (0), stdout (1) or stderr (2), made
+/// the first time.
+fn stdStream(n: Value) Value {
+    if (!n.isFixnum() or n.toFixnum() < 0 or n.toFixnum() > 2) rt.raise(.@"error", "%std-stream takes 0, 1 or 2", .{});
+    const i: usize = @intCast(n.toFixnum());
+    lock.lock();
+    const known = standard_handles[i];
+    lock.unlock();
+    if (known != Value.nil) return known;
+    const file = switch (i) {
+        0 => std.Io.File.stdin(),
+        1 => std.Io.File.stdout(),
+        else => std.Io.File.stderr(),
+    };
+    const s = alloc.create(Stream) catch rt.fatal("out of memory", .{});
+    s.* = .{ .file = file, .offset = 0, .pipe = true, .standard = true };
+    const h = register(s);
+    lock.lock();
+    defer lock.unlock();
+    // Another task may have made it meanwhile: keep the first (the second stays unused).
+    if (standard_handles[i] == Value.nil) standard_handles[i] = h;
+    return standard_handles[i];
 }
 
 /// A stream handle for a connected socket (net.zig, D-106), which the stream now owns.
@@ -655,7 +685,7 @@ fn write(h: Value, data: Value, start: Value, end: Value) Value {
     const to: usize = if (end == Value.nil) bytes.len else @intCast(@max(end.toFixnum(), 0));
     if (from > to or to > bytes.len) rt.raise(.index_error, "write of bytes {d} to {d} of {d}", .{ from, to, bytes.len });
     s.pending.appendSlice(alloc, bytes[from..to]) catch rt.fatal("out of memory", .{});
-    if (s.pending.items.len >= 65536) flush(s);
+    if (s.standard or s.pending.items.len >= 65536) flush(s);
     return Value.nil;
 }
 
@@ -666,13 +696,21 @@ fn closeBlocking(arg: ?*anyopaque) void {
     if (s.sock) |sock| sock.close(io.stdIo()) else s.file.close(io.stdIo());
 }
 
-/// Flush and close; closing a closed stream does nothing.
+/// Flush and close; closing a closed stream does nothing, and closing stdin, stdout or
+/// stderr only flushes it.
 fn close(h: Value) Value {
     lock.lock();
     var s: ?*Stream = null;
     if (h.isFixnum() and h.toFixnum() >= 1 and h.toFixnum() <= table.items.len) {
         const i: usize = @intCast(h.toFixnum() - 1);
         s = table.items[i];
+        if (s) |found| {
+            if (found.standard) {
+                lock.unlock();
+                flush(found);
+                return Value.nil;
+            }
+        }
         table.items[i] = null;
     }
     lock.unlock();
@@ -847,6 +885,11 @@ pub const entries = [_]Entry{
     .{ .name = "%stream-close", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return close(a[0]);
+        }
+    }.f },
+    .{ .name = "%std-stream", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return stdStream(a[0]);
         }
     }.f },
 };

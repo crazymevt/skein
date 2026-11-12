@@ -386,3 +386,25 @@ See also: temp-file, delete-tree
 
 See also: temp-file
 
+
+## stdin
+### Arguments and values
+- The program's standard input, a reader: `read-line`, `line-seq` and `read-text` work on it. Native only.
+
+### Notes
+Reading it waits for input, parking the fiber; at the end of the input `read-line` gives nil, so a program can be a filter in a pipeline.
+
+See also: stdout, read-line, line-seq
+
+## stdout
+### Arguments and values
+- The program's standard output, a writer: `write` and `flush` work on it. It writes through, so its output keeps its place among `println`'s. Native only.
+
+See also: stderr, write, println
+
+## stderr
+### Arguments and values
+- The program's standard error, a writer like `stdout`; `eprintln` prints to it. `close` only flushes it. Native only.
+
+See also: stdout, eprintln
+

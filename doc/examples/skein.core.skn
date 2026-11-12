@@ -780,6 +780,17 @@
 (println-str "line")
 ;=> "line\n"
 
+;;;; eprint
+;; Like print, to standard error: for messages that shouldn't mix with a program's output.
+(eprint "warning: " "no config file")
+;; not run
+
+;;;; eprintln
+;; Like println, to standard error. Here it returns nil (its line goes to the error output,
+;; which an example's ;; prints: doesn't show).
+(eprintln "manual example: eprintln writes this line to stderr")
+;=> nil
+
 ;;;; with-out-str
 (with-out-str
   (print "captured ")

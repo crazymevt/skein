@@ -402,7 +402,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%sorted-seq-from" "%sorted-compare" "%sorted-empty" "meta" "with-meta" "ex-info" "ex-data"
     "ex-cause" "ex-message" "%stat" "%delete-path" "%rename-path" "%read-bytes" "%write-bytes"
     "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes" "%stream-write"
-    "%stream-read-some" "%stream-flush" "%stream-close" "%epoch-millis" "%utc-offset"
+    "%stream-read-some" "%stream-flush" "%stream-close" "%std-stream" "%epoch-millis"
+    "%utc-offset"
     "%write-stderr"
     ;; Temporary files and permissions (M3.5, D-107)
     "%make-temp" "%owner-only" "%permissions" "%open-default"

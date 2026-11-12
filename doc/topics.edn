@@ -34,7 +34,7 @@
            ["Regex" ["re-pattern" "re-find" "re-matches" "re-seq" "re-matcher" "re-groups"]]
            ["Names" ["name" "namespace" "keyword" "keyword?" "symbol" "symbol?" "gensym"]]
            ["Print" ["pr" "prn" "print" "println" "pr-str" "prn-str" "print-str"
-                     "println-str" "with-out-str"]]
+                     "println-str" "with-out-str" "eprint" "eprintln"]]
            ["Files" ["slurp" "spit"]]]}
 
  {:title "Collections" :ns "skein.core"
@@ -144,7 +144,7 @@
                            "rename" "walk" "temp-dir" "temp-file" "owner-only!"]]
            ["Streams" ["open-reader" "open-writer" "open-input" "open-output" "read-line"
                        "line-seq" "read-text" "read-bytes!" "write" "write-bytes!" "flush"
-                       "stream" "stream-path"]]
+                       "stream" "stream-path" "stdin" "stdout" "stderr"]]
            ["Watch" ["watch" "stop-watch!"]]
            ["Ignore files" ["ignore-matcher" "ignored?"]]
            ["Errors" ["io-error" "io-error-message" "io-error-path"]]

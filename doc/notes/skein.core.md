@@ -3219,3 +3219,23 @@ See also: handler-case, error?
 - The error type signaled when a value doesn't support an operation.
 
 See also: handler-case, error?
+
+## eprint
+### Arguments and values
+- `xs`: any values.
+- Prints them as `print` does, to standard error.
+- Returns nil.
+
+See also: eprintln, print, skein.io/stderr
+
+## eprintln
+### Arguments and values
+- `xs`: any values.
+- Prints them as `println` does, to standard error.
+- Returns nil.
+
+### Notes
+For messages to the person running a program (why it failed, a warning) that shouldn't mix with its output, which another program may be reading. For an application's own log, `skein.log` gives levels and handlers.
+
+See also: eprint, println, skein.log/warn
+

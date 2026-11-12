@@ -215,6 +215,34 @@
   (io/file-name (io/stream-path r)))
 ;=> "notes.txt"
 
+;;;; stdin
+;; The program's standard input, a reader: a filter that numbers the lines it reads.
+(doseq [[i line] (map-indexed vector (io/line-seq io/stdin))]
+  (println (inc i) line))
+;; not run
+
+;; A stream, as an opened file is.
+[(instance? io/stream io/stdin) (:kind io/stdin)]
+;=> [true :reader]
+
+;;;; stdout
+;; A writer, so the stream functions work on it; it writes through, so what it writes
+;; keeps its place among println's output.
+(io/write io/stdout "progress: 50%\n")
+;; not run
+
+[(instance? io/stream io/stdout) (:kind io/stdout)]
+;=> [true :writer]
+
+;;;; stderr
+(io/write io/stderr "manual example: io/write to stderr\n")
+;=> nil
+
+;; close only flushes the standard streams, so they stay usable.
+(close io/stderr)
+(:kind io/stderr)
+;=> :writer
+
 ;;;; io-error
 (handler-case (io/delete (io/path dir "never-was"))
   (io/io-error [c] (error? c)))
