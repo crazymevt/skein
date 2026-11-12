@@ -136,6 +136,14 @@
 (defcore "println" (&rest xs) (print-values xs nil t))
 (defcore "pr" (&rest xs) (print-values xs t nil))
 (defcore "prn" (&rest xs) (print-values xs t t))
+;; eprint and eprintln (D-112): print and println to stderr.
+(defun eprint-values (xs newline)
+  (let ((*standard-output* *error-output*))
+    (print-values xs nil newline))
+  (force-output *error-output*)
+  nil)
+(defcore "eprint" (&rest xs) (eprint-values xs nil))
+(defcore "eprintln" (&rest xs) (eprint-values xs t))
 (defcore "pr-str" (&rest xs)
   (format nil "~{~A~^ ~}" (mapcar #'readable-string xs)))
 

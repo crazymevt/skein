@@ -1,0 +1,36 @@
+;; skein.io's stdin, stdout and stderr and skein.core's eprint and eprintln (D-112),
+;; natively: this program starts itself as a child that filters its stdin, and reads
+;; what the child writes to each stream.
+;; stderr: the parent's own line
+(ns io-standard
+  (:require [skein.process :as process :refer [process]]
+            [skein.io :as io]
+            [skein.string :as string]))
+
+(defn- child []
+  (doseq [line (io/line-seq io/stdin)]
+    (println (string/upper-case line)))
+  ;; written through: in its place among println's lines
+  (io/write io/stdout "w1\n")
+  (println "p2")
+  (close io/stdout)
+  (println "after close")
+  (eprint "e1")
+  (eprintln "" "e2")
+  (io/write io/stderr "s3\n")
+  (io/flush io/stderr)
+  (close io/stderr)
+  (eprintln "after close"))
+
+(defn -main [& args]
+  (if (= ["child"] (vec args))
+    (child)
+    (let [p (process [(%executable-path) "child"] {:in "one\ntwo\n"})
+          out (future (io/read-text (:out p)))
+          err (future (io/read-text (:err p)))]
+      (println (pr-str @out))
+      (println (pr-str @err))
+      (println (:exit @p))
+      ;; stderr isn't what with-out-str captures
+      (println (pr-str (with-out-str (eprintln "the parent's own line"))))
+      (println (instance? io/stream io/stdin) (instance? io/stream io/stderr)))))

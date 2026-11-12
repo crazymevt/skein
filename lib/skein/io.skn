@@ -16,6 +16,8 @@ M2.11, D-093). Failures signal io-error.
   (open-input path) (read-bytes! in array start? n?)
   (open-output path {:append true}?) (write-bytes! out data start? end?)
   (close stream), or with-open
+  stdin stdout stderr           the program's standard streams: a reader and two writers,
+                                written through; close only flushes them (native)
   (run-process [program args...] {:dir path}?)
                                 run a program without a shell; {:exit :out :err}
   (resource-dir)                the directory holding the program's assets
@@ -552,8 +554,22 @@ nil."
   (kind)
   (path :reader stream-path))
 
+(def ^:private standard-handles
+  ;; The runtime's handles of stdin, stdout and stderr, made when first used (Phase 0 has
+  ;; no streams, so making them as this namespace loads would fail there).
+  (delay [(%std-stream 0) (%std-stream 1) (%std-stream 2)]))
+
+(defn- handle
+  "The stream's runtime handle: a standard stream's is looked up when first used."
+  [s]
+  (case (:handle s)
+    :stdin (nth @standard-handles 0)
+    :stdout (nth @standard-handles 1)
+    :stderr (nth @standard-handles 2)
+    (:handle s)))
+
 (defmethod close [(s stream)]
-  (%stream-close (:handle s)))
+  (%stream-close (handle s)))
 
 (defn- open-stream [path kind mode]
   (if-let [h (%open-stream path mode)]
@@ -565,7 +581,22 @@ nil."
 (defn- handle-of [s kind what]
   (when-not (and (instance? stream s) (or (= kind (:kind s)) (= :socket (:kind s))))
     (error (str what " needs a " (name kind) " stream, not " (pr-str s))))
-  (:handle s))
+  (handle s))
+
+(def stdin
+  "The program's standard input, a reader: (read-line stdin), (line-seq stdin). Native
+only."
+  (make stream :handle :stdin :kind :reader :path "stdin"))
+
+(def stdout
+  "The program's standard output, a writer, written through so that what it writes keeps
+its place among println's lines; closing it only flushes it. Native only."
+  (make stream :handle :stdout :kind :writer :path "stdout"))
+
+(def stderr
+  "The program's standard error, a writer like stdout (eprintln prints to it). Native
+only."
+  (make stream :handle :stderr :kind :writer :path "stderr"))
 
 (defn open-reader
   "Open the file at path to read its text (UTF-8)."
@@ -603,7 +634,7 @@ with {:append true}."
   [s]
   (when-not (and (instance? stream s) (contains? #{:writer :output :socket} (:kind s)))
     (error (str "flush needs a writer or an output stream, not " (pr-str s))))
-  (%stream-flush (:handle s)))
+  (%stream-flush (handle s)))
 
 (defn open-input
   "Open the file at path to read its bytes."

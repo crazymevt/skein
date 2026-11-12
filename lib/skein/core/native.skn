@@ -1070,6 +1070,16 @@ then ..., so an infinite seq prints. nil prints them all."
   [& xs]
   (with-out-str (apply println xs)))
 
+(defn eprint
+  "Print xs as print does, to stderr (D-112)."
+  [& xs]
+  (%write-stderr (with-out-str (apply print xs))))
+
+(defn eprintln
+  "Print xs as println does, to stderr (D-112)."
+  [& xs]
+  (%write-stderr (with-out-str (apply println xs))))
+
 (defn slurp
   "The text of the file at path (UTF-8)."
   [path]
