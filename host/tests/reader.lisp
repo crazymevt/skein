@@ -709,8 +709,10 @@ which are data."
                        (let ((s (namestring p)))
                          ;; test-project and the deps fixtures are projects, whose
                          ;; namespaces are found through their project.skn files (skein
-                         ;; test, M2.11; dependencies, M2.12).
+                         ;; test, M2.11; dependencies, M2.12). .claude/ holds other
+                         ;; checkouts (agents' worktrees), not this one's files.
                          (or (search ".skein-cache" s) (search "/build/" s)
+                             (search "/.claude/" s)
                              (search "/dist/" s) (search "/test-project/" s)
                              (search "/fixtures/deps/" s))))
                      (directory (merge-pathnames "**/*.skn" root)))
