@@ -51,7 +51,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M3.3 Regular expressions | ✅ |
 | M3.4 Networking and the Swank client | 🟨 |
 | M3.5 Files and the system | 🟨 |
-| M3.6 skein-ui for the IDE | ⬜ |
+| M3.6 skein-ui for the IDE | 🟨 |
 | M3.7 Skein Studio's core | ⬜ |
 | M3.8 Agents | ⬜ |
 | M3.9 Source control | ⬜ |
@@ -566,7 +566,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
   2. ✅ Editing a table's cells: `:editable` columns and `:cell-edited`, on NSTableView and GtkColumnView.
   3. ✅ code view's speed: a benchmark that highlights a 10,000-line Skein file and edits it a keystroke at a time; replacing a changed range's runs, and the backends' updates, costing what the change does.
   4. ✅ Rich text's styles in the runs: font sizes, a monospace family, paragraph indentation and spacing, and a block's background, on Cocoa and GTK.
-  5. The rich text widget: `rich-text` with Hiccup content, `append-content!`, links, lists, code blocks and tables aligned by tab stops, selection and copying.
+  5. ✅ The rich text widget: `rich-text` with Hiccup content, `append-content!`, links, lists, code blocks and tables aligned by tab stops, selection and copying.
 
 **Exit:** skein-ui's tests for each on the headless, Cocoa and GTK backends.
 
@@ -708,3 +708,4 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - make test: the Swank and REPL host tests each build their own `--eval` program (about 12 s each, 13 of them); sharing one build per suite would cut Swank, now the longest part, but changes the programs some tests check backtraces of. Compiling the evaluator's C once per skeinc and linking it into each `--eval` program would speed those builds, and `skein run` and `dev`, everywhere.
 - skein-ui's GTK tests, run on macOS, fail about half the time in `popovers-and-completion-popups` ("the view keeps the keyboard") and then crash (exit 139), also before M3.6: a GTK window on macOS doesn't always get the keyboard, as other applications are in front. Linux CI, under Xvfb, passes; worth a look before relying on the Mac for GTK (M3.6).
 - skein-ui's text buffer copies its line index on every edit (1.4 ms at 10,000 lines, M3.6 step 3): chunked lines, as the code view's runs now are, would make it cost what the edit does, for files of 100,000 lines and more.
+- `DEV-RUN-LOOP-PAUSED` (`host/tests/repl.lisp`) failed once on Linux CI (run 43223469952): the job's debugger showed "; resumed" at once and the main thread's error followed without "(in main thread)", so the test timed out waiting for it; a race in the test or in how `skein dev` resumes a job's debugger (M3.6).
