@@ -89,7 +89,9 @@ pub fn isRealized(v: Value) bool {
 /// nil if `x` is empty, else a seq of its elements.
 pub fn seq(x: Value) Value {
     if (x == Value.nil) return Value.nil;
-    if (string.isString(x)) return if (string.count(x) == 0) Value.nil else make(.sseq, &.{ x, Value.fromFixnum(0) });
+    // A string's seq: [string, character index, byte offset], so each step decodes one
+    // character where it is (by index alone, text outside ASCII took quadratic time).
+    if (string.isString(x)) return if (string.count(x) == 0) Value.nil else make(.sseq, &.{ x, Value.fromFixnum(0), Value.fromFixnum(0) });
     if (!x.isObject()) unseqable(x);
     return switch (x.toObject().type_id) {
         .list, .cons, .vseq, .sseq, .arrseq, .tseq => x,
@@ -137,7 +139,7 @@ pub fn seqFirst(s: Value) Value {
     return switch (s.toObject().type_id) {
         .list, .cons => coll.get(s, 0),
         .vseq => coll.vectorNth(coll.get(s, 0), coll.ux(coll.get(s, 1))).?,
-        .sseq => Value.fromChar(string.charAt(coll.get(s, 0), coll.ux(coll.get(s, 1)))),
+        .sseq => Value.fromChar(string.charAtByte(coll.get(s, 0), coll.ux(coll.get(s, 2)))),
         .arrseq => structs.aget(coll.get(s, 0), coll.get(s, 1)),
         .tseq => @import("sorted.zig").seqFirst(s),
         else => unreachable,
@@ -165,7 +167,9 @@ pub fn seqNext(s: Value) Value {
         .sseq => {
             const str = coll.get(s, 0);
             const i = coll.ux(coll.get(s, 1)) + 1;
-            return if (i < string.count(str)) make(.sseq, &.{ str, Value.fromFixnum(@intCast(i)) }) else Value.nil;
+            if (i >= string.count(str)) return Value.nil;
+            const off = string.nextByte(str, coll.ux(coll.get(s, 2)));
+            return make(.sseq, &.{ str, Value.fromFixnum(@intCast(i)), Value.fromFixnum(@intCast(off)) });
         },
         .tseq => return @import("sorted.zig").seqNext(s),
         else => unreachable,

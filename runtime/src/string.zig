@@ -72,6 +72,20 @@ pub fn charAt(v: Value, i: usize) u21 {
     return std.unicode.utf8Decode(b[start .. start + len]) catch 0xFFFD;
 }
 
+/// The character starting at byte `off` of the string.
+pub fn charAtByte(v: Value, off: usize) u21 {
+    const b = bytes(v);
+    const len = std.unicode.utf8ByteSequenceLength(b[off]) catch 1;
+    return std.unicode.utf8Decode(b[off..@min(b.len, off + len)]) catch 0xFFFD;
+}
+
+/// The byte offset of the character after the one starting at byte `off`.
+pub fn nextByte(v: Value, off: usize) usize {
+    const b = bytes(v);
+    const len = std.unicode.utf8ByteSequenceLength(b[off]) catch 1;
+    return @min(b.len, off + len);
+}
+
 /// The characters from `start` up to `end`.
 pub fn substring(v: Value, start: usize, end: usize) Value {
     const a = byteOffset(v, start);

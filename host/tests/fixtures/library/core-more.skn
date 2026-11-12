@@ -84,4 +84,17 @@
   (let [a (atom 1) b (atom 1)]
     (is (= 1 (index-of [a b] b)) "instances by identity")))
 
+(deftest strings-as-seqs
+  ;; A string's seq steps by bytes: characters of 1, 2 and 4 bytes, and counts partway
+  ;; (stepped by index alone, (vec s) took quadratic time outside ASCII).
+  (let [s "aé😀b"]
+    (is (= [\a \é \😀 \b] (vec s)))
+    (is (= 3 (count (rest s))))
+    (is (= [\😀 \b] (vec (drop 2 s))))
+    (is (= "b😀éa" (apply str (reverse s))))
+    (is (= [\é \😀] (vec (take 2 (rest s))))))
+  (let [s (apply str (repeat 5000 "héllo "))]
+    (is (= 30000 (count (vec s))))
+    (is (= \é (nth (vec s) 29995)))))
+
 (prn (select-keys (run-tests 'core-more) [:test :fail :error]))
