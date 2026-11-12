@@ -29,6 +29,10 @@
     "héllo" (s/lower-case "HéLLO")
     "élan" (s/capitalize "élAN")
     "Abc" (s/capitalize "aBC")
+    ;; a character, as the namespace says they take, gives a string
+    "A" (s/upper-case \a)
+    "q" (s/lower-case \Q)
+    "Z" (s/capitalize \z)
     "a, b, c" (s/join ", " ["a" "b" "c"])
     "12" (s/join [1 2 nil])
     "ünïcode" (s/trim "  ünïcode \n")

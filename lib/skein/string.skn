@@ -124,22 +124,24 @@ or nil."
 ;;; Making strings
 
 (defn upper-case
-  "s with its ASCII letters in upper case."
+  "s (a string, or a character) with its ASCII letters in upper case, a string."
   [s]
-  (%string-ascii-case s true))
+  (%string-ascii-case (if (char? s) (str s) s) true))
 
 (defn lower-case
-  "s with its ASCII letters in lower case."
+  "s (a string, or a character) with its ASCII letters in lower case, a string."
   [s]
-  (%string-ascii-case s false))
+  (%string-ascii-case (if (char? s) (str s) s) false))
 
 (defn capitalize
-  "s with its first character in upper case and the rest in lower case (ASCII letters)."
+  "s (a string, or a character) with its first character in upper case and the rest in
+lower case (ASCII letters), a string."
   [s]
-  (if (end? s 0)
-    s
-    (let [c (next s 0)]
-      (str (upper-case (slice s 0 c)) (lower-case (slice s c))))))
+  (let [s (if (char? s) (str s) s)]
+    (if (end? s 0)
+      s
+      (let [c (next s 0)]
+        (str (upper-case (slice s 0 c)) (lower-case (slice s c)))))))
 
 (defn join
   "The strings of the elements of coll (as str prints them), with separator between them."
