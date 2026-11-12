@@ -603,8 +603,19 @@ fiber) goes through a channel to one writer, the only fiber that writes the sock
   [conn n]
   (let [out (chan 256)
         written (promise)
-        console (make-console (str "client " n) (fn [] (%stream-read-some (:handle conn)))
-                              (fn [text] (>! out text)) nil)
+        ;; The console reads in a fiber of its own, which may be waiting in a read when the
+        ;; console ends: closing the socket under it would free the stream it reads (and on
+        ;; Linux keep the connection open), so the end shuts the socket down, which ends
+        ;; that read, and waits for it before closing.
+        closing (atom false)
+        reading (atom 0)
+        read-text (fn []
+                    (when-not @closing
+                      (swap! reading inc)
+                      (try (%stream-read-some (:handle conn))
+                           (catch error e nil)
+                           (finally (swap! reading dec)))))
+        console (make-console (str "client " n) read-text (fn [text] (>! out text)) nil)
         console (assoc console :output (fn [text] (write! console text)))]
     (service (try (loop []
                     (when-let [text (<! out)]
@@ -617,8 +628,13 @@ fiber) goes through a channel to one writer, the only fiber that writes the sock
     (try (console-loop console)
          (finally
            (close! out)
-           ;; This fiber reads the socket, so it closes it, once the writer has stopped.
            (deref written 5 nil)
+           (reset! closing true)
+           (net/shutdown conn)
+           ;; The reading fiber has nowhere to send what it read.
+           (close! (:inbox console))
+           (loop [i 0]
+             (when (and (pos? @reading) (< i 500)) (sleep 0.01) (recur (inc i))))
            (close conn)))))
 
 (defn- start-server
