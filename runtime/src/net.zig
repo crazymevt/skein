@@ -236,7 +236,14 @@ fn accept(h: Value) Value {
 
 fn closeServerBlocking(arg: ?*anyopaque) void {
     const s: *net.Server = @ptrCast(@alignCast(arg));
-    s.deinit(io.stdIo());
+    const sio = io.stdIo();
+    // Closing the socket alone doesn't wake an accept waiting on it on Linux, where it
+    // would wait for ever: shutting it down first does, and the accept then returns nil.
+    // (macOS wakes it on close, and fails this harmlessly; Windows is left as it was.)
+    if (@import("builtin").os.tag != .windows) {
+        sio.vtable.netShutdown(sio.userdata, s.socket.handle, .both) catch {};
+    }
+    s.deinit(sio);
 }
 
 /// (%net-close-server server): stop listening; closing it again does nothing.

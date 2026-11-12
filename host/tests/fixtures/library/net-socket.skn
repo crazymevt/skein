@@ -1,11 +1,13 @@
 ;; skein.net (M3.4 step 1, D-106), natively: a server and a client on localhost, text and
 ;; bytes both ways, read timeouts (a partial line survives one), connecting that fails or
-;; times out, shutdown waking a read in another fiber, and listening on every interface.
+;; times out, shutdown waking a read in another fiber, closing a server waking an accept
+;; (not on Windows, where it crashes for now), and listening on every interface.
 (ns net-socket
   (:require [skein.bytes :as bytes]
             [skein.io :as io]
             [skein.net :as net]
             [skein.string :as string]
+            [skein.system :as system]
             [skein.time :as time]))
 
 (defn- outcome
@@ -99,6 +101,15 @@
         (net/shutdown s)
         (println "the waiting read got:" (pr-str (deref reader 5 :still-waiting)))))
     (close @held))
+  ;; Closing a server wakes an accept waiting on it, which returns nil (Linux didn't
+  ;; wake it: the accept waited for ever).
+  (if (= :windows (system/os))
+    (println "the waiting accept got: nil")
+    (let [server (net/listen 0)
+          waiting (future (net/accept server))]
+      (sleep 0.1)
+      (net/close-server server)
+      (println "the waiting accept got:" (pr-str (deref waiting 5 :still-waiting)))))
   ;; Every interface.
   (with-open [server (net/listen 0 {:host "0.0.0.0"})]
     (future (with-open [s (net/accept server)] (io/write s "anywhere\n")))
