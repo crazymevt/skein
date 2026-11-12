@@ -1,0 +1,135 @@
+(ns skein.dev.examples
+  (:require [skein.dev :as dev]
+            [skein.compiler.reader :as reader]
+            [skein.string :as str]))
+
+;;; Examples for skein.dev (D-109): the REPL, debugger and dev loop of programs built
+;;; with --eval. Most programs use it through `skein dev` and `skein repl` rather than
+;;; calling it; the loops that take over the terminal are shown without being run.
+;;; `./skein run doc/manual.skn --check skein.dev` runs the rest.
+
+;;;; run-main
+;; How a program built with --eval starts: under skein dev (SKEIN_DEV set) as the dev
+;; loop, with the REPL, Swank and reloading; otherwise by calling its -main.
+(dev/run-main -main *command-line-args* "my.game")
+;; not run
+
+;;;; run-repl
+;; skein repl: a REPL on the terminal until its input ends or :quit.
+(dev/run-repl)
+;; not run
+
+;;;; console-loop
+(dev/console-loop (dev/terminal-console))
+;; not run
+
+;;;; terminal-console
+;; A console is a map: its name, how it reads and writes text, and what it prints with.
+(:name (dev/terminal-console))
+;=> "terminal"
+
+;;;; call-in
+;; Code runs in a console's namespace, which ns and in-ns forms change, and prints to
+;; its :output.
+(let [console {:ns (atom "user") :output nil}]
+  (dev/call-in console (fn [] (eval '(ns scratch.place))))
+  @(:ns console))
+;=> "scratch.place"
+
+;;;; eval-in
+;; A syntax form, as Skein's reader gives it.
+(let [console {:ns (atom "skein.dev.examples") :output nil}]
+  (dev/eval-in console (reader/read-string-form "(+ 1 2 3)")))
+;=> 6
+
+;;;; show
+;; How the REPL prints a value.
+[(dev/show "text") (dev/show [1 :a])]
+;=> ["\"text\"" "[1 :a]"]
+
+;;;; record-value!
+;; What the REPL does with each value: it becomes *1.
+(dev/record-value! 42)
+*1
+;=> 42
+
+;;;; record-error!
+(handler-case (error "oops")
+  (error [c] (dev/record-error! c)))
+(condition-message *e)
+;=> "oops"
+
+;;;; announce
+;; A line for every console, or standard output when there is none.
+(dev/announce "reloaded game.player")
+;; prints:
+;; reloaded game.player
+;=> nil
+
+;;;; starting-namespace
+;; The namespace new consoles start in: the program's, under skein dev.
+(string? (dev/starting-namespace))
+;=> true
+
+;;;; version
+(str/starts-with? dev/version "0.")
+;=> true
+
+;;;; restart-label
+(restart-case (dev/restart-label (find-restart 'retry))
+  (retry [] :report "Try loading the level again" nil))
+;=> "Try loading the level again"
+
+;;;; debugger-restarts
+;; What the debugger lists for an error, innermost first.
+(restart-case
+  (handler-case (error "bad frame")
+    (error [c] (mapv restart-name (take 1 (dev/debugger-restarts c)))))
+  (skip-frame [] nil))
+;=> [skip-frame]
+
+;;;; invoke-debugger-restart
+;; What choosing a restart in the debugger calls.
+(restart-case (dev/invoke-debugger-restart (find-restart 'use-default))
+  (use-default [] :default-used))
+;=> :default-used
+
+;;;; user-frames
+;; A backtrace without the REPL's own frames, innermost first.
+(dev/user-frames [["draw" "game.skn:10"] ["update" "game.skn:4"]
+                  ["evaluate-syntax" "eval.skn:1"] ["console-loop" "dev.skn:1"]])
+;=> (["draw" "game.skn:10"] ["update" "game.skn:4"])
+
+;;;; service
+;; A task of the tools' own, whose errors don't open the debugger.
+@(dev/service (+ 1 1))
+;=> 2
+
+;;;; *debug-tasks*
+@(dev/service dev/*debug-tasks*)
+;=> false
+
+;;;; *level*
+;; 0 outside a debugger.
+dev/*level*
+;=> 0
+
+;;;; *out*
+;; nil: printing goes to standard output.
+dev/*out*
+;=> nil
+
+;;;; *namespace-cell*
+(let [console {:ns (atom "user") :output nil}]
+  (dev/call-in console (fn [] (atom? dev/*namespace-cell*))))
+;=> true
+
+;;;; *task-restarts*
+;; nil outside a task whose errors go to the debugger.
+dev/*task-restarts*
+;=> nil
+
+;;;; install-swank!
+;; What loading skein.swank does, to give skein dev its Swank server.
+(dev/install-swank! start-server debug-in-emacs)
+;; not run
