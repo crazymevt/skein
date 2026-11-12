@@ -113,6 +113,8 @@ const StartCall = struct {
     env: ?*const std.process.Environ.Map,
     redirects: [3]Redirect,
     child: ?std.process.Child = null,
+    /// Why it couldn't be started, if it couldn't.
+    failure: ?anyerror = null,
     /// Files opened for redirections, closed once the program has them.
     opened: [3]?std.Io.File = .{ null, null, null },
     /// With :err :out and a piped stdout: the read end of the pipe both go to.
@@ -133,12 +135,18 @@ fn startBlocking(arg: ?*anyopaque) void {
                 const f = (if (i == 0)
                     cwd.openFile(sio, path, .{})
                 else
-                    cwd.createFile(sio, path, .{ .truncate = true })) catch return closeOpened(c);
+                    cwd.createFile(sio, path, .{ .truncate = true })) catch |e| {
+                    c.failure = e;
+                    return closeOpened(c);
+                };
                 c.opened[i] = f;
                 break :file .{ .file = f };
             },
             .append => |path| file: {
-                const f = cwd.createFile(sio, path, .{ .truncate = false }) catch return closeOpened(c);
+                const f = cwd.createFile(sio, path, .{ .truncate = false }) catch |e| {
+                    c.failure = e;
+                    return closeOpened(c);
+                };
                 // The program inherits the position, at the end.
                 platform.seekToEnd(f.handle);
                 c.opened[i] = f;
@@ -167,7 +175,10 @@ fn startBlocking(arg: ?*anyopaque) void {
         .stderr = stdio[2],
     };
     platform.processGroupOptions(&options, c.redirects[0] != .inherit);
-    c.child = std.process.spawn(sio, options) catch null;
+    c.child = std.process.spawn(sio, options) catch |e| blk: {
+        c.failure = e;
+        break :blk null;
+    };
     closeOpened(c);
     if (c.child == null) if (c.merged) |m| {
         m.close(sio);
@@ -201,7 +212,7 @@ fn environOf(env: Value) std.process.Environ.Map {
 /// (%process-start argv dir env in out err): start the program, without a shell, found on
 /// the PATH, in `dir` (nil: here) with the environment `env` (a map; nil: this program's),
 /// its streams connected as in, out and err say. A process handle, or nil if it couldn't
-/// be started.
+/// be started: a string, the reason.
 fn start(argv: Value, dir: Value, env: Value, in: Value, out: Value, err: Value) Value {
     var args: std.ArrayList([]const u8) = .empty;
     defer {
@@ -230,7 +241,8 @@ fn start(argv: Value, dir: Value, env: Value, in: Value, out: Value, err: Value)
     };
     platform.prepareForProcesses();
     io.pathBlocking(startBlocking, &call);
-    var child = call.child orelse return Value.nil;
+    var child = call.child orelse
+        return string.make(if (call.failure) |e| @errorName(e) else "unknown");
     const p = alloc.create(Proc) catch rt.fatal("out of memory", .{});
     p.* = .{ .child = child, .pid = platform.childProcessId(&child), .key = (6 << 40) | serial.fetchAdd(1, .monotonic) };
     p.job = platform.startedProcess(&p.child);
@@ -244,8 +256,9 @@ fn start(argv: Value, dir: Value, env: Value, in: Value, out: Value, err: Value)
     p.child.stdout = null;
     p.child.stderr = null;
     // A detached thread of the platform's (Zig's Thread.detach panics on Linux when the
-    // thread has already ended, as a reaper of a quick program can have).
-    if (!platform.spawnThread(reapEntry, p, 256 << 10))
+    // thread has already ended, as a reaper of a quick program can have). Its stack holds
+    // the thread-local storage on Linux, about 260 KB: 2 MB, reserved rather than used.
+    if (!platform.spawnThread(reapEntry, p, 2 << 20))
         rt.fatal("cannot start a thread to wait for a program", .{});
     return register(p);
 }

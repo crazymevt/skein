@@ -78,7 +78,7 @@
     (println "stderr in a file:" (pr-str (io/read-file file)))
     (println "no stdout stream:" (nil? (%process-stream h 1))))
   ;; A program that isn't there.
-  (println "missing program:" (%process-start ["skein-no-such-program"] nil nil :pipe :pipe :pipe)))
+  (println "missing program:" (string? (%process-start ["skein-no-such-program"] nil nil :pipe :pipe :pipe))))
 
 (defn -main [& args]
   (if (seq args) (child (first args)) (parent)))

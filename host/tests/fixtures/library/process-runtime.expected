@@ -9,4 +9,4 @@ within 0.1 s: nil nil
 then: 0
 stderr in a file: "to stderr\n"
 no stdout stream: true
-missing program: nil
+missing program: true

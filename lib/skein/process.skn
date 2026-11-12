@@ -64,13 +64,20 @@ skein.io/io-error if it can't be started."
    (let [cmd (vec cmd)
          _ (when (empty? cmd) (error "process needs a program to run"))
          {:keys [dir env extra-env in out err]} opts
+         _ (when (= :windows (system/os))
+             ;; Zig's spawn reopens a stream given as a file on Windows, which a pipe can't
+             ;; be and which loses an append's place: Skein's own spawn will add them.
+             (when (= err :out)
+               (error ":err :out isn't supported on Windows yet"))
+             (when (some (fn [x] (and (map? x) (:append x))) [out err])
+               (error "{:file path :append true} isn't supported on Windows yet")))
          env (cond env env
                    extra-env (merge (%environment) extra-env))
          text (when (string? in) in)
          h (%process-start cmd dir env (if text :pipe (redirect in :in))
                            (redirect out :out) (redirect err :err))
-         _ (when-not h
-             (error io/io-error :message (str "cannot run " (first cmd)) :path (first cmd)))
+         _ (when (string? h)
+             (error io/io-error :message (str "cannot run " (first cmd) ": " h) :path (first cmd)))
          stream (fn [i kind what]
                   (when-let [s (%process-stream h i)]
                     (make io/stream :handle s :kind kind :path (str (first cmd) "'s " what))))

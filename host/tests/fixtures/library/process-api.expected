@@ -6,8 +6,9 @@ exit status: 7
 within 0.1 s: :still-running true
 destroyed: true false
 extra-env: extra
-merged: (to stderr to stdout) true
-appended: "a line\na line\n"
+merged: :ok
+to a file: "a line\n"
+appended: :ok
 discarded: true 0
 missing: skein-no-such-program
 deref-object: [1 nil nil] [2 5 :late]

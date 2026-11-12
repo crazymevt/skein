@@ -63,14 +63,24 @@
   (let [p (process (self "env") {:extra-env {"SKEIN_PROCESS_API" "extra"}})]
     (println "extra-env:" (io/read-line (:out p)))
     @p)
-  ;; :err :out, and redirections to files.
-  (let [p (process (self "both") {:err :out})]
-    (println "merged:" (sort (io/line-seq (:out p))) (nil? (:err p)))
-    @p)
-  (let [file "build/examples/process-api-out.txt"]
-    @(process (self "line") {:out {:file file}})
-    @(process (self "line") {:out {:file file :append true}})
-    (println "appended:" (pr-str (io/read-file file))))
+  ;; :err :out, and redirections to files (Windows has no :err :out or appending yet).
+  (let [windows? (= :windows (system/os))]
+    (println "merged:"
+             (if windows?
+               (try (process (self "both") {:err :out}) :accepted (catch error e :ok))
+               (let [p (process (self "both") {:err :out})
+                     lines (sort (io/line-seq (:out p)))]
+                 @p
+                 (if (and (= lines ["to stderr" "to stdout"]) (nil? (:err p))) :ok lines))))
+    (let [file "build/examples/process-api-out.txt"]
+      @(process (self "line") {:out {:file file}})
+      (println "to a file:" (pr-str (io/read-file file)))
+      (println "appended:"
+               (if windows?
+                 (try (process (self "line") {:out {:file file :append true}}) :accepted
+                      (catch error e :ok))
+                 (do @(process (self "line") {:out {:file file :append true}})
+                     (if (= "a line\na line\n" (io/read-file file)) :ok (io/read-file file)))))))
   (let [p (process (self "both") {:out :discard :err :inherit})]
     (println "discarded:" (nil? (:out p)) (:exit @p)))
   ;; A program that isn't there.
