@@ -1218,6 +1218,11 @@ See also: get, assoc-in, update-in
 - `k`: a key, element or index.
 - Returns true if it has it, even with a nil value.
 
+### Notes
+`contains?` asks about keys, not values: for a vector the keys are its indexes, so
+`(contains? [:x :y] :x)` is false. To ask whether a vector or list holds a value, use
+`(some #{x} coll)`, as in Clojure.
+
 See also: get, some
 
 ## find

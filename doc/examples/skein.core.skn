@@ -886,9 +886,18 @@
 ;=> "zig"
 
 ;;;; contains?
-;; Keys of maps and sets, indexes of vectors: not values.
-[(contains? {:a nil} :a) (contains? [:x :y] 1) (contains? [:x :y] :x)]
-;=> [true true false]
+;; Whether a key is there: a map's key, even with a nil value, or a set's element.
+[(contains? {:a nil} :a) (contains? #{:x :y} :x)]
+;=> [true true]
+
+;; A vector's keys are its indexes, so this asks whether index 1 exists, and :x isn't
+;; an index. contains? doesn't search values.
+[(contains? [:x :y] 1) (contains? [:x :y] :x)]
+;=> [true false]
+
+;; To find a value in a vector or list, use some with a set.
+[(some #{:x} [:x :y]) (some #{:z} [:x :y])]
+;=> [:x nil]
 
 ;;;; find
 (find {:a 1 :b 2} :b)
