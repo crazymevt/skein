@@ -3,7 +3,11 @@
   (os)    :macos, :linux or :windows
   (arch)  :aarch64 or :x86_64, the processor's architecture
   (getenv name)  an environment variable's value, or nil
-  (home-dir)     the user's home directory")
+  (home-dir)     the user's home directory
+  (config-dir app) (data-dir app) (cache-dir app)
+                 where the application called app keeps its settings, its data and its
+                 caches, by the platform's conventions (M3.5, D-107)
+  (open! target) a file or URL in its default application")
 
 (defn os
   "The operating system the program runs on: :macos, :linux or :windows, the keys
@@ -34,3 +38,85 @@ them in target triples."
   (if (= :windows (os))
     (or (getenv "USERPROFILE") (getenv "HOME"))
     (getenv "HOME")))
+
+;;; Per-application directories (M3.5, D-107). skein.io requires this namespace, so paths
+;;; are joined here with /, which every OS accepts.
+
+(defn- join [dir app] (str dir "/" app))
+
+(defn- xdg
+  "The directory the XDG variable gives, if it's set to an absolute path, else the home
+directory's default."
+  [variable default]
+  (let [v (getenv variable)]
+    (if (and v (pos? (count v)) (= \/ (first v))) v (str (home-dir) "/" default))))
+
+(defn- windows-dir [variable default]
+  (let [v (getenv variable)]
+    (if (and v (pos? (count v))) v (str (home-dir) "/" default))))
+
+(defn config-dir
+  "Where the application called app keeps its settings: Application Support/app on macOS,
+%APPDATA%\\app on Windows, $XDG_CONFIG_HOME/app (~/.config/app) on Linux. It may not exist
+yet."
+  [app]
+  (join (case (os)
+          :macos (str (home-dir) "/Library/Application Support")
+          :windows (windows-dir "APPDATA" "AppData/Roaming")
+          (xdg "XDG_CONFIG_HOME" ".config"))
+        app))
+
+(defn data-dir
+  "Where the application called app keeps its data: Application Support/app on macOS,
+%APPDATA%\\app on Windows, $XDG_DATA_HOME/app (~/.local/share/app) on Linux. It may not
+exist yet."
+  [app]
+  (join (case (os)
+          :macos (str (home-dir) "/Library/Application Support")
+          :windows (windows-dir "APPDATA" "AppData/Roaming")
+          (xdg "XDG_DATA_HOME" ".local/share"))
+        app))
+
+(defn cache-dir
+  "Where the application called app keeps caches, which may be deleted: Caches/app in the
+Library on macOS, %LOCALAPPDATA%\\app on Windows, $XDG_CACHE_HOME/app (~/.cache/app) on
+Linux. It may not exist yet."
+  [app]
+  (join (case (os)
+          :macos (str (home-dir) "/Library/Caches")
+          :windows (windows-dir "LOCALAPPDATA" "AppData/Local")
+          (xdg "XDG_CACHE_HOME" ".cache"))
+        app))
+
+;;; Opening in the default application
+
+(defn- url?
+  "True if target starts with a URL scheme (a letter, then letters, digits, + - or ., two
+characters at least, then :): not a Windows drive."
+  [target]
+  (let [n (count target)
+        letter? (fn [c] (let [i (int c)] (or (<= 65 i 90) (<= 97 i 122))))
+        scheme (loop [i 0]
+                 (if (and (< i n)
+                          (let [c (nth target i)]
+                            (or (letter? c)
+                                (and (pos? i) (or (<= 48 (int c) 57) (contains? #{\+ \- \.} c))))))
+                   (recur (inc i))
+                   i))]
+    (and (>= scheme 2) (< scheme n) (= \: (nth target scheme)))))
+
+(defn open!
+  "Open target, a file's path or a URL (http:, mailto: and the like), in its default
+application, as double-clicking it would: open on macOS, xdg-open on Linux, the shell's
+ShellExecute on Windows. Doesn't wait for the application. A path that doesn't exist, or
+an opener that can't be started, signals an error. Returns nil."
+  [target]
+  (when-not (string? target) (error (str "open! needs a path or a URL, not " (pr-str target))))
+  (when-not (or (url? target) (%file-exists? target))
+    (error (str "open!: file not found: " target)))
+  (if (= :windows (os))
+    (when-not (%open-default target) (error (str "open!: Windows can't open " target)))
+    (let [opener (if (= :macos (os)) "open" "xdg-open")
+          h (%process-start [opener target] nil nil :discard :discard :discard)]
+      (when (string? h) (error (str "open!: cannot run " opener ": " h)))))
+  nil)

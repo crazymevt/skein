@@ -697,3 +697,21 @@ pub fn stopWatch(w: *Watch) void {
     w.lock.unlock();
     closeWatch(w);
 }
+
+// ---------------------------------------------------------------------------------------
+// Opening a file or URL in its default application (skein.system/open!, M3.5, D-107)
+
+const ShellExecuteW = *const fn (window: ?*anyopaque, operation: ?[*:0]const u16, file: [*:0]const u16, parameters: ?[*:0]const u16, directory: ?[*:0]const u16, show: i32) callconv(.winapi) isize;
+
+/// Open `target` (a path or a URL) with its default application; false if Windows can't.
+/// shell32 is loaded when first needed, so programs don't link it.
+pub fn openWithDefault(target: []const u8) bool {
+    var why: [256]u8 = undefined;
+    const lib = loadLibrary("shell32.dll", &why) orelse return false;
+    const shellExecute: ShellExecuteW = @ptrCast(@alignCast(librarySymbol(lib, "ShellExecuteW") orelse return false));
+    const wide = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, target) catch return false;
+    defer std.heap.c_allocator.free(wide);
+    const open = std.unicode.utf8ToUtf16LeStringLiteral("open");
+    // SW_SHOWNORMAL; a result above 32 is success.
+    return shellExecute(null, open, wide.ptr, null, null, 1) > 32;
+}

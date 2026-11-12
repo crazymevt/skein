@@ -189,6 +189,13 @@ pub fn modeBits(permissions: std.Io.File.Permissions) ?u32 {
     return @intCast(permissions.toMode() & 0o7777);
 }
 
+/// Open `target` with its default application: on macOS and Linux skein.system runs
+/// open or xdg-open itself, so this is Windows' only.
+pub fn openWithDefault(target: []const u8) bool {
+    _ = target;
+    return false;
+}
+
 /// Whether owner-only! changes anything here (on Windows a user's files are theirs).
 pub const has_owner_only = true;
 

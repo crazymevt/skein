@@ -1,0 +1,30 @@
+;; skein.system's per-application directories and open! (M3.5 step 4, D-107), natively.
+;; The directories follow the platform's conventions and the XDG variables on Linux;
+;; open! is only checked for what it refuses (the tests can't open applications).
+(ns system-dirs
+  (:require [skein.system :as system]
+            [skein.string :as string]))
+
+(defn- ends? [s suffix] (string/ends-with? (string/replace s "\\" "/") suffix))
+
+(defn -main [& args]
+  (let [os (system/os)
+        [config data cache] [(system/config-dir "skein-test") (system/data-dir "skein-test")
+                             (system/cache-dir "skein-test")]]
+    (println "named for the app:" (every? (fn [d] (ends? d "/skein-test")) [config data cache]))
+    (println "under the home directory or the platform's variables:"
+             (case os
+               :macos (and (= config (str (system/home-dir) "/Library/Application Support/skein-test"))
+                           (= data config)
+                           (= cache (str (system/home-dir) "/Library/Caches/skein-test")))
+               :windows (and (string/starts-with? config (system/getenv "APPDATA"))
+                             (= data config)
+                             (string/starts-with? cache (system/getenv "LOCALAPPDATA")))
+               (and (ends? config (str (or (system/getenv "XDG_CONFIG_HOME") ".config") "/skein-test"))
+                    (ends? data (str (or (system/getenv "XDG_DATA_HOME") ".local/share") "/skein-test"))
+                    (ends? cache (str (or (system/getenv "XDG_CACHE_HOME") ".cache") "/skein-test"))))))
+  (println "open! of a missing file:"
+           (try (system/open! "no/such/file.txt") :opened
+                (catch error e (condition-message e))))
+  (println "open! of a number:"
+           (try (system/open! 5) :opened (catch error e (condition-message e)))))

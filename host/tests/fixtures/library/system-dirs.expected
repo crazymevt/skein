@@ -1,0 +1,4 @@
+named for the app: true
+under the home directory or the platform's variables: true
+open! of a missing file: open!: file not found: no/such/file.txt
+open! of a number: open! needs a path or a URL, not 5

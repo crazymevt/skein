@@ -1,0 +1,59 @@
+;; skein.time's ISO 8601 text (M3.5 step 4, D-107), natively: randomized round trips
+;; (millis to text and back, and calendar times with random offsets to text and back,
+;; from year 1 to 9999), then hand-written texts, including ones that must be refused.
+(ns time-iso
+  (:require [skein.time :as time]))
+
+(defn- generator
+  "A function of no arguments giving the next number of a fixed sequence (an LCG)."
+  [seed]
+  (let [x (atom seed)]
+    (fn [] (swap! x (fn [v] (mod (+ (* v 1103515245) 12345) 2147483648))))))
+
+(def ^:private min-ms -62135596800000) ; 0001-01-01T00:00:00Z
+(def ^:private max-ms 253402300799999) ; 9999-12-31T23:59:59.999Z
+
+(defn- random-ms [next]
+  (+ min-ms (mod (+ (* (next) 2147483648) (next)) (- max-ms min-ms))))
+
+(defn- refused? [s]
+  (try (time/parse-iso8601 s) false (catch error e true)))
+
+(defn- fields [ct] (dissoc ct :offset))
+
+(defn -main [& args]
+  (let [next (generator 107)
+        ms (repeatedly 2000 (fn [] (random-ms next)))
+        wrong (remove (fn [m] (let [s (time/format-iso8601 m)
+                                    ct (time/parse-iso8601 s)]
+                                (and (= ct (time/utc-time m)) (= s (time/format-iso8601 ct)))))
+                      ms)]
+    (println "millis round trips:" (count ms) "wrong:" (count wrong))
+    (doseq [m (take 5 wrong)] (println " " m (time/format-iso8601 m))))
+  (let [next (generator 8601)
+        offsets (repeatedly 2000 (fn [] (let [r (next)]
+                                          (if (zero? (mod r 10))
+                                            (- (mod r 100801) 50400) ; to the second
+                                            (* 60 (- (mod r 1681) 840))))))
+        cts (map (fn [off]
+                   (let [m (random-ms next)]
+                     (assoc (time/utc-time (+ m (* 1000 off))) :offset off)))
+                 offsets)
+        wrong (remove (fn [ct] (= ct (time/parse-iso8601 (time/format-iso8601 ct)))) cts)]
+    (println "offset round trips:" (count cts) "wrong:" (count wrong))
+    (doseq [ct (take 5 wrong)] (println " " ct (time/format-iso8601 ct))))
+  (println (time/format-iso8601 0))
+  (println (time/format-iso8601 {:year 2026 :month 11 :day 12 :hour 9 :minute 30 :second 0
+                                 :millis 0 :offset -18000}))
+  (doseq [s ["2026-11-12T09:30:00.000-05:00" "2026-11-12t09:30Z" "2026-11-12 09:30:15,5+0530"
+             "2026-11-12T09:30:15.123456789+05" "2024-02-29T00:00Z" "+12345-01-01T00:00Z"
+             "-0001-12-31T23:59:59.999Z" "2026-11-12T09:30:15+05:30:30"]]
+    (let [ct (time/parse-iso8601 s)]
+      (println s "->" (time/format-iso8601 ct) "weekday" (:weekday ct))))
+  ;; No offset: the local time zone's, whatever it is here.
+  (println "a date:" (fields (time/parse-iso8601 "2026-11-12")))
+  (println "a local time:" (fields (time/parse-iso8601 "2026-11-12T09:30")))
+  (println "refused:"
+           (mapv refused? ["2023-02-29" "2026-13-01" "2026-00-10" "2026-11-31" "2026-11-12T24:00Z"
+                           "2026-11-12T09:60Z" "2026-11-12T09:30Zjunk" "2026-11-12T09" "26-11-12"
+                           "2026-11-12T09:30+24:00" "" "2026/11/12"])))

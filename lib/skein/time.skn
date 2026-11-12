@@ -4,7 +4,8 @@
   (now-ns)  the same in nanoseconds, an integer
   (epoch-millis)  the wall-clock time: milliseconds since 1970 (UTC), an integer
 utc-time and local-time give a time's calendar date and time of day, utc-offset the local
-time zone's offset. sleep is in skein.core.")
+time zone's offset; format-iso8601 and parse-iso8601 write and read them as ISO 8601 text
+(M3.5, D-107). sleep is in skein.core.")
 
 (defn epoch-millis
   "The wall-clock time: milliseconds since 1970-01-01 UTC, an integer, as io/modified-time
@@ -58,3 +59,127 @@ now or at millis since 1970: daylight time changes it."
 utc-time gives it, with :offset the zone's offset from UTC in seconds."
   ([] (local-time (epoch-millis)))
   ([millis] (calendar-time millis (utc-offset millis))))
+
+;;; ISO 8601 text (M3.5, D-107): YYYY-MM-DDTHH:MM:SS.mmm with Z or an offset.
+
+(defn- days-from-civil
+  "The days from 1970-01-01 to the day year-month-day, in the proleptic Gregorian calendar
+(Howard Hinnant's days_from_civil)."
+  [year month day]
+  (let [y (if (<= month 2) (dec year) year)
+        era (quot (if (>= y 0) y (- y 399)) 400)
+        yoe (- y (* era 400))
+        doy (+ (quot (+ (* 153 (+ month (if (> month 2) -3 9))) 2) 5) (dec day))
+        doe (+ (* yoe 365) (quot yoe 4) (- (quot yoe 100)) doy)]
+    (+ (* era 146097) doe -719468)))
+
+(defn- pad
+  "n as at least width digits."
+  [n width]
+  (let [s (str n)]
+    (str (apply str (repeat (- width (count s)) "0")) s)))
+
+(defn- offset-text [offset]
+  (if (zero? offset)
+    "Z"
+    (let [a (abs offset)
+          h (quot a 3600)
+          m (quot (mod a 3600) 60)
+          s (mod a 60)]
+      (str (if (neg? offset) "-" "+") (pad h 2) ":" (pad m 2) (when (pos? s) (str ":" (pad s 2)))))))
+
+(defn format-iso8601
+  "The time t as ISO 8601 text: t is milliseconds since 1970 (written in UTC, with Z) or a
+calendar time (utc-time's or local-time's, with its offset), as
+\"2026-11-12T09:30:00.000-05:00\". Years before 0000 or after 9999 have a sign."
+  [t]
+  (let [ct (if (map? t) t (utc-time t))
+        y (:year ct)]
+    (str (cond (neg? y) (str "-" (pad (- y) 4))
+               (> y 9999) (str "+" y)
+               :else (pad y 4))
+         "-" (pad (:month ct) 2) "-" (pad (:day ct) 2)
+         "T" (pad (:hour ct) 2) ":" (pad (:minute ct) 2) ":" (pad (:second ct) 2)
+         "." (pad (or (:millis ct) 0) 3)
+         (offset-text (or (:offset ct) 0)))))
+
+(defn- iso-error [s why]
+  (error (str "parse-iso8601: " why " in " (pr-str s))))
+
+(defn- digits
+  "[number index-after] of the n digits of s at i (n nil: one or more), or nil."
+  [s i n]
+  (let [len (count s)
+        end (loop [j i]
+              (if (and (< j len) (or (nil? n) (< (- j i) n))
+                       (<= 48 (int (nth s j)) 57))
+                (recur (inc j))
+                j))]
+    (when (and (> end i) (or (nil? n) (= (- end i) n)))
+      [(parse-long (subs s i end)) end])))
+
+(defn- days-in-month [year month]
+  (case month
+    2 (if (and (zero? (mod year 4)) (or (pos? (mod year 100)) (zero? (mod year 400)))) 29 28)
+    (4 6 9 11) 30
+    31))
+
+(defn parse-iso8601
+  "The calendar time ISO 8601 text gives, as utc-time gives them: a date (2026-11-12, at
+midnight), or a date and a time (T or a space between) with minutes, seconds and a
+fraction optional (2026-11-12T09:30, ...T09:30:15.250), and an offset: Z, +05:30, +0530 or
++05 (none: the local time zone's then). Years may have a sign and more digits. Signals an
+error for text that isn't such a time, or a date or time that doesn't exist."
+  [s]
+  (when-not (string? s) (error (str "parse-iso8601 needs a string, not " (pr-str s))))
+  (let [n (count s)
+        at (fn [i] (when (< i n) (nth s i)))
+        [sign i] (case (at 0) \+ [1 1] \- [-1 1] [1 0])
+        [year i] (or (if (= i 0) (digits s i 4) (digits s i nil)) (iso-error s "no year"))
+        year (* sign year)
+        _ (when-not (= \- (at i)) (iso-error s "no month"))
+        [month i] (or (digits s (inc i) 2) (iso-error s "no month"))
+        _ (when-not (= \- (at i)) (iso-error s "no day"))
+        [day i] (or (digits s (inc i) 2) (iso-error s "no day"))
+        _ (when-not (<= 1 month 12) (iso-error s "no such month"))
+        _ (when-not (<= 1 day (days-in-month year month)) (iso-error s "no such day"))
+        timed (contains? #{\T \t \space} (at i))
+        [hour minute second millis i]
+        (if-not timed
+          [0 0 0 0 i]
+          (let [[hour i] (or (digits s (inc i) 2) (iso-error s "no hour"))
+                _ (when-not (= \: (at i)) (iso-error s "no minute"))
+                [minute i] (or (digits s (inc i) 2) (iso-error s "no minute"))
+                [second i] (if (= \: (at i))
+                             (or (digits s (inc i) 2) (iso-error s "no second"))
+                             [0 i])
+                [millis i] (if (contains? #{\. \,} (at i))
+                             (let [[_ j] (or (digits s (inc i) nil) (iso-error s "no fraction"))
+                                   frac (subs s (inc i) j)]
+                               [(parse-long (subs (str frac "00") 0 3)) j])
+                             [0 i])]
+            (when-not (and (<= 0 hour 23) (<= 0 minute 59) (<= 0 second 59))
+              (iso-error s "no such time"))
+            [hour minute second millis i]))
+        [offset i] (cond
+                     (nil? (at i)) [nil i]
+                     (contains? #{\Z \z} (at i)) [0 (inc i)]
+                     (contains? #{\+ \-} (at i))
+                     (let [osign (if (= \- (at i)) -1 1)
+                           [oh j] (or (digits s (inc i) 2) (iso-error s "a bad offset"))
+                           [om j] (cond (= \: (at j)) (or (digits s (inc j) 2) (iso-error s "a bad offset"))
+                                        (at j) (or (digits s j 2) (iso-error s "a bad offset"))
+                                        :else [0 j])
+                           [os j] (if (= \: (at j))
+                                    (or (digits s (inc j) 2) (iso-error s "a bad offset"))
+                                    [0 j])]
+                       (when-not (and (<= oh 23) (<= om 59) (<= os 59)) (iso-error s "a bad offset"))
+                       [(* osign (+ (* 3600 oh) (* 60 om) os)) j])
+                     :else (iso-error s "unexpected text"))
+        _ (when (< i n) (iso-error s "unexpected text"))
+        days (days-from-civil year month day)
+        local-ms (+ (* days 86400000) (* hour 3600000) (* minute 60000) (* second 1000) millis)
+        ;; With no offset, the local time zone's at that time.
+        offset (or offset (utc-offset (- local-ms (* 1000 (utc-offset local-ms)))))]
+    {:year year :month month :day day :hour hour :minute minute :second second
+     :millis millis :weekday (inc (mod (+ days 3) 7)) :offset offset}))

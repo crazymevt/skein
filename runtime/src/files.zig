@@ -752,6 +752,24 @@ pub const entries = [_]Entry{
             return writeBytes(a[0], a[1], a[2] != Value.nil and a[2] != Value.false);
         }
     }.f },
+    // (%open-default target): Windows' ShellExecuteW (skein.system/open!, D-107).
+    .{ .name = "%open-default", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            const t = copyPath(a[0]);
+            defer alloc.free(t);
+            const Call = struct {
+                t: []const u8,
+                ok: bool = false,
+                fn run(arg: ?*anyopaque) void {
+                    const c: *@This() = @ptrCast(@alignCast(arg));
+                    c.ok = platform.openWithDefault(c.t);
+                }
+            };
+            var call: Call = .{ .t = t };
+            io.pathBlocking(Call.run, &call);
+            return Value.fromBool(call.ok);
+        }
+    }.f },
     .{ .name = "%make-temp", .min = 4, .max = 4, .impl = struct {
         fn f(a: Args) Value {
             return makeTemp(a[0], a[1], a[2], a[3] != Value.nil and a[3] != Value.false);

@@ -405,7 +405,7 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%stream-read-some" "%stream-flush" "%stream-close" "%epoch-millis" "%utc-offset"
     "%write-stderr"
     ;; Temporary files and permissions (M3.5, D-107)
-    "%make-temp" "%owner-only" "%permissions"
+    "%make-temp" "%owner-only" "%permissions" "%open-default"
     ;; Watching files (M3.5, D-107)
     "%fswatch-start" "%fswatch-next" "%fswatch-stop"
     ;; Conditions and restarts (M1.5)
