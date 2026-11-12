@@ -715,3 +715,39 @@ pub fn openWithDefault(target: []const u8) bool {
     // SW_SHOWNORMAL; a result above 32 is success.
     return shellExecute(null, open, wide.ptr, null, null, 1) > 32;
 }
+
+// ---------------------------------------------------------------------------------------
+// Socket read timeouts (skein.net, D-106). std.Io's sockets on Windows are handles of AFD,
+// the driver under Winsock, and std.Io can't yet wait for a read with a timeout there; AFD's
+// own poll request has one.
+
+const AfdPollHandleInfo = extern struct { handle: ?*anyopaque, events: u32, status: i32 };
+const AfdPollInfo = extern struct { timeout: i64, number_of_handles: u32, exclusive: u32, handles: [1]AfdPollHandleInfo };
+const AFD_POLL_RECEIVE: u32 = 0x0001;
+const AFD_POLL_DISCONNECT: u32 = 0x0008;
+const AFD_POLL_ABORT: u32 = 0x0010;
+const AFD_POLL_LOCAL_CLOSE: u32 = 0x0020;
+
+/// Wait until the socket can be read (data, its end or an error are there), at most
+/// `nanos`; false if the time ran out.
+pub fn socketReadable(io: std.Io, handle: std.Io.net.Socket.Handle, nanos: u64) bool {
+    var info: AfdPollInfo = .{
+        // Relative, in units of 100 ns.
+        .timeout = -@as(i64, @intCast(@min(nanos / 100, std.math.maxInt(i64)))),
+        .number_of_handles = 1,
+        .exclusive = 0,
+        .handles = .{.{ .handle = handle, .events = AFD_POLL_RECEIVE | AFD_POLL_DISCONNECT | AFD_POLL_ABORT | AFD_POLL_LOCAL_CLOSE, .status = 0 }},
+    };
+    const bytes = std.mem.asBytes(&info);
+    const result = io.operate(.{ .device_io_control = .{
+        .file = .{ .handle = handle, .flags = .{ .nonblocking = true } },
+        .code = std.os.windows.IOCTL.AFD.POLL,
+        .in = bytes,
+        .out = bytes,
+    } }) catch return true;
+    const iosb = result.device_io_control;
+    if (iosb.u.Status == .TIMEOUT) return false;
+    // Another failure leaves it to the read to say.
+    if (iosb.u.Status != .SUCCESS) return true;
+    return info.number_of_handles > 0;
+}

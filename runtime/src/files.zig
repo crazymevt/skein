@@ -367,25 +367,14 @@ fn register(s: *Stream) Value {
 }
 
 /// Read from a socket into its buffer: how many bytes (0 at its end), waiting at most its
-/// read timeout. A read that times out is cancelled, unless it finished meanwhile.
+/// read timeout for some to arrive (the platform's poll) before the read itself.
 fn readSocket(s: *Stream) !usize {
     const sio = io.stdIo();
+    const handle = s.sock.?.socket.handle;
+    if (s.read_timeout != 0 and !platform.socketReadable(sio, handle, s.read_timeout)) return error.Timeout;
     var bufs = [_][]u8{s.buf[0..]};
-    const op: std.Io.Operation = .{ .net_read = .{ .socket_handle = s.sock.?.socket.handle, .data = &bufs } };
-    if (s.read_timeout == 0) return (try (try sio.operate(op)).net_read).data_len;
-    var storage: [1]std.Io.Operation.Storage = undefined;
-    var batch: std.Io.Batch = .init(&storage);
-    batch.addAt(0, op);
-    const timeout: std.Io.Timeout = .{ .duration = .{ .raw = .fromNanoseconds(@intCast(s.read_timeout)), .clock = .awake } };
-    batch.awaitConcurrent(sio, timeout) catch |err| switch (err) {
-        error.Timeout => {
-            batch.cancel(sio);
-            const done = batch.next() orelse return error.Timeout;
-            return (try done.result.net_read).data_len;
-        },
-        else => |e| return e,
-    };
-    return (try batch.next().?.result.net_read).data_len;
+    const op: std.Io.Operation = .{ .net_read = .{ .socket_handle = handle, .data = &bufs } };
+    return (try (try sio.operate(op)).net_read).data_len;
 }
 
 fn fillSocketBlocking(arg: ?*anyopaque) void {

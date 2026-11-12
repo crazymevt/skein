@@ -189,6 +189,16 @@ pub fn modeBits(permissions: std.Io.File.Permissions) ?u32 {
     return @intCast(permissions.toMode() & 0o7777);
 }
 
+/// Wait until the socket can be read (data, its end or an error are there), at most
+/// `nanos`; false if the time ran out (skein.net's read timeouts, D-106).
+pub fn socketReadable(io: std.Io, handle: std.Io.net.Socket.Handle, nanos: u64) bool {
+    _ = io;
+    var fds = [_]c.pollfd{.{ .fd = handle, .events = c.POLL.IN, .revents = 0 }};
+    const ms: c_int = @intCast(@min((nanos + std.time.ns_per_ms - 1) / std.time.ns_per_ms, std.math.maxInt(c_int)));
+    // An error (an interrupted wait among them) leaves it to the read to say.
+    return c.poll(&fds, 1, ms) != 0;
+}
+
 /// Open `target` with its default application: on macOS and Linux skein.system runs
 /// open or xdg-open itself, so this is Windows' only.
 pub fn openWithDefault(target: []const u8) bool {
