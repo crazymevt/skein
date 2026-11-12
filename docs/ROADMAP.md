@@ -61,6 +61,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M3.13 Markdown and documentation | ⬜ |
 | M3.14 HTTP and the API workbench | ⬜ |
 | M3.15 Shipping Skein Studio | ⬜ |
+| Manual (a track beside M3.x, D-109) | 🟨 |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
@@ -616,6 +617,17 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 
 **Exit:** Skein Studio installs and runs from its package on each platform, and Jessie uses it to work on Skein.
 
+### Track: the manual (D-109)
+A track beside the M3.x milestones, worked on in its own session; it doesn't come ahead of them.
+- Skein's manual, after Clojure's reference, ClojureDocs and the Common Lisp HyperSpec, as a static HTML site that a Skein program generates (`doc/manual.skn`, `make manual`, into `build/manual/`): a quick reference of every public function grouped by topic, as Clojure's cheatsheet; a page per namespace with an entry per var (syntax, arguments and values, description, examples, notes, see also); and the language reference from DESIGN.md.
+- The vars, argument lists, docstrings and source locations come from the compiler's model of the namespaces (as Swank's documentation does), in a program built with `--eval`. Examples, notes and topics are hand-written in `doc/`: `doc/examples/<ns>.skn` (code with `;=>` results and `;; prints:` output, which the tests run, so an example can't go stale), `doc/notes/<ns>.md`, `doc/topics.edn`.
+- Steps, in order:
+  1. 🟨 The generator, its `make` target and tests; the quick reference covering the whole standard library; `skein.string` complete as the model namespace, with its examples tested.
+  2. ⬜ Examples and notes for the rest of the standard library, namespace by namespace.
+  3. ⬜ The entries as data (name, argument lists, docstring, source location, examples) beside the pages, which M3.13's docset reuses (D-102's "Later").
+
+**Exit:** `make manual` builds the site from the checkout; every public var has an entry; every namespace's examples pass in `make test`.
+
 ### Later in Phase 3
 - The optimization and polish of the earlier outline, in an order to settle then: sealing; inlining across namespaces; escape analysis and arena inference; SIMD for `vec`/`mat`; an optional LLVM backend; full hygienic macros; `skein fmt` (sooner, if the IDE's Format Document needs it); a package registry; a documentation site.
 
@@ -708,3 +720,4 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - make test: the Swank and REPL host tests each build their own `--eval` program (about 12 s each, 13 of them); sharing one build per suite would cut Swank, now the longest part, but changes the programs some tests check backtraces of. Compiling the evaluator's C once per skeinc and linking it into each `--eval` program would speed those builds, and `skein run` and `dev`, everywhere.
 - skein-ui's GTK tests, run on macOS, fail about half the time in `popovers-and-completion-popups` ("the view keeps the keyboard") and then crash (exit 139), also before M3.6: a GTK window on macOS doesn't always get the keyboard, as other applications are in front. Linux CI, under Xvfb, passes; worth a look before relying on the Mac for GTK (M3.6).
 - skein-ui's text buffer copies its line index on every edit (1.4 ms at 10,000 lines, M3.6 step 3): chunked lines, as the code view's runs now are, would make it cost what the edit does, for files of 100,000 lines and more.
+- The manual (D-109) finds no docstring in the compiler's model for skein.core's built-in macros and special forms (`ns`, `defn`, `defmacro`, `in-ns`), its condition types (`type-error`...), `/` and `*1`–`*e`, nor for the accessors `defstruct` generates and a few generics in `skein.math` (`dot`, `lerp`...); giving them docstrings (the registry of the runtime's macros, `defcondition`'s and `defstruct`'s) would complete those entries.
