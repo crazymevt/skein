@@ -654,7 +654,6 @@ A track beside the M3.x milestones, worked on in its own session; it doesn't com
 ## Notes for later
 Ideas and follow-ups noticed during work, kept here so they don't derail the current milestone.
 
-- Regex searches (D-105) try the pattern at each position; skipping ahead to a literal first character or prefix (`memchr`, or a substring search) would make searches for words several times faster (bench/README.md).
 - `skein.process` (D-103): output a program writes that is never read holds a pipe's descriptor until its stream is closed (stdin and output read to the end are released by themselves), and the process table keeps a small entry per program. Finalizers for runtime handles would let the GC release both, as `ffi/own` pointers are.
 - Windows: `skein.process`'s `:interrupt`, `:err :out` and `{:file path :append true}` need Skein's own `CreateProcessW` spawn: with `CREATE_NEW_PROCESS_GROUP`, and the handles given as they are (Zig's spawn reopens a file, which a pipe can't be and an append loses its place in) (D-103); with Windows work (M2.16).
 - Programs can't read their own standard input through a public API: the REPL reads the terminal through `%stdin` and `%read-text`. `skein.io` could give stdin, stdout and stderr as streams (`*in*`, or `(io/stdin)`), which a child program of `skein.process` would want; the names need Jessie's OK (M3.1).
@@ -740,7 +739,6 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - `skein dev`'s Swank answers `frame-locals-and-catch-tags` with no locals, so Skein Studio's debugger (M3.7 step 4) shows none; the evaluator's frames would need to keep their bindings for it to.
 - skein-ui measures a Cocoa check box narrower than its label, which AppKit then truncates ("Match…"); Skein Studio's find bar gives its check boxes widths of their own meanwhile (M3.7 step 5).
 - `(vec s)` (and so `seq` over a string) takes time quadratic in the string's length where it isn't ASCII: 3 s for 96,000 characters (M3.8 step 1); skein-markdown walks cursors meanwhile.
-- Skein's regexes can't match at a position only: `^` marks the string's start, so a search from a cursor goes on to the end when the pattern fails there. skein-markdown matches `(pattern)|` meanwhile, whose empty alternative stops the search; a sticky flag, or `%re-exec` anchoring at its start, would do it directly.
 - `skein.string/lower-case` and `upper-case` say they take a character too, but fail on one ("%string-ascii-case needs a string").
 - The manual (D-111) finds no docstring in the compiler's model for skein.core's built-in macros and special forms (`ns`, `defn`, `defmacro`, `in-ns`), its condition types (`type-error`...), `/` and `*1`–`*e`, nor for the accessors `defstruct` generates and a few generics in `skein.math` (`dot`, `lerp`...); giving them docstrings (the registry of the runtime's macros, `defcondition`'s and `defstruct`'s) would complete those entries.
 - `skein.math/determinant` gives an f32 for a mat3 but an f64 for a mat4 (found by the manual's examples, D-111).

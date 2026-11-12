@@ -1,15 +1,37 @@
 ;; The regex engine (M3.3 step 1, D-105), natively, against the reference model: every
 ;; case in regex-cases.edn (written by host/tools/regex-cases.py from Python's re, and
-;; Java's results for syntax Python lacks) finds the same match and groups.
+;; Java's results for syntax Python lacks) finds the same match and groups. Matching only
+;; at a cursor (%re-exec's :at) agrees, at the start and a character on, with searching
+;; there for (?:p)|(), whose last group is set when p doesn't match at the cursor.
 (ns regex-engine
   (:require [skein.edn :as edn]
-            [skein.io :as io]))
+            [skein.io :as io]
+            [skein.string :as string]))
+
+(defn- at-model [p s cursor]
+  (when-let [v (%re-exec (re-pattern (str "(?:" p ")|()")) s cursor false)]
+    (when (nil? (peek v)) (subvec v 1 (dec (count v))))))
 
 (defn -main [& args]
   (let [cases (edn/read-string (io/read-file "host/tests/fixtures/library/regex-cases.edn"))
         result (fn [[p s _]] (when-let [v (%re-exec (re-pattern p) s 0 false)] (subvec v 1)))
-        wrong (remove (fn [c] (= (nth c 2) (result c))) cases)]
+        wrong (remove (fn [c] (= (nth c 2) (result c))) cases)
+        at (fn [p s cursor] (when-let [v (%re-exec (re-pattern p) s cursor :at)] (subvec v 1)))
+        wrong-at (for [[p s] cases
+                       cursor (if (seq s) [0 (string/next s 0)] [0])
+                       :when (not= (at-model p s cursor) (at p s cursor))]
+                   [p s cursor])]
     (println "cases:" (count cases))
     (println "mismatches:" (count wrong))
     (doseq [[p s e :as c] (take 20 wrong)]
-      (println (pr-str p) (pr-str s) "expected" (pr-str e) "got" (pr-str (result c))))))
+      (println (pr-str p) (pr-str s) "expected" (pr-str e) "got" (pr-str (result c))))
+    (println "mismatches at a cursor:" (count wrong-at))
+    (doseq [[p s cursor] (take 20 wrong-at)]
+      (println (pr-str p) (pr-str s) cursor "expected" (pr-str (at-model p s cursor))
+               "got" (pr-str (at p s cursor))))
+    ;; A pattern anchored at the start matches nowhere else, nor does one past its prefix.
+    (println "anchored:" (mapv (fn [[p s c]] (some-> (%re-exec (re-pattern p) s c false) second))
+                               [["^ab" "abab" 0] ["^ab" "abab" 1] ["\\Aab" "xab" 0]
+                                ["(?m)^ab" "x\nab" 0] ["ab+c" "xxabbbc abc" 0]
+                                ["ab+c" "xxabbbc abc" 3] ["héllo" "say héllo" 0]
+                                ["(?i)AB" "xab" 0]]))))

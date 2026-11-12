@@ -1,2 +1,4 @@
 cases: 2503
 mismatches: 0
+mismatches at a cursor: 0
+anchored: [ab nil nil ab abbbc abc héllo ab]

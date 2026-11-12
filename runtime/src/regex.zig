@@ -98,7 +98,36 @@ const Program = struct {
     registers: u32 = 0,
     /// Named groups: name -> group.
     names: std.StringArrayHashMapUnmanaged(u32) = .empty,
+    /// What every match begins with (UTF-8), which a search skips to; empty if unknown.
+    prefix: std.ArrayList(u8) = .empty,
+    /// A match can only begin at the input's start (\A, or ^ outside multiline mode).
+    text_start: bool = false,
 };
+
+/// Note what every match of prog begins with: the characters (matched exactly) before the
+/// first instruction that branches or tests, past the ones that only record positions.
+fn notePrefix(prog: *Program) void {
+    for (prog.insts.items) |inst| {
+        switch (inst.op) {
+            .save, .mark => continue,
+            .char => {
+                if (inst.fold) return;
+                var buf: [4]u8 = undefined;
+                const n = std.unicode.utf8Encode(@intCast(inst.a), &buf) catch return;
+                prog.prefix.appendSlice(alloc, buf[0..n]) catch rt.fatal("out of memory", .{});
+            },
+            .begin_text => {
+                if (prog.prefix.items.len == 0) prog.text_start = true;
+                return;
+            },
+            .bol => {
+                if (prog.prefix.items.len == 0 and inst.a == 0) prog.text_start = true;
+                return;
+            },
+            else => return,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------------------
 // Parsing: Java's common syntax into a tree
@@ -682,6 +711,7 @@ fn compileText(text: []const u8, err: *CompileError) ?*Program {
             return null;
         }
     }
+    notePrefix(prog);
     return prog;
 }
 
@@ -855,21 +885,31 @@ const Matcher = struct {
     }
 };
 
-/// Match `prog` against `input` from byte `start`: anchored there (re-matches, full) or
-/// searching onward. The registers (byte positions, `none` unset) if it matched.
-fn execute(prog: *const Program, input: []const u8, start: usize, full: bool) ?[]usize {
+/// How a match is looked for from the start cursor: the first match from there on, one
+/// that starts there, or one that starts there and ends at the input's end (re-matches).
+const Mode = enum { search, at, full };
+
+/// Match `prog` against `input` from byte `start`, as `mode` says. The registers (byte
+/// positions, `none` unset) if it matched.
+fn execute(prog: *const Program, input: []const u8, start: usize, mode: Mode) ?[]usize {
     const regs = alloc.alloc(usize, prog.registers) catch rt.fatal("out of memory", .{});
-    var m: Matcher = .{ .prog = prog, .input = input, .regs = regs, .full = full };
+    var m: Matcher = .{ .prog = prog, .input = input, .regs = regs, .full = mode == .full };
     defer m.stack.deinit(alloc);
+    const prefix = prog.prefix.items;
     var at = start;
     while (at <= input.len) {
+        if (mode == .search) {
+            // Only where the match can begin.
+            if (prog.text_start and at != 0) break;
+            if (prefix.len > 0) at = std.mem.indexOfPos(u8, input, at, prefix) orelse break;
+        }
         @memset(regs, none);
         if (m.run(0, at)) |end| {
             regs[0] = at;
             regs[1] = end;
             return regs;
         }
-        if (full or at == input.len) break;
+        if (mode != .search or at == input.len) break;
         at += (m.decode(at) orelse break)[1];
     }
     alloc.free(regs);
@@ -938,9 +978,11 @@ pub fn source(p: Value) Value {
     return coll.get(p, 0);
 }
 
-/// (%re-exec p s start full): nil, or [end g0 g1 ...]: the match's end (a byte cursor
-/// into s, from which a search goes on) and its groups' text, nil for those unset.
-fn exec(p: Value, s: Value, start: Value, full: Value) Value {
+/// (%re-exec p s start mode): nil, or [end g0 g1 ...]: the match's end (a byte cursor
+/// into s, from which a search goes on) and its groups' text, nil for those unset. mode
+/// nil (or false) searches from the cursor start, true matches from there to the end of
+/// s, and anything else (:at) matches only at start.
+fn exec(p: Value, s: Value, start: Value, mode: Value) Value {
     const prog = programOf(p);
     if (!string.isString(s)) rt.raise(.type_error, "matching a pattern needs a string, not {s}", .{readable(s)});
     // The matcher allocates only on the C heap, so it reads s in place; making the result
@@ -949,7 +991,8 @@ fn exec(p: Value, s: Value, start: Value, full: Value) Value {
     const input = string.bytes(s);
     const from: usize = if (start.isFixnum()) @intCast(@max(start.toFixnum(), 0)) else 0;
     if (from > input.len) return Value.nil;
-    const regs = execute(prog, input, from, full.isTruthy()) orelse return Value.nil;
+    const how: Mode = if (!mode.isTruthy()) .search else if (mode == Value.true) .full else .at;
+    const regs = execute(prog, input, from, how) orelse return Value.nil;
     defer alloc.free(regs);
     // The span the groups lie in (a lookahead's can lie past the match).
     var lo: usize = regs[0];
