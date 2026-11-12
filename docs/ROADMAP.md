@@ -48,7 +48,7 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M2.16 skein-ui on Windows | ⬜ |
 | M3.1 Processes | ✅ |
 | M3.2 Data formats and bytes | ✅ |
-| M3.3 Regular expressions | 🟨 |
+| M3.3 Regular expressions | ✅ |
 | M3.4 Networking and the Swank client | ⬜ |
 | M3.5 Files and the system | ⬜ |
 | M3.6 skein-ui for the IDE | ⬜ |
