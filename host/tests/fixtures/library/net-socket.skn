@@ -1,0 +1,109 @@
+;; skein.net (M3.4 step 1, D-106), natively: a server and a client on localhost, text and
+;; bytes both ways, read timeouts (a partial line survives one), connecting that fails or
+;; times out, shutdown waking a read in another fiber, and listening on every interface.
+(ns net-socket
+  (:require [skein.bytes :as bytes]
+            [skein.io :as io]
+            [skein.net :as net]
+            [skein.string :as string]
+            [skein.time :as time]))
+
+(defn- outcome
+  "What (f) gives, or the kind of error it signals."
+  [f]
+  (try (f)
+       (catch net/net-timeout e :net-timeout)
+       (catch io/io-error e [:io-error (io/io-error-message e)])))
+
+(defn- echo-server
+  "A server on port 0 whose connections each answer every line upper-cased, then
+\"bye\" at the end."
+  []
+  (let [server (net/listen 0)]
+    (future
+      (loop []
+        (when-let [s (net/accept server)]
+          (future
+            (with-open [s s]
+              (doseq [line (io/line-seq s)]
+                (io/write s (str (string/upper-case line) "\n"))
+                (io/flush s))
+              (io/write s "bye\n")))
+          (recur))))
+    server))
+
+(defn -main [& args]
+  (let [server (echo-server)
+        port (net/port server)]
+    (println "port 0 picked one:" (pos? port) "a server is a socket?" (net/socket? server))
+    ;; Lines both ways.
+    (with-open [s (net/connect "localhost" port {:timeout 5})]
+      (println "socket?" (net/socket? s))
+      (doseq [w ["hello" "wörld"]]
+        (io/write s (str w "\n"))
+        (io/flush s)
+        (println "echo:" (io/read-line s)))
+      ;; Bytes out and back: write-bytes!, then read-bytes! until the line ends.
+      (io/write-bytes! s (bytes/utf8 "bytes\n"))
+      (io/flush s)
+      (let [buf (make-array u8 6)]
+        (loop [at 0]
+          (when (< at 6)
+            (recur (+ at (io/read-bytes! s buf at (- 6 at))))))
+        (println "bytes:" (pr-str (bytes/utf8-string buf))))
+      ;; shutdown ends the connection both ways: this side reads its end too.
+      (net/shutdown s)
+      (println "after shutdown:" (pr-str (io/read-line s))))
+    ;; By its IP address.
+    (with-open [s (net/connect "127.0.0.1" port)]
+      (io/write s "ip\n")
+      (io/flush s)
+      (println "by address:" (io/read-line s))))
+  ;; A read that times out, and a line that arrives in two parts around a timeout.
+  (let [server (net/listen 0)
+        go (promise)]
+    (future
+      (with-open [s (net/accept server)]
+        (io/write s "par")
+        (io/flush s)
+        @go
+        (io/write s "tial\nnext\n")
+        (io/flush s)
+        (sleep 0.2)))
+    (with-open [s (net/connect "localhost" (net/port server) {:read-timeout 0.2})]
+      (let [start (time/now)
+            first-try (outcome (fn [] (io/read-line s)))]
+        (println "timed out:" first-try "in time:" (< (- (time/now) start) 2.0))
+        (println "an io-error too:"
+                 (try (io/read-line s) (catch io/io-error e (instance? net/net-timeout e)))))
+      (deliver go true)
+      (println "the line, whole:" (io/read-line s) (io/read-line s))))
+  ;; Connecting where nothing listens.
+  (let [server (net/listen 0)
+        port (net/port server)]
+    (net/close-server server)
+    (println "refused:" (string/replace (second (outcome (fn [] (net/connect "127.0.0.1" port))))
+                                        (str port) "PORT")))
+  (println "unknown host:" (first (outcome (fn [] (net/connect "no-such-host.invalid" 80)))))
+  ;; An address that doesn't answer: a timeout, or at once if the network says so.
+  (let [start (time/now)
+        r (outcome (fn [] (net/connect "10.255.255.1" 9 {:timeout 0.3})))]
+    (println "no answer:" (or (= r :net-timeout) (= :io-error (first r)))
+             "in time:" (< (- (time/now) start) 3.0)))
+  ;; shutdown from another fiber ends a read that waits.
+  (let [server (net/listen 0)
+        held (future (net/accept server))]
+    (with-open [s (net/connect "localhost" (net/port server))]
+      (let [reader (future (io/read-line s))]
+        (sleep 0.1)
+        (net/shutdown s)
+        (println "the waiting read got:" (pr-str (deref reader 5 :still-waiting)))))
+    (close @held))
+  ;; Every interface.
+  (with-open [server (net/listen 0 {:host "0.0.0.0"})]
+    (future (with-open [s (net/accept server)] (io/write s "anywhere\n")))
+    (with-open [s (net/connect "127.0.0.1" (net/port server))]
+      (println "on 0.0.0.0:" (io/read-line s))))
+  (println "bad listen:" (outcome (fn [] (net/listen 0 {:host "not an address"}))))
+  (println "bad timeout:" (try (net/connect "localhost" 1 {:timeout -1})
+                               (catch error e (condition-message e)))))

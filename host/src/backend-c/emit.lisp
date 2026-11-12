@@ -382,6 +382,9 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%json-read" "%json-write" "%json-reformat"
     ;; Regular expressions (M3.3, D-105)
     "re-pattern" "%re-exec" "%re-names" "%re-source" "%pattern?" "%regex-literal"
+    ;; Sockets (M3.4, D-106)
+    "%net-timeout-class!" "%net-connect" "%net-read-timeout!" "%net-shutdown" "%net-listen"
+    "%net-accept" "%net-port" "%net-close-server"
     ;; Hot reload (M2.9, D-091)
     "%load-module" "%evaluated?"
     ;; STM (M2.10, D-092)

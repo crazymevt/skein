@@ -2,8 +2,8 @@
 //! Phase 0 (host/src/runtime/io.lisp). lib/skein/io.skn wraps these and signals io-error;
 //! they return nil or false on failure.
 //!
-//! A stream is a handle (a fixnum) to an open file and its buffers, kept here outside the
-//! heap. Reads and writes keep their own offset. Each call that touches the file runs as a
+//! A stream is a handle (a fixnum) to an open file, a pipe or a socket (D-106) and its
+//! buffers, kept here outside the heap. Reads and writes keep their own offset. Each call that touches the file runs as a
 //! blocking call (io.pathBlocking), on copies of its data made outside the heap, since
 //! other threads may collect meanwhile.
 
@@ -167,6 +167,16 @@ const Stream = struct {
     released: bool = false,
     /// Which stream it is, as its handle (a table slot, reused once closed) can't say.
     serial: u64 = 0,
+    /// A TCP socket (net.zig, D-106): read and written in sequence, through the socket's
+    /// calls; `file` is unused.
+    sock: ?std.Io.net.Stream = null,
+    /// A socket's limit on each read, in nanoseconds (0: none). A read that runs out sets
+    /// timed_out, and the reading function signals net-timeout.
+    read_timeout: u64 = 0,
+    timed_out: bool = false,
+    /// What read-line or read-text had gathered when a read timed out, which the next
+    /// read starts with, so a timeout loses nothing.
+    carry: std.ArrayList(u8) = .empty,
 };
 
 var serials = std.atomic.Value(u64).init(1);
@@ -221,6 +231,35 @@ pub fn registerPipe(file: std.Io.File) struct { Value, u64 } {
     return .{ h, s.serial };
 }
 
+/// A stream handle for a connected socket (net.zig, D-106), which the stream now owns.
+pub fn registerSocket(sock: std.Io.net.Stream) Value {
+    const s = alloc.create(Stream) catch rt.fatal("out of memory", .{});
+    s.* = .{ .file = undefined, .offset = 0, .sock = sock };
+    return register(s);
+}
+
+const ShutdownCall = struct { sock: std.Io.net.Stream };
+
+fn shutdownBlocking(arg: ?*anyopaque) void {
+    const c: *ShutdownCall = @ptrCast(@alignCast(arg));
+    c.sock.shutdown(io.stdIo(), .both) catch {};
+}
+
+/// End the socket stream h's connection both ways, so a read waiting on it (in another
+/// fiber) gets the end of the stream; the stream stays open until it's closed.
+pub fn shutdownSocket(h: Value) void {
+    const s = streamOf(h);
+    var call: ShutdownCall = .{ .sock = s.sock orelse rt.raise(.@"error", "the stream isn't a socket", .{}) };
+    @import("sched.zig").blocking(shutdownBlocking, &call);
+}
+
+/// Set the socket stream h's limit on each read, in nanoseconds (0: none).
+pub fn setReadTimeout(h: Value, nanos: u64) void {
+    const s = streamOf(h);
+    if (s.sock == null) rt.raise(.@"error", "the stream isn't a socket", .{});
+    s.read_timeout = nanos;
+}
+
 fn register(s: *Stream) Value {
     s.serial = serials.fetchAdd(1, .monotonic);
     lock.lock();
@@ -233,6 +272,44 @@ fn register(s: *Stream) Value {
     }
     table.append(alloc, s) catch rt.fatal("out of memory", .{});
     return Value.fromFixnum(@intCast(table.items.len));
+}
+
+/// Read from a socket into its buffer: how many bytes (0 at its end), waiting at most its
+/// read timeout. A read that times out is cancelled, unless it finished meanwhile.
+fn readSocket(s: *Stream) !usize {
+    const sio = io.stdIo();
+    var bufs = [_][]u8{s.buf[0..]};
+    const op: std.Io.Operation = .{ .net_read = .{ .socket_handle = s.sock.?.socket.handle, .data = &bufs } };
+    if (s.read_timeout == 0) return (try (try sio.operate(op)).net_read).data_len;
+    var storage: [1]std.Io.Operation.Storage = undefined;
+    var batch: std.Io.Batch = .init(&storage);
+    batch.addAt(0, op);
+    const timeout: std.Io.Timeout = .{ .duration = .{ .raw = .fromNanoseconds(@intCast(s.read_timeout)), .clock = .awake } };
+    batch.awaitConcurrent(sio, timeout) catch |err| switch (err) {
+        error.Timeout => {
+            batch.cancel(sio);
+            const done = batch.next() orelse return error.Timeout;
+            return (try done.result.net_read).data_len;
+        },
+        else => |e| return e,
+    };
+    return (try batch.next().?.result.net_read).data_len;
+}
+
+fn fillSocketBlocking(arg: ?*anyopaque) void {
+    const s: *Stream = @ptrCast(@alignCast(arg));
+    const n = readSocket(s) catch |err| {
+        if (err == error.Timeout) {
+            s.timed_out = true;
+            return;
+        }
+        s.failed = true;
+        s.eof = true;
+        return;
+    };
+    s.start = 0;
+    s.end = n;
+    if (n == 0) s.eof = true;
 }
 
 fn fillBlocking(arg: ?*anyopaque) void {
@@ -284,12 +361,33 @@ pub fn releasePipe(h: Value, serial: u64) void {
     releaseBlocking(s);
 }
 
-/// Refill an empty read buffer; false at the end of the file.
-fn fill(s: *Stream) bool {
+/// Refill an empty read buffer; false at the end of the file. A socket's read that times
+/// out signals net-timeout, after `keep` (what the caller had gathered) is put by for the
+/// next read.
+fn fill(s: *Stream, keep: ?*std.ArrayList(u8)) bool {
     if (s.start < s.end) return true;
     if (s.eof) return false;
-    io.pathBlocking(fillBlocking, s);
+    if (s.sock != null) {
+        // A socket's calls touch no paths, so they needn't run on a thread of their own.
+        @import("sched.zig").blocking(fillSocketBlocking, s);
+        if (s.timed_out) {
+            s.timed_out = false;
+            if (keep) |k| {
+                s.carry.clearRetainingCapacity();
+                s.carry.appendSlice(alloc, k.items) catch rt.fatal("out of memory", .{});
+            }
+            @import("net.zig").raiseTimeout(s.read_timeout);
+        }
+    } else io.pathBlocking(fillBlocking, s);
     return s.start < s.end;
+}
+
+/// Start `out` with what a timed-out read had gathered, if anything.
+fn takeCarry(s: *Stream, out: *std.ArrayList(u8)) bool {
+    if (s.carry.items.len == 0) return false;
+    out.appendSlice(alloc, s.carry.items) catch rt.fatal("out of memory", .{});
+    s.carry.clearRetainingCapacity();
+    return true;
 }
 
 fn checkFailed(s: *Stream) void {
@@ -301,8 +399,8 @@ fn readLine(h: Value) Value {
     const s = streamOf(h);
     var line: std.ArrayList(u8) = .empty;
     defer line.deinit(alloc);
-    var any = false;
-    while (fill(s)) {
+    var any = takeCarry(s, &line);
+    while (fill(s, &line)) {
         any = true;
         const chunk = s.buf[s.start..s.end];
         if (std.mem.indexOfScalar(u8, chunk, '\n')) |i| {
@@ -324,7 +422,8 @@ fn readRest(h: Value) Value {
     const s = streamOf(h);
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(alloc);
-    while (fill(s)) {
+    _ = takeCarry(s, &text);
+    while (fill(s, &text)) {
         text.appendSlice(alloc, s.buf[s.start..s.end]) catch rt.fatal("out of memory", .{});
         s.start = s.end;
     }
@@ -342,7 +441,14 @@ fn readInto(h: Value, array: Value, start: Value, n: Value) Value {
     const at: usize = @intCast(start.toFixnum());
     const want: usize = @intCast(n.toFixnum());
     if (want == 0) return Value.fromFixnum(0);
-    if (!fill(s)) {
+    if (s.carry.items.len > 0) {
+        // Bytes a timed-out read-line had gathered come first.
+        const got = @min(want, s.carry.items.len);
+        @memcpy(structs.bytesOf(array).?[at .. at + got], s.carry.items[0..got]);
+        s.carry.replaceRange(alloc, 0, got, &.{}) catch rt.fatal("out of memory", .{});
+        return Value.fromFixnum(@intCast(got));
+    }
+    if (!fill(s, null)) {
         checkFailed(s);
         return Value.nil;
     }
@@ -360,6 +466,20 @@ fn flushBlocking(arg: ?*anyopaque) void {
         s.failed = true;
         return;
     }
+    if (s.sock) |sock| {
+        var buf: [4096]u8 = undefined;
+        var w = std.Io.net.Stream.Writer.init(sock, io.stdIo(), &buf);
+        w.interface.writeAll(s.pending.items) catch {
+            s.failed = true;
+            return;
+        };
+        w.interface.flush() catch {
+            s.failed = true;
+            return;
+        };
+        s.pending.clearRetainingCapacity();
+        return;
+    }
     // A pipe whose reader has gone fails (the runtime ignores SIGPIPE, process.zig).
     (if (s.pipe)
         s.file.writeStreamingAll(io.stdIo(), s.pending.items)
@@ -373,7 +493,9 @@ fn flushBlocking(arg: ?*anyopaque) void {
 }
 
 fn flush(s: *Stream) void {
-    if (s.pending.items.len > 0) io.pathBlocking(flushBlocking, s);
+    if (s.pending.items.len > 0) {
+        if (s.sock != null) @import("sched.zig").blocking(flushBlocking, s) else io.pathBlocking(flushBlocking, s);
+    }
     checkFailed(s);
 }
 
@@ -393,7 +515,7 @@ fn closeBlocking(arg: ?*anyopaque) void {
     const s: *Stream = @ptrCast(@alignCast(arg));
     if (s.released) return;
     if (s.pending.items.len > 0) flushBlocking(s);
-    s.file.close(io.stdIo());
+    if (s.sock) |sock| sock.close(io.stdIo()) else s.file.close(io.stdIo());
 }
 
 /// Flush and close; closing a closed stream does nothing.
@@ -410,6 +532,7 @@ fn close(h: Value) Value {
     io.pathBlocking(closeBlocking, stream);
     const failed = stream.failed;
     stream.pending.deinit(alloc);
+    stream.carry.deinit(alloc);
     alloc.destroy(stream);
     if (failed) rt.raise(.@"error", "the stream couldn't be written", .{});
     return Value.nil;

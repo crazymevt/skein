@@ -231,7 +231,8 @@ Returns nil."
 ;;; (or with-open) flushes and closes one.
 
 (defclass stream []
-  "An open file: kind is :reader, :writer, :input or :output."
+  "An open file: kind is :reader, :writer, :input or :output; or a socket (skein.net),
+:socket, which every stream function takes."
   (handle)
   (kind)
   (path :reader stream-path))
@@ -247,7 +248,7 @@ Returns nil."
       (fail path "file not found: " path))))
 
 (defn- handle-of [s kind what]
-  (when-not (and (instance? stream s) (= kind (:kind s)))
+  (when-not (and (instance? stream s) (or (= kind (:kind s)) (= :socket (:kind s))))
     (error (str what " needs a " (name kind) " stream, not " (pr-str s))))
   (:handle s))
 
@@ -283,9 +284,9 @@ with {:append true}."
   (%stream-write (handle-of w :writer "write") (str x) nil nil))
 
 (defn flush
-  "Write what the writer or output s holds back to its file. Returns nil."
+  "Write what the writer, output or socket s holds back. Returns nil."
   [s]
-  (when-not (and (instance? stream s) (contains? #{:writer :output} (:kind s)))
+  (when-not (and (instance? stream s) (contains? #{:writer :output :socket} (:kind s)))
     (error (str "flush needs a writer or an output stream, not " (pr-str s))))
   (%stream-flush (:handle s)))
 

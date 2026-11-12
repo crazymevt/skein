@@ -1,0 +1,17 @@
+port 0 picked one: true a server is a socket? false
+socket? true
+echo: HELLO
+echo: WöRLD
+bytes: "BYTES\n"
+after shutdown: nil
+by address: IP
+timed out: :net-timeout in time: true
+an io-error too: true
+the line, whole: partial next
+refused: cannot connect to 127.0.0.1:PORT: the connection was refused
+unknown host: :io-error
+no answer: true in time: true
+the waiting read got: nil
+on 0.0.0.0: anywhere
+bad listen: [:io-error cannot listen on not an address:0: listen needs an IP address or localhost]
+bad timeout: :timeout must be a positive number of seconds, not -1

@@ -227,6 +227,20 @@ received to that form's metadata (as data), for %syntax-meta.")
   (declare (ignore x))
   nil)
 
+;; skein.net (M3.4, D-106) is native only; loading it registers its condition class.
+(defcore "%net-timeout-class!" (var)
+  (declare (ignore var))
+  nil)
+
+(macrolet ((native-only-net (&rest names)
+             `(progn
+                ,@(loop for name in names
+                        collect `(defcore ,name (&rest args)
+                                   (declare (ignore args))
+                                   (error "skein.net is native only (D-106)"))))))
+  (native-only-net "%net-connect" "%net-read-timeout!" "%net-shutdown" "%net-listen"
+                   "%net-accept" "%net-port" "%net-close-server"))
+
 ;; skein.json (M3.2, D-104) is native only.
 (defcore "%json-read" (s key-fn value-fn)
   (declare (ignore s key-fn value-fn))

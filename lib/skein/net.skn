@@ -1,0 +1,103 @@
+(ns skein.net
+  "TCP sockets (DESIGN §21, M3.4, D-106). A socket is a skein.io stream both ways:
+read-line, line-seq, read-text, read-bytes!, write, write-bytes!, flush, close and
+with-open take it.
+  (connect host port opts?)  a socket connected to port on host (a name or an address)
+  (listen port opts?)        a server; on localhost unless :host says otherwise
+  (accept server opts?)      the next connection to the server, a socket
+  (port server)              the port the server listens on (port 0 picks a free one)
+  (close-server server)      stop listening
+  (shutdown s)               end the socket's connection both ways, waking a read that
+                             waits on it in another fiber (close it in the one that reads)
+Options: :timeout, the seconds connect waits for the connection; :read-timeout, the
+seconds each read of the socket waits (connect's and accept's); :host, the address listen
+listens on (\"0.0.0.0\" for every interface). Running out of time signals net-timeout, an
+io-error; a failure to connect or listen signals io-error."
+  (:require [skein.io :as io]))
+
+(defcondition net-timeout [io/io-error]
+  "A socket's connect or read that ran out of time.")
+
+(%net-timeout-class! net-timeout)
+
+(defclass server []
+  "A TCP server listening on a port."
+  (handle)
+  (host))
+
+(defn- nanos [seconds what]
+  (when seconds
+    (when-not (and (number? seconds) (pos? seconds))
+      (error (str what " must be a positive number of seconds, not " (pr-str seconds))))
+    (int (* seconds 1e9))))
+
+(defn- socket [handle where opts]
+  (let [s (make io/stream :handle handle :kind :socket :path where)]
+    (when-let [n (nanos (:read-timeout opts) ":read-timeout")]
+      (%net-read-timeout! handle n))
+    s))
+
+(defn- socket-handle [s what]
+  (when-not (and (instance? io/stream s) (= :socket (:kind s)))
+    (error (str what " needs a socket, not " (pr-str s))))
+  (:handle s))
+
+(defn connect
+  "A socket connected to port on host (a name to look up, or an IP address). opts:
+:timeout (seconds to wait for the connection, else as long as the system does) and
+:read-timeout (seconds each read waits, else for ever)."
+  ([host port] (connect host port {}))
+  ([host port opts]
+   (let [where (str host ":" port)
+         h (%net-connect host port (or (nanos (:timeout opts) ":timeout") 0))]
+     (if (string? h)
+       (error io/io-error :message (str "cannot connect to " where ": " h) :path where)
+       (socket h where opts)))))
+
+(defn listen
+  "A server listening on port (0 for any free one), on localhost unless opts' :host is
+another address (\"0.0.0.0\" for every interface)."
+  ([port] (listen port {}))
+  ([port opts]
+   (let [host (or (:host opts) "localhost")
+         h (%net-listen host port)]
+     (if (string? h)
+       (error io/io-error :message (str "cannot listen on " host ":" port ": " h)
+              :path (str host ":" port))
+       (make server :handle h :host host)))))
+
+(defn- server-handle [s what]
+  (when-not (instance? server s) (error (str what " needs a server, not " (pr-str s))))
+  (:handle s))
+
+(defn accept
+  "The next connection to the server, a socket, waiting for one; nil once the server is
+closed. opts: :read-timeout, as connect's."
+  ([server] (accept server {}))
+  ([server opts]
+   (when-let [h (%net-accept (server-handle server "accept"))]
+     (socket h (str "a connection to " (:host server) ":" (%net-port (:handle server))) opts))))
+
+(defn port
+  "The port the server listens on."
+  [server]
+  (%net-port (server-handle server "port")))
+
+(defn close-server
+  "Stop the server listening. Returns nil."
+  [server]
+  (%net-close-server (server-handle server "close-server")))
+
+(defmethod close [(s server)]
+  (close-server s))
+
+(defn shutdown
+  "End the socket's connection both ways: a read waiting on it (in another fiber) gets the
+end, and the other side reads the end. The socket stays open until it is closed."
+  [s]
+  (%net-shutdown (socket-handle s "shutdown")))
+
+(defn socket?
+  "True if x is a socket."
+  [x]
+  (and (instance? io/stream x) (= :socket (:kind x))))
