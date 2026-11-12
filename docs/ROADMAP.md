@@ -52,8 +52,8 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M3.4 Networking and the Swank client | ✅ |
 | M3.5 Files and the system | ✅ |
 | M3.6 skein-ui for the IDE | ✅ |
-| M3.7 Skein Studio's core | 🟨 |
-| M3.8 Agents | ⬜ |
+| M3.7 Skein Studio's core | ✅ |
+| M3.8 Agents | 🟨 |
 | M3.9 Source control | ⬜ |
 | M3.10 C sources in projects | ⬜ |
 | M3.11 SQLite and the Databases view | ⬜ |
@@ -729,3 +729,6 @@ Ideas and follow-ups noticed during work, kept here so they don't derail the cur
 - `DEV-RUN-LOOP-PAUSED` (`host/tests/repl.lisp`) failed once on Linux CI (run 43223469952): the job's debugger showed "; resumed" at once and the main thread's error followed without "(in main thread)", so the test timed out waiting for it; a race in the test or in how `skein dev` resumes a job's debugger (M3.6).
 - `skein dev`'s Swank answers `frame-locals-and-catch-tags` with no locals, so Skein Studio's debugger (M3.7 step 4) shows none; the evaluator's frames would need to keep their bindings for it to.
 - skein-ui measures a Cocoa check box narrower than its label, which AppKit then truncates ("Match…"); Skein Studio's find bar gives its check boxes widths of their own meanwhile (M3.7 step 5).
+- `(vec s)` (and so `seq` over a string) takes time quadratic in the string's length where it isn't ASCII: 3 s for 96,000 characters (M3.8 step 1); skein-markdown walks cursors meanwhile.
+- Skein's regexes can't match at a position only: `^` marks the string's start, so a search from a cursor goes on to the end when the pattern fails there. skein-markdown matches `(pattern)|` meanwhile, whose empty alternative stops the search; a sticky flag, or `%re-exec` anchoring at its start, would do it directly.
+- `skein.string/lower-case` and `upper-case` say they take a character too, but fail on one ("%string-ascii-case needs a string").
