@@ -480,8 +480,11 @@ timeout passed."]
     "form expanded until its head is not a macro. In programs built with --eval."]
    ["macroexpand-all" "([form])"
     "form with every macro call in it expanded. In programs built with --eval."]
-   ["skein.ffi/load-library" "([name])"
-    "Load the C library name (found next to the program, then as the system finds it)."]
+   ["skein.ffi/load-library" "([spec])"
+    "Load the C library spec names for this operating system, as deflibrary does: a map
+from :macos, :linux and :windows to a file name, or a vector of names to try in order
+(found next to the program, then in SKEIN_LIBRARY_PATH, then as the system finds it).
+Returns the name that loaded."]
    ["skein.ffi/null" "([])"
     "The C null pointer."]
    ["skein.ffi/null?" "([p])"
