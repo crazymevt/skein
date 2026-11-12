@@ -227,7 +227,7 @@ length length-sq distance normalize lerp, m* transform transpose determinant inv
 (defgeneric m* [a b] "The product a·b of two matrices, or of two quaternions.")
 (defgeneric transform [m v] "The vector v transformed by the matrix m (mat3·vec3, mat4·vec4).")
 (defgeneric transpose [m] "The transpose of a matrix.")
-(defgeneric determinant [m] "The determinant of a matrix.")
+(defgeneric determinant [m] "The determinant of a matrix, an f32 as its elements are.")
 (defgeneric inverse [m] "The inverse of a matrix (nil if it has none), or of a unit quaternion.")
 
 (defmethod m* [(a quat) b]
@@ -346,7 +346,7 @@ length length-sq distance normalize lerp, m* transform transpose determinant inv
 
 (defmethod determinant [(m mat4)]
   (reduce + (for [c [0 1 2 3]]
-              (* (if (odd? c) -1.0 1.0) (mat4-at m c 0) (mat4-minor m c 0)))))
+              (* (if (odd? c) -1.0f 1.0f) (mat4-at m c 0) (mat4-minor m c 0)))))
 
 (defmethod inverse [(m mat4)]
   (let [det (determinant m)]

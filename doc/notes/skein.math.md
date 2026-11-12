@@ -799,7 +799,7 @@ See also: inverse
 ## determinant
 ### Arguments and values
 - `m`: a matrix.
-- Returns its determinant: an f32 for a mat3, an f64 for a mat4.
+- Returns its determinant, an f32 as the matrix's elements are.
 
 See also: inverse
 

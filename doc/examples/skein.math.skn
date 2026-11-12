@@ -368,7 +368,7 @@ m/vec3-zero
 
 ;;;; determinant
 [(m/determinant (m/mat3-scale 2 3)) (m/determinant (m/mat4-scale 2 3 4))]
-;=> [6.0f 24.0]
+;=> [6.0f 24.0f]
 
 ;;;; inverse
 (= (m/inverse (m/mat3-translation 5 7)) (m/mat3-translation -5 -7))
