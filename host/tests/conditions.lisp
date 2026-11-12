@@ -44,6 +44,19 @@
   (evp-is "(handler-case ((fn [x] x)) (arity-error [e] :arity))" ":arity")
   (evp-is "(handler-case (5 1) (not-callable-error [e] :not-callable))" ":not-callable"))
 
+(test float-traps-are-skeins-wherever-sbcl-starts
+  ;; SBCL starts with no float traps on arm64 Linux, where (/ 1 0) then gave ##Inf:
+  ;; ensure-float-modes sets Skein's traps, overflow and division by zero, from none.
+  (is (equal '(:overflow :divide-by-zero)
+             (sb-thread:join-thread
+              (sb-thread:make-thread
+               (lambda ()
+                 (sb-int:set-floating-point-modes :traps '())
+                 (skein.runtime:ensure-float-modes)
+                 (let ((traps (getf (sb-int:get-floating-point-modes) :traps)))
+                   (remove-if-not (lambda (k) (member k traps))
+                                  '(:overflow :divide-by-zero :invalid)))))))))
+
 ;;; defcondition
 
 (test defcondition

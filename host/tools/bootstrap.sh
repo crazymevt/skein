@@ -16,6 +16,7 @@ host=""
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) host=aarch64-macos ;;
   Linux-x86_64) host=x86_64-linux-gnu ;;
+  Linux-aarch64) host=aarch64-linux-gnu ;;
   MINGW*-x86_64 | MSYS*-x86_64) host=x86_64-windows-gnu ;;
 esac
 
