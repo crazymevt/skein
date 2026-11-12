@@ -706,7 +706,9 @@ which are data."
 (defun repository-skn-files ()
   (let ((root (truename (asdf:system-relative-pathname "skein" "../"))))
     (sort (remove-if (lambda (p)
-                       (let ((s (namestring p)))
+                       ;; The path below the root, so a checkout that is itself in a
+                       ;; .claude/ (an agent's worktree) still finds its own files.
+                       (let ((s (subseq (namestring p) (1- (length (namestring root))))))
                          ;; test-project and the deps fixtures are projects, whose
                          ;; namespaces are found through their project.skn files (skein
                          ;; test, M2.11; dependencies, M2.12). .claude/ holds other
