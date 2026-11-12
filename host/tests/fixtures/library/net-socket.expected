@@ -14,6 +14,9 @@ no answer: true in time: true
 the waiting read got: nil
 the waiting accepts got: [nil nil]
 the waiting accepts got: [nil nil]
+accept when closed: accept: the server is closed
+port when closed: port: the server is closed
+a server after it has a port: true
 on 0.0.0.0: anywhere
 bad listen: [:io-error cannot listen on not an address:0: listen needs an IP address or localhost]
 bad timeout: :timeout must be a positive number of seconds, not -1

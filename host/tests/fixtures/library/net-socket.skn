@@ -110,6 +110,14 @@
       (net/close-server server)
       (println "the waiting accepts got:"
                (pr-str (mapv (fn [w] (deref w 5 :still-waiting)) waiting)))))
+  ;; An accept or port on a closed server signals, and the servers after it still work
+  ;; (signaling once left a lock held, which stopped every later server call).
+  (let [server (net/listen 0)]
+    (net/close-server server)
+    (println "accept when closed:" (try (net/accept server) (catch error e (condition-message e))))
+    (println "port when closed:" (try (net/port server) (catch error e (condition-message e))))
+    (with-open [again (net/listen 0)]
+      (println "a server after it has a port:" (pos? (net/port again)))))
   ;; Every interface.
   (with-open [server (net/listen 0 {:host "0.0.0.0"})]
     (future (with-open [s (net/accept server)] (io/write s "anywhere\n")))

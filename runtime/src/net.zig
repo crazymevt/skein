@@ -190,27 +190,30 @@ fn release(s: *Server) void {
     alloc.destroy(s);
 }
 
+// An error is signaled with `lock` released: signaling jumps out of the function, past
+// its defers, and a lock left held would stop every later server call.
+
 /// The port of the server h names.
 fn serverPort(h: Value) u16 {
     lock.lock();
-    defer lock.unlock();
+    var port: ?u16 = null;
     if (h.isFixnum() and h.toFixnum() >= 1 and h.toFixnum() <= servers.items.len) {
-        if (servers.items[@intCast(h.toFixnum() - 1)]) |s| return s.server.socket.address.getPort();
+        if (servers.items[@intCast(h.toFixnum() - 1)]) |s| port = s.server.socket.address.getPort();
     }
-    rt.raise(.@"error", "port: the server is closed", .{});
+    lock.unlock();
+    return port orelse rt.raise(.@"error", "port: the server is closed", .{});
 }
 
 /// The server h names, counting the caller among the accepts waiting on it.
 fn serverToAccept(h: Value) *Server {
     lock.lock();
-    defer lock.unlock();
+    var found: ?*Server = null;
     if (h.isFixnum() and h.toFixnum() >= 1 and h.toFixnum() <= servers.items.len) {
-        if (servers.items[@intCast(h.toFixnum() - 1)]) |s| {
-            s.users += 1;
-            return s;
-        }
+        found = servers.items[@intCast(h.toFixnum() - 1)];
+        if (found) |s| s.users += 1;
     }
-    rt.raise(.@"error", "accept: the server is closed", .{});
+    lock.unlock();
+    return found orelse rt.raise(.@"error", "accept: the server is closed", .{});
 }
 
 const ListenCall = struct { address: net.IpAddress, server: ?net.Server = null, failure: []const u8 = "" };
