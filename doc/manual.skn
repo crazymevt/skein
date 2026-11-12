@@ -899,6 +899,85 @@ no topic names under their namespace's \"Other\"."
                               (js-string (var-url (:name m) (:name v))) "]")))
        "];\n"))
 
+;;; ------------------------------------------------------------------------------------
+;;; The entries as data, for the docset (M3.13, D-102) and other tools
+
+(defn docstring-markdown
+  "A docstring as Markdown: its paragraphs as they are, and the runs of lines indented by
+two spaces (a namespace's summary of calls, say) as fenced code."
+  [doc]
+  (when-not (str/blank? doc)
+    (->> (str/split doc #"\n\s*\n")
+         (map (fn [para]
+                (if (re-find #"(?m)^  " para)
+                  (str "```\n" para "\n```")
+                  para)))
+         (str/join "\n\n"))))
+
+(defn- qualify
+  "A see-also name as ns/name, or the special form's name."
+  [ns nm]
+  (if-let [[vns vname] (resolve-name ns nm)]
+    (str vns "/" vname)
+    nm))
+
+(defn- location
+  "{:file :line} of a \"file:line\" location, or nil."
+  [loc]
+  (when-let [[_ file line] (and loc (re-matches #"(.*):(\d+)" loc))]
+    {:file file :line (parse-long line)}))
+
+(defn entry-data
+  "A var's entry as data: everything its page shows, Markdown for the text."
+  [v note exs]
+  (let [{:keys [name ns arglists doc loc macro?]} v]
+    {:name name
+     :ns ns
+     :kind (if macro? :macro :function)
+     :arglists (or arglists [])
+     :doc (docstring-markdown doc)
+     :args (some-> (:args note) str/trim)
+     :notes (when-not (str/blank? (:notes note)) (str/trim (:notes note)))
+     :see-also (mapv (fn [s] (qualify ns s)) (:see-also note))
+     :examples (mapv (fn [ex]
+                       {:caption (when-not (str/blank? (:caption ex)) (:caption ex))
+                        :code (str/join "\n\n" (map :shown (:steps ex)))})
+                     exs)
+     :source (location loc)
+     :url (var-url ns name)}))
+
+(defn namespace-data
+  "A namespace as data: its name, docstring, notes and entries."
+  [m]
+  (let [ns (:name m)
+        ns-notes (notes ns)
+        exs (:vars (examples ns))]
+    {:name ns
+     :doc (docstring-markdown (:doc m))
+     :notes (when-not (str/blank? (:intro ns-notes)) (str/trim (:intro ns-notes)))
+     :file (:file m)
+     :url (str "ns/" ns ".html")
+     :vars (mapv (fn [v] (entry-data v (get ns-notes (:name v)) (get exs (:name v))))
+                 (:vars m))}))
+
+(defn write-data
+  "Write data/<ns>.edn for each namespace, data/index.edn listing them, and
+data/reference.md, the language reference, into out."
+  [out models]
+  (io/make-dirs (io/path out "data"))
+  (doseq [m models]
+    (io/write-file (io/path out "data" (str (:name m) ".edn"))
+                   (str (pr-str (namespace-data m)) "\n")))
+  (io/write-file (io/path out "data" "index.edn")
+                 (str (pr-str {:format 1
+                               :namespaces (mapv (fn [m] {:name (:name m)
+                                                          :file (str (:name m) ".edn")
+                                                          :vars (count (:vars m))})
+                                                 models)
+                               :reference "reference.md"})
+                      "\n"))
+  (io/copy-file "docs/DESIGN.md" (io/path out "data" "reference.md")))
+
 (defn generate
   "Write the site into out."
   [out]
@@ -912,6 +991,7 @@ no topic names under their namespace's \"Other\"."
     (io/write-file (io/path out "reference.html") (reference-page))
     (doseq [m models]
       (io/write-file (io/path out "ns" (str (:name m) ".html")) (namespace-page m)))
+    (write-data out models)
     (println (str "manual: wrote " out "/ (" (count models) " namespaces, "
                   (reduce + (map (comp count :vars) models)) " vars)"))))
 

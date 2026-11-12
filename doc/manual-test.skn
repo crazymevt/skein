@@ -5,6 +5,7 @@ format, the model it reads and the pages it writes. Run from the repository's ro
 host/tools/bootstrap.sh."
   (:require [skein.string :as str]
             [skein.io :as io]
+            [skein.edn :as edn]
             [skein.test :refer [deftest is testing run-tests successful?]]
             [manual]))
 
@@ -16,7 +17,8 @@ host/tools/bootstrap.sh."
   (is (= "<ol>\n<li>x</li>\n</ol>\n" (manual/markdown "1. x")))
   (is (= "<hr>\n" (manual/markdown "---")))
   (testing "fenced code is escaped and highlighted"
-    (is (= (str "<pre><code>(f <span class=\"s\">&quot;&lt;&quot;</span> <span class=\"k\">:k</span>) "
+    (is (= (str "<pre><code>(f <span class=\"s\">&quot;&lt;&quot;</span> "
+                "<span class=\"k\">:k</span>) "
                 "<span class=\"c\">; c</span></code></pre>\n")
            (manual/markdown "```skein\n(f \"<\" :k) ; c\n```"))))
   (testing "tables, with \\| in a cell"
@@ -145,6 +147,29 @@ host/tools/bootstrap.sh."
                          (str "href=\"../" manual/special-forms-url "\""))))
     (is (str/includes? (io/read-file (io/path out "reference.html"))
                        "id=\"5-special-forms-and-core-macros\""))
+    (testing "the entries as data, read back as EDN"
+      (let [index (edn/read-string (io/read-file (io/path out "data" "index.edn")))
+            models (manual/model)]
+        (is (= 1 (:format index)))
+        (is (= (mapv :name models) (mapv :name (:namespaces index))))
+        (is (io/file-exists? (io/path out "data" (:reference index))))
+        (doseq [m models
+                :let [data (edn/read-string (io/read-file (io/path out "data"
+                                                                    (str (:name m) ".edn"))))]]
+          (is (= (mapv :name (:vars m)) (mapv :name (:vars data))) (:name m))
+          (doseq [v (:vars data)]
+            (is (and (or (nil? (:doc v)) (string? (:doc v))) (vector? (:arglists v))
+                     (seq (:examples v)) (string? (:args v)) (seq (:see-also v)))
+                (str (:ns v) "/" (:name v)))))
+        (let [split (some (fn [v] (when (= "split" (:name v)) v))
+                          (:vars (edn/read-string
+                                  (io/read-file (io/path out "data" "skein.string.edn")))))]
+          (is (= :function (:kind split)))
+          (is (= [["s" "separator"] ["s" "separator" "limit"]] (:arglists split)))
+          (is (= "lib/skein/string.skn" (:file (:source split))))
+          (is (pos-int? (:line (:source split))))
+          (is (some #{"skein.string/join" "skein.core/re-seq"} (:see-also split)))
+          (is (= "ns/skein.string.html#v-split" (:url split))))))
     (io/delete-tree out)))
 
 (def complete
@@ -161,6 +186,12 @@ values, and see also. All of them (step 2 of D-109)."
     (is (seq (get exs nm)) (str ns "/" nm " has examples"))
     (is (:args (get notes nm)) (str ns "/" nm " has arguments and values"))
     (is (seq (:see-also (get notes nm))) (str ns "/" nm " has see also"))))
+
+(deftest docstrings-as-markdown
+  (is (= "One.\n\nTwo." (manual/docstring-markdown "One.\n\nTwo.")))
+  (is (= "Calls:\n\n```\n  (f x)  does f\n```"
+         (manual/docstring-markdown "Calls:\n\n  (f x)  does f")))
+  (is (nil? (manual/docstring-markdown nil))))
 
 (deftest matching-values
   (is (manual/value-matches? "[1  2]" [1 2]))
