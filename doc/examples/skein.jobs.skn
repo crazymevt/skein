@@ -1,0 +1,47 @@
+(ns skein.jobs.examples
+  (:require [skein.jobs :as jobs]))
+
+;;; Examples for skein.jobs (D-111).
+;;; `./skein run doc/manual.skn --check skein.jobs` runs them.
+
+;;;; graph
+;; A frame's work: physics and audio run in parallel, rendering after physics.
+(jobs/graph {:physics (jobs/job (+ 1 1))
+             :audio (jobs/job :mixed)
+             :render (jobs/job {:after [:physics]} :drawn)})
+;=> {:physics 2, :audio :mixed, :render :drawn}
+
+;; A job starts only after the ones it names have finished.
+(let [order (atom [])]
+  (jobs/graph {:a (jobs/job (sleep 0.02) (swap! order conj :a))
+               :b (jobs/job {:after [:a]} (swap! order conj :b))
+               :c (jobs/job {:after [:a :b]} (swap! order conj :c))})
+  @order)
+;=> [:a :b :c]
+
+;; A failure cancels the rest and is signaled again.
+(handler-case (jobs/graph {:load (jobs/job (error "missing asset"))
+                           :use (jobs/job {:after [:load]} :never)})
+  (error [c] (condition-message c)))
+;=> "missing asset"
+
+;; A missing dependency or a cycle is an error before anything runs.
+(handler-case (jobs/graph {:a (jobs/job {:after [:b]} 1)
+                           :b (jobs/job {:after [:a]} 2)})
+  (error [c] (condition-message c)))
+;=> "the job graph has a cycle among [:a :b]"
+
+;; Options are with-nursery's: :restart-fiber runs a failed job again (and prints a
+;; line on stderr).
+(let [tries (atom 0)
+      result (jobs/graph {:flaky (jobs/job (when (< (swap! tries inc) 2) (error "flake"))
+                                           :ok)}
+                         {:on-error :restart-fiber})]
+  [result @tries])
+;=> [{:flaky :ok} 2]
+
+;;;; job
+;; Just a map: its dependencies, and the body as a function.
+(let [j (jobs/job {:after [:input]} :moved)]
+  [(:after j) ((:run j))])
+;=> [[:input] :moved]

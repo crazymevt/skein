@@ -1,0 +1,73 @@
+(ns skein.time.examples
+  (:require [skein.time :as time]))
+
+;;; Examples for skein.time (D-111).
+;;; `./skein run doc/manual.skn --check skein.time` runs them.
+
+;;;; now
+;; Measuring a duration: a monotonic clock never jumps back.
+(let [start (time/now)]
+  (sleep 0.05)
+  (let [elapsed (- (time/now) start)]
+    (and (>= elapsed 0.05) (< elapsed 1.0))))
+;=> true
+
+;; A game loop's frame time.
+(loop [last (time/now) frames 0]
+  (let [t (time/now)
+        dt (- t last)]
+    (if (< frames 3) (recur t (inc frames)) (float? dt))))
+;=> true
+
+;;;; now-ns
+(let [a (time/now-ns) b (time/now-ns)]
+  [(int? a) (<= a b)])
+;=> [true true]
+
+;;;; epoch-millis
+;; The wall-clock time, for timestamps; it jumps when the system's clock is set.
+(> (time/epoch-millis) 1700000000000)
+;=> true
+
+;;;; utc-time
+(time/utc-time 0)
+;=> {:year 1970, :month 1, :day 1, :hour 0, :minute 0, :second 0, :millis 0, :weekday 4, :offset 0}
+
+(select-keys (time/utc-time 1794480600250) [:year :month :day :hour :minute :second :millis])
+;=> {:year 2026, :month 11, :day 12, :hour 10, :minute 50, :second 0, :millis 250}
+
+;;;; local-time
+;; As utc-time, in the local time zone: :offset is its offset in seconds.
+(let [t (time/local-time)]
+  (= (:offset t) (time/utc-offset)))
+;=> true
+
+;;;; utc-offset
+;; Seconds east of UTC (-18000 in New York in winter); daylight time changes it.
+(int? (time/utc-offset))
+;=> true
+
+;;;; format-iso8601
+(time/format-iso8601 0)
+;=> "1970-01-01T00:00:00.000Z"
+
+;; A calendar time keeps its offset.
+(time/format-iso8601 {:year 2026 :month 11 :day 12 :hour 9 :minute 30 :second 0
+                      :offset -18000})
+;=> "2026-11-12T09:30:00.000-05:00"
+
+;;;; parse-iso8601
+(time/parse-iso8601 "2026-11-12T09:30:15.250+05:30")
+;=> {:year 2026, :month 11, :day 12, :hour 9, :minute 30, :second 15, :millis 250, :weekday 4, :offset 19800}
+
+;; A date alone is at midnight; minutes and seconds are optional.
+(select-keys (time/parse-iso8601 "2026-11-12Z") [:hour :minute])
+;=> {:hour 0, :minute 0}
+
+;; A round trip.
+(time/format-iso8601 (time/parse-iso8601 "1999-12-31T23:59:59Z"))
+;=> "1999-12-31T23:59:59.000Z"
+
+;; A date that doesn't exist is an error.
+(handler-case (time/parse-iso8601 "2026-02-30") (error [_] :no-such-date))
+;=> :no-such-date

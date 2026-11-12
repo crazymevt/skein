@@ -1,0 +1,227 @@
+(ns manual-test
+  "Tests of the manual's generator (D-111): its Markdown subset, the examples files'
+format, the model it reads and the pages it writes. Run from the repository's root with
+./skein run doc/manual-test.skn; make test runs it, and the examples, through
+host/tools/bootstrap.sh."
+  (:require [skein.string :as str]
+            [skein.io :as io]
+            [skein.edn :as edn]
+            [skein.test :refer [deftest is testing run-tests successful?]]
+            [manual]))
+
+(deftest markdown-blocks
+  (is (= "<h2 id=\"31-literal-details-d-029\">3.1 Literal details (D-029)</h2>\n"
+         (manual/markdown "## 3.1 Literal details (D-029)")))
+  (is (= "<p>one\ntwo</p>\n<p>three</p>\n" (manual/markdown "one\ntwo\n\nthree")))
+  (is (= "<ul>\n<li>a b</li>\n<li>c</li>\n</ul>\n" (manual/markdown "- a\n  b\n- c")))
+  (is (= "<ol>\n<li>x</li>\n</ol>\n" (manual/markdown "1. x")))
+  (is (= "<hr>\n" (manual/markdown "---")))
+  (testing "fenced code is escaped and highlighted"
+    (is (= (str "<pre><code>(f <span class=\"s\">&quot;&lt;&quot;</span> "
+                "<span class=\"k\">:k</span>) "
+                "<span class=\"c\">; c</span></code></pre>\n")
+           (manual/markdown "```skein\n(f \"<\" :k) ; c\n```"))))
+  (testing "tables, with \\| in a cell"
+    (is (= (str "<table>\n<thead><tr><th>A</th><th>B</th></tr>\n</thead>\n<tbody>\n"
+                "<tr><td><code>x</code></td><td>a|b</td></tr>\n</tbody></table>\n")
+           (manual/markdown "| A | B |\n|---|---|\n| `x` | a\\|b |"))))
+  (is (= "<h4 id=\"t\">t</h4>\n" (manual/markdown "# t" {:heading-shift 3}))))
+
+(deftest markdown-inline
+  (is (= "a <code>&lt;b&gt;</code> &amp; c" (manual/inline "a `<b>` & c")))
+  (is (= "<strong>bold</strong> and <em>em</em>" (manual/inline "**bold** and *em*")))
+  (is (= "x * y" (manual/inline "x * y")))
+  (is (= "<a href=\"#s\">sec</a>" (manual/inline "[sec](#s)")))
+  (is (= "<a href=\"X\">t</a>" (manual/inline "[t](u)" (fn [_] "X"))))
+  (is (= "<a href=\"D.md\"><code>D.md</code></a>" (manual/inline "[`D.md`](D.md)"))))
+
+(deftest anchors
+  (is (= "v-split" (manual/var-id "split")))
+  (is (= "v-blank_q" (manual/var-id "blank?")))
+  (is (not= (manual/var-id "v-") (manual/var-id "v+")))
+  (is (= "ns/skein.string.html#v-join" (manual/var-url "skein.string" "join"))))
+
+(def sample
+  "(ns sample.examples (:require [skein.string :as str]))
+
+;;;; upper-case
+;; A caption,
+;; on two lines.
+(str/upper-case \"a\")
+;=> \"A\"
+(str/upper-case \"b\")
+;=> \"B\"
+
+(println 1)
+;; prints:
+;; 1
+;=> nil
+
+;;;; join
+(def xs [1
+         2])
+(str/join xs)
+;=> \"12\"
+")
+
+(deftest example-files
+  (let [{:keys [ns-form vars]} (manual/parse-examples sample "sample.skn" "sample")
+        [first-ex second-ex] (get vars "upper-case")]
+    (is (str/starts-with? ns-form "(ns sample.examples"))
+    (is (= #{"upper-case" "join"} (set (keys vars))))
+    (testing "consecutive forms are one example; a blank line starts another"
+      (is (= 2 (count (get vars "upper-case"))))
+      (is (= "A caption,\non two lines." (:caption first-ex)))
+      (is (= ["\"A\"" "\"B\""] (map :value (:steps first-ex))))
+      (is (= 6 (:line (first (:steps first-ex))))))
+    (is (= ["1"] (:prints (first (:steps second-ex)))))
+    (is (= "nil" (:value (first (:steps second-ex)))))
+    (testing "a form over several lines, and a step with no value"
+      (let [[def-step join-step] (:steps (first (get vars "join")))]
+        (is (= "(def xs [1\n         2])" (:code def-step)))
+        (is (nil? (:value def-step)))
+        (is (= "(str/join xs)\n;=> \"12\"" (:shown join-step)))))))
+
+(deftest checking-steps
+  (is (nil? (manual/check-step "f" {:code "(+ 1 2)" :value "3" :line 1})))
+  (is (str/includes? (manual/check-step "f" {:code "(+ 1 2)" :value "4" :line 7})
+                     "f:7"))
+  (is (nil? (manual/check-step "f" {:code "(println :x)" :value "nil" :prints [":x"]
+                                    :line 1})))
+  (is (some? (manual/check-step "f" {:code "(println :y)" :prints [":x"] :line 1})))
+  (is (str/includes? (manual/check-step "f" {:code "(nth [] 1)" :line 1}) "signaled")))
+
+(deftest the-model
+  (let [m (manual/namespace-model "skein.string")
+        split (first (filter (fn [v] (= "split" (:name v))) (:vars m)))]
+    (is (= "lib/skein/string.skn" (:file m)))
+    (is (str/starts-with? (:doc m) "String functions"))
+    (is (= [["s" "separator"] ["s" "separator" "limit"]] (:arglists split)))
+    (is (re-find #"^lib/skein/string.skn:\d+$" (:loc split)))
+    (is (not-any? (fn [v] (str/starts-with? (:name v) "%")) (:vars m))))
+  (testing "skein.core's macros get their docstrings from the source"
+    (let [when-var (first (filter (fn [v] (= "when" (:name v)))
+                                  (:vars (manual/namespace-model "skein.core"))))]
+      (is (:macro? when-var))
+      (is (str/starts-with? (:doc when-var) "If test is true"))
+      (is (= [["test" "&" "body"]] (:arglists when-var)))))
+  (testing "classes and condition types get their docstrings from the source"
+    (let [doc-of (fn [nm] (:doc (first (filter (fn [v] (= nm (:name v)))
+                                               (:vars (manual/namespace-model "skein.io"))))))]
+      (is (str/starts-with? (doc-of "stream") "An open file"))
+      (is (str/starts-with? (doc-of "io-error") "A file that can't be read"))))
+  (testing "what defstruct defines, and generics with a docstring after their parameters"
+    (let [info (fn [nm] (first (filter (fn [v] (= nm (:name v)))
+                                       (:vars (manual/namespace-model "skein.math")))))]
+      (is (str/starts-with? (:doc (info "vec2")) "A 2D vector."))
+      (is (= [["x" "y"] ["&" "field-values"]] (:arglists (info "vec2"))))
+      (is (= "True if x is a vec2." (:doc (info "vec2?"))))
+      (is (str/starts-with? (:doc (info "mat3-m21")) "The m21 field of the mat3"))
+      (is (= "The dot product of two vectors of the same type." (:doc (info "dot"))))
+      (is (= [["a" "b"]] (:arglists (info "dot"))))))
+  (is (= ["skein.core" "str"] (manual/resolve-name "skein.string" "str")))
+  (is (= ["skein.string" "join"] (manual/resolve-name "skein.string" "join")))
+  (is (= ["skein.io" "line-seq"] (manual/resolve-name "skein.string" "skein.io/line-seq")))
+  (is (nil? (manual/resolve-name "skein.string" "no-such-var"))))
+
+(deftest the-site
+  (let [out (str (io/temp-dir) "/skein-manual-test")]
+    (manual/generate out)
+    (doseq [f ["index.html" "quickref.html" "reference.html" "style.css" "search.js"
+               "search-index.js" "ns/skein.core.html" "ns/skein.string.html"]]
+      (is (io/file-exists? (io/path out f)) f))
+    (let [models (manual/model)
+          quickref (io/read-file (io/path out "quickref.html"))
+          index (io/read-file (io/path out "search-index.js"))]
+      (testing "the quick reference and the search cover every public var"
+        (doseq [m models v (:vars m)
+                :let [url (manual/var-url (:name m) (:name v))]]
+          (is (str/includes? quickref (str "href=\"" url "\"")) url)
+          (is (str/includes? index url) url))))
+    (let [page (io/read-file (io/path out "ns/skein.string.html"))]
+      (is (str/includes? page "<h3>Arguments and values</h3>"))
+      (is (str/includes? page "<h3>Examples</h3>"))
+      (is (str/includes? page "href=\"../ns/skein.core.html#v-str\"")))
+    (testing "see also links a special form to the language reference"
+      (is (str/includes? (io/read-file (io/path out "ns/skein.core.html"))
+                         (str "href=\"../" manual/special-forms-url "\""))))
+    (is (str/includes? (io/read-file (io/path out "reference.html"))
+                       "id=\"5-special-forms-and-core-macros\""))
+    (testing "the entries as data, read back as EDN"
+      (let [index (edn/read-string (io/read-file (io/path out "data" "index.edn")))
+            models (manual/model)]
+        (is (= 1 (:format index)))
+        (is (= (mapv :name models) (mapv :name (:namespaces index))))
+        (is (io/file-exists? (io/path out "data" (:reference index))))
+        (doseq [m models
+                :let [data (edn/read-string (io/read-file (io/path out "data"
+                                                                    (str (:name m) ".edn"))))]]
+          (is (= (mapv :name (:vars m)) (mapv :name (:vars data))) (:name m))
+          (doseq [v (:vars data)]
+            (is (and (or (nil? (:doc v)) (string? (:doc v))) (vector? (:arglists v))
+                     (seq (:examples v)) (string? (:args v)) (seq (:see-also v)))
+                (str (:ns v) "/" (:name v)))))
+        (let [split (some (fn [v] (when (= "split" (:name v)) v))
+                          (:vars (edn/read-string
+                                  (io/read-file (io/path out "data" "skein.string.edn")))))]
+          (is (= :function (:kind split)))
+          (is (= [["s" "separator"] ["s" "separator" "limit"]] (:arglists split)))
+          (is (= "lib/skein/string.skn" (:file (:source split))))
+          (is (pos-int? (:line (:source split))))
+          (is (some #{"skein.string/join" "skein.core/re-seq"} (:see-also split)))
+          (is (= "ns/skein.string.html#v-split" (:url split))))))
+    (io/delete-tree out)))
+
+(def complete
+  "The namespaces documented completely: every public var with examples, arguments and
+values, and see also. All of them (step 2 of D-111)."
+  manual/documented)
+
+(deftest documented-namespaces-are-complete
+  (doseq [ns complete
+          :let [vars (:vars (manual/namespace-model ns))
+                exs (:vars (manual/examples ns))
+                notes (manual/notes ns)]
+          {nm :name} vars]
+    (is (seq (get exs nm)) (str ns "/" nm " has examples"))
+    (is (:args (get notes nm)) (str ns "/" nm " has arguments and values"))
+    (is (seq (:see-also (get notes nm))) (str ns "/" nm " has see also"))))
+
+(deftest docstrings-as-markdown
+  (is (= "One.\n\nTwo." (manual/docstring-markdown "One.\n\nTwo.")))
+  (is (= "Calls:\n\n```\n  (f x)  does f\n```"
+         (manual/docstring-markdown "Calls:\n\n  (f x)  does f")))
+  (is (nil? (manual/docstring-markdown nil))))
+
+(deftest matching-values
+  (is (manual/value-matches? "[1  2]" [1 2]))
+  (testing "a map's keys in another order"
+    (is (manual/value-matches? "{:b 2, :a 1}" {:a 1 :b 2})))
+  (is (not (manual/value-matches? "{:a 2}" {:a 1})))
+  (testing "text that isn't EDN only matches as printed"
+    (is (manual/value-matches? "#<x>" (symbol "#<x>")))
+    (is (not (manual/value-matches? "#<y>" 1)))))
+
+(deftest not-run-steps
+  (testing "a step marked not run is shown but not evaluated"
+    (let [{:keys [vars]} (manual/parse-examples
+                          "(ns s.examples)\n\n;;;; f\n(no-such-function)\n;; not run\n"
+                          "s.skn" "s")
+          step (first (:steps (first (get vars "f"))))]
+      (is (= :not-run (:value step)))
+      (is (= "(no-such-function)" (:shown step)))
+      (is (nil? (manual/check-step "s.skn" step)))))
+  (testing "a step not run on some systems is checked on the others"
+    (let [{:keys [vars]} (manual/parse-examples
+                          (str "(ns s.examples)\n\n;;;; f\n(+ 1 1)\n;=> 3\n"
+                               ";; not run on windows\n;; not run on linux\n")
+                          "s.skn" "s")
+          step (first (:steps (first (get vars "f"))))
+          skipped? (contains? #{:windows :linux} (skein.system/os))]
+      (is (= #{:windows :linux} (:not-run-on step)))
+      (is (= "(+ 1 1)\n;=> 3" (:shown step)))
+      (is (= skipped? (nil? (manual/check-step "s.skn" step)))))))
+
+(defn -main [& _]
+  (when-not (successful? (run-tests 'manual-test))
+    (%exit 1)))

@@ -1,0 +1,98 @@
+(ns skein.net.examples
+  (:require [skein.net :as net]
+            [skein.io :as io]))
+
+;;; Examples for skein.net (D-111). They talk to a server on localhost that they start.
+;;; `./skein run doc/manual.skn --check skein.net` runs them.
+
+;;;; listen
+;; Port 0 picks a free port; an echo server answers each line in a fiber of its own.
+(def echo-server (net/listen 0))
+(future
+  (loop []
+    (when-let [conn (net/accept echo-server)]
+      (future
+        (with-open [c conn]
+          (doseq [line (io/line-seq c)]
+            (io/write c (str "echo: " line "\n"))
+            (io/flush c))))
+      (recur))))
+(pos-int? (net/port echo-server))
+;=> true
+
+;;;; connect
+(with-open [s (net/connect "localhost" (net/port echo-server))]
+  (io/write s "hello\n")
+  (io/flush s)
+  (io/read-line s))
+;=> "echo: hello"
+
+;; Nothing listening there is an io-error.
+(let [free (net/listen 0)
+      p (net/port free)]
+  (net/close-server free)
+  (handler-case (net/connect "localhost" p)
+    (io/io-error [_] :refused)))
+;=> :refused
+
+;;;; socket?
+(with-open [s (net/connect "127.0.0.1" (net/port echo-server))]
+  [(net/socket? s) (net/socket? "localhost")])
+;=> [true false]
+
+;;;; port
+(let [srv (net/listen 0)]
+  (try (< 0 (net/port srv) 65536)
+       (finally (net/close-server srv))))
+;=> true
+
+;;;; accept
+;; A server that reads one line from one client.
+(let [srv (net/listen 0)
+      got (future (with-open [c (net/accept srv)] (io/read-line c)))]
+  (with-open [s (net/connect "localhost" (net/port srv))]
+    (io/write s "from the client\n")
+    (io/flush s))
+  (net/close-server srv)
+  @got)
+;=> "from the client"
+
+;;;; close-server
+;; accept returns nil once the server is closed. (On Windows, closing a server while an
+;; accept waits on it crashes the runtime for now, so this isn't run there.)
+(let [srv (net/listen 0)
+      waiting (future (net/accept srv))]
+  (sleep 0.05)
+  (net/close-server srv)
+  @waiting)
+;=> nil
+;; not run on windows
+
+;;;; server
+(instance? net/server echo-server)
+;=> true
+
+;;;; net-timeout
+;; :read-timeout limits each read; running out signals net-timeout, an io-error.
+(let [srv (net/listen 0)
+      quiet (future (net/accept srv))]
+  (with-open [s (net/connect "localhost" (net/port srv) {:read-timeout 0.1})]
+    (let [result (handler-case (io/read-line s)
+                   (net/net-timeout [c] [:timed-out (instance? io/io-error c)]))]
+      (close @quiet)
+      (net/close-server srv)
+      result)))
+;=> [:timed-out true]
+
+;;;; shutdown
+;; Ends the connection both ways: a read waiting in another fiber gets the end.
+(with-open [s (net/connect "localhost" (net/port echo-server))]
+  (let [reader (future (io/read-line s))]
+    (sleep 0.05)
+    (net/shutdown s)
+    @reader))
+;=> nil
+
+;; Stopping the echo server.
+(net/close-server echo-server)
+;=> nil

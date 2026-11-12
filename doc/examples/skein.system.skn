@@ -1,0 +1,58 @@
+(ns skein.system.examples
+  (:require [skein.system :as system]
+            [skein.io :as io]
+            [skein.string :as str]))
+
+;;; Examples for skein.system (D-111). Their values depend on the machine, so they show
+;;; what holds on every one.
+;;; `./skein run doc/manual.skn --check skein.system` runs them.
+
+;;;; os
+(contains? #{:macos :linux :windows} (system/os))
+;=> true
+
+;; Choosing a library by platform, as deflibrary does.
+(get {:macos "libSDL3.dylib" :linux "libSDL3.so" :windows "SDL3.dll"} (system/os))
+;; not run
+
+;;;; arch
+(contains? #{:aarch64 :x86_64} (system/arch))
+;=> true
+
+;;;; getenv
+[(string? (system/getenv "PATH")) (system/getenv "SKEIN_NO_SUCH_VARIABLE")]
+;=> [true nil]
+
+;;;; home-dir
+(io/directory? (system/home-dir))
+;=> true
+
+;;;; config-dir
+;; On macOS ~/Library/Application Support/app, on Linux ~/.config/app, on Windows
+;; %APPDATA%\app. It may not exist yet: make it before writing there.
+(str/ends-with? (system/config-dir "skein-studio") "/skein-studio")
+;=> true
+
+(let [dir (system/config-dir "my-game")]
+  (io/make-dirs dir)
+  (spit (io/path dir "settings.edn") (pr-str {:volume 0.8})))
+;; not run
+
+;;;; data-dir
+(str/starts-with? (system/data-dir "my-game") (system/home-dir))
+;=> true
+
+;;;; cache-dir
+;; Files there may be deleted at any time.
+(str/ends-with? (system/cache-dir "my-game") "my-game")
+;=> true
+
+;;;; open!
+;; Opens a file or URL in its default application, as double-clicking it would.
+(system/open! "https://github.com")
+;; not run
+
+;; A file that doesn't exist is an error.
+(handler-case (system/open! "/no/such/file.txt")
+  (error [c] (condition-message c)))
+;=> "open!: file not found: /no/such/file.txt"

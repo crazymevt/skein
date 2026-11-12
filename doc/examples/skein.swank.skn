@@ -1,0 +1,35 @@
+(ns skein.swank.examples
+  (:require [skein.swank :as swank]
+            [skein.net :as net]
+            [skein.io :as io]))
+
+;;; Examples for skein.swank (D-111): the Swank server SLIME connects to. `skein dev`
+;;; starts it on port 4005; M-x slime-connect connects Emacs.
+;;; `./skein run doc/manual.skn --check skein.swank` runs them.
+
+;;;; start-server
+;; Port 0 picks a free one; skein dev uses 4005, where M-x slime-connect looks.
+(let [server (swank/start-server 0)]
+  (try (pos-int? (net/port server))
+       (finally (net/close-server server))))
+;=> true
+
+;;;; protocol-version
+;; What connection-info reports to SLIME.
+(string? swank/protocol-version)
+;=> true
+
+;;;; *thread*
+;; The Swank thread a fiber is, once it needs one; nil outside the server.
+swank/*thread*
+;=> nil
+
+;;;; *sldb*
+;; The debugger level a fiber is in: nil when it isn't in SLDB.
+swank/*sldb*
+;=> nil
+
+;;;; *pending*
+;; The ids of the requests a fiber is answering: none outside the server.
+(empty? swank/*pending*)
+;=> true

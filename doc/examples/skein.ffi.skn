@@ -1,0 +1,176 @@
+(ns skein.ffi.examples
+  (:require [skein.ffi :as ffi]))
+
+;;; Examples for skein.ffi (D-111). They call the C library every system has. defcfun,
+;;; defcfun-ptr and defcallback need compiled C, so their examples are shown but not run
+;;; here (an FFI program is built with skeinc); the memory functions run.
+;;; `./skein run doc/manual.skn --check skein.ffi` runs them.
+
+;;;; deflibrary
+;; The file to load, by operating system; a vector lists names to try in order.
+(ffi/deflibrary libc
+  {:macos "libSystem.B.dylib" :linux ["libc.so.6"] :windows "msvcrt.dll"})
+(string? libc)
+;=> true
+
+;;;; load-library
+;; deflibrary's function, taking the same map.
+(string? (ffi/load-library {:macos "libSystem.B.dylib" :linux ["libc.so.6"]
+                            :windows "msvcrt.dll"}))
+;=> true
+
+;;;; defcfun
+(ffi/defcfun c-strlen "strlen" u64 [s c-string])
+;; not run
+(ffi/defcfun c-abs "abs" i32 [x i32])
+;; not run
+[(c-strlen "héllo") (c-abs -42)]
+;=> [6 42]
+;; not run
+
+;;;; alloc
+;; Zeroed C memory for 4 doubles.
+(def buf (ffi/alloc f64 4))
+(ffi/get buf f64 2)
+;=> 0.0
+
+;;;; put!
+(ffi/put! buf f64 2.5 1)
+(ffi/get buf f64 1)
+;=> 2.5
+
+;;;; get
+(ffi/put! buf f64 9.0)
+[(ffi/get buf f64) (ffi/get buf f64 0)]
+;=> [9.0 9.0]
+
+;;;; ptr+
+;; A pointer moved by bytes: the second double is 8 bytes on.
+(ffi/get (ffi/ptr+ buf 8) f64)
+;=> 2.5
+
+;;;; address
+(= (+ (ffi/address buf) 8) (ffi/address (ffi/ptr+ buf 8)))
+;=> true
+
+;;;; ptr?
+[(ffi/ptr? buf) (ffi/ptr? 0)]
+;=> [true false]
+
+;;;; free
+(ffi/free buf)
+;; not run
+
+;;;; with-foreign
+;; Scoped memory, freed when the body ends.
+(ffi/with-foreign [p (ffi/alloc i32 3)]
+  (doseq [i (range 3)] (ffi/put! p i32 (* i i) i))
+  (mapv (fn [i] (ffi/get p i32 i)) (range 3)))
+;=> [0 1 4]
+
+;;;; sizeof
+[(ffi/sizeof u8) (ffi/sizeof f32) (ffi/sizeof i64)]
+;=> [1 4 8]
+
+;;;; defcstruct
+(ffi/defcstruct rect (x f32) (y f32) (w f32) (h f32))
+(ffi/sizeof rect)
+;=> 16
+
+;;;; put-field!
+(ffi/with-foreign [r (ffi/alloc rect)]
+  (ffi/put-field! r rect :w 40.0f)
+  (ffi/field r rect :w))
+;=> 40.0f
+
+;;;; field
+(ffi/with-foreign [r (ffi/alloc rect)]
+  [(ffi/field r rect :x) (ffi/field r rect :h)])
+;=> [0.0f 0.0f]
+
+;;;; defcunion
+(ffi/defcunion number-bits (as-float f32) (as-int u32))
+(ffi/with-foreign [u (ffi/alloc number-bits)]
+  (ffi/put-field! u number-bits :as-float 1.0f)
+  [(ffi/sizeof number-bits) (ffi/field u number-bits :as-int)])
+;=> [4 1065353216]
+
+;;;; defcenum
+(ffi/defcenum init-flags (:audio 0x10) (:video 0x20))
+(ffi/enum-value init-flags :video)
+;=> 32
+
+;;;; enum-value
+;; A collection of keys is ORed together, as flags are.
+[(ffi/enum-value init-flags [:audio :video]) (ffi/enum-value init-flags 7)]
+;=> [48 7]
+
+;;;; null
+(ffi/null? (ffi/null))
+;=> true
+
+;;;; null?
+[(ffi/null? nil) (ffi/null? (ffi/null))]
+;=> [true true]
+
+;;;; c-string
+(ffi/defcfun c-getenv "getenv" ptr [name c-string])
+;; not run
+(string? (ffi/c-string (c-getenv "PATH")))
+;=> true
+;; not run
+
+;;;; own
+;; C memory freed by the collector once nothing refers to it.
+(ffi/ptr? (ffi/own (ffi/alloc u8 64)))
+;=> true
+
+;;;; defcallback
+;; C's qsort calling a Skein comparison.
+(ffi/defcfun c-qsort "qsort" void [base ptr, n u64, size u64, compare ptr])
+;; not run
+(ffi/defcallback compare-i32 i32 [a (ptr i32), b (ptr i32)]
+  (compare (ffi/get a i32) (ffi/get b i32)))
+;; not run
+(ffi/with-foreign [p (ffi/alloc i32 5)]
+  (doseq [[i x] (map-indexed vector [5 3 9 1 4])] (ffi/put! p i32 x i))
+  (c-qsort p 5 4 compare-i32)
+  (mapv (fn [i] (ffi/get p i32 i)) (range 5)))
+;=> [1 3 4 5 9]
+;; not run
+
+;;;; defcfun-ptr
+;; Calling a C function through a pointer, as a COM vtable's are.
+(ffi/defcfun-ptr call-compare i32 [a (ptr i32), b (ptr i32)])
+;; not run
+(ffi/with-foreign [a (ffi/alloc i32 2)]
+  (ffi/put! a i32 7 0)
+  (ffi/put! a i32 2 1)
+  (call-compare compare-i32 a (ffi/ptr+ a 4)))
+;=> 1
+;; not run
+
+;;;; pin
+;; A Skein array kept in place while C uses its address.
+(let [arr (make-array i32 3)]
+  (aset! arr 0 30) (aset! arr 1 10) (aset! arr 2 20)
+  (ffi/pin [p arr]
+    (c-qsort p 3 4 compare-i32))
+  [(aget arr 0) (aget arr 1) (aget arr 2)])
+;=> [10 20 30]
+;; not run
+
+;;;; handle
+;; An integer token for a Skein value, which C can hold and give back.
+(let [h (ffi/handle {:player "jo"})]
+  [(int? h) (ffi/handle-value h)])
+;=> [true {:player "jo"}]
+
+;;;; handle-value
+(ffi/handle-value (ffi/handle :x))
+;=> :x
+
+;;;; free-handle
+(let [h (ffi/handle [1 2])]
+  (ffi/free-handle h))
+;=> nil

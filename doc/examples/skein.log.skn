@@ -1,0 +1,91 @@
+(ns skein.log.examples
+  (:require [skein.log :as log]))
+
+;;; Examples for skein.log (D-111). They collect entries with a handler instead of
+;;; writing them to stderr.
+;;; `./skein run doc/manual.skn --check skein.log` runs them.
+
+;;;; set-handler!
+(def entries (atom []))
+(log/set-handler! (fn [entry] (swap! entries conj (dissoc entry :time))))
+(log/info "loaded" 3 "levels")
+@entries
+;=> [{:level :info, :ns "skein.log.examples", :message "loaded 3 levels"}]
+
+;;;; info
+;; Strings and characters as they are, other values as pr prints them.
+(reset! entries [])
+(log/info "player" {:name "jo"} "joined at" [3 4])
+(:message (first @entries))
+;=> "player {:name \"jo\"} joined at [3 4]"
+
+;;;; level
+;; :info at first.
+(log/level)
+;=> :info
+
+;;;; debug
+;; Below the level, the arguments aren't even evaluated.
+(reset! entries [])
+(log/debug "expensive:" (do (println "computing") 42))
+@entries
+;=> []
+
+;;;; set-level!
+(log/set-level! :debug)
+(log/debug "now shown")
+(map :message @entries)
+;=> ("now shown")
+
+;;;; enabled?
+[(log/enabled? :trace) (log/enabled? :debug) (log/enabled? :error)]
+;=> [false true true]
+
+;;;; trace
+(log/set-level! :trace)
+(reset! entries [])
+(log/trace "entering update, dt =" 0.016)
+(map :level @entries)
+;=> (:trace)
+
+;;;; warn
+(reset! entries [])
+(log/warn "texture missing:" "hero.png")
+(first @entries)
+;=> {:level :warn, :ns "skein.log.examples", :message "texture missing: hero.png"}
+
+;;;; error
+(reset! entries [])
+(log/error "save failed")
+(:level (first @entries))
+;=> :error
+
+;;;; log
+;; The level as a value.
+(reset! entries [])
+(doseq [l [:info :warn]]
+  (log/log l "at" l))
+(map :message @entries)
+;=> ("at :info" "at :warn")
+
+;;;; log*
+;; What the macros call, with the namespace's name.
+(reset! entries [])
+(log/log* :info "my.module" ["from a function"])
+(first @entries)
+;=> {:level :info, :ns "my.module", :message "from a function"}
+
+;;;; format-time
+(log/format-time 1794480600250)
+;=> "2026-11-12T10:50:00.250Z"
+
+;;;; format-entry
+;; The line the default handler writes to stderr.
+(log/format-entry {:level :warn :time 0 :ns "game.audio" :message "no device"})
+;=> "1970-01-01T00:00:00.000Z WARN game.audio: no device"
+
+;; Back to the defaults.
+(log/set-handler! nil)
+(log/set-level! :info)
+(log/level)
+;=> :info

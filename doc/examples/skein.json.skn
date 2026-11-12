@@ -1,0 +1,124 @@
+(ns skein.json.examples
+  (:require [skein.json :as json]
+            [skein.io :as io]))
+
+;;; Examples for skein.json (D-111).
+;;; `./skein run doc/manual.skn --check skein.json` runs them.
+
+;;;; read-str
+(json/read-str "{\"name\": \"Skein\", \"tags\": [\"lisp\", \"games\"], \"stars\": 42}")
+;=> {"name" "Skein", "tags" ["lisp" "games"], "stars" 42}
+
+;; Keyword keys.
+(json/read-str "{\"a\": 1, \"b\": {\"c\": null}}" :key-fn keyword)
+;=> {:a 1, :b {:c nil}}
+
+;; Numbers are integers or f64s; true and false are booleans.
+(json/read-str "[1, -2.5, 1e3, true, false]")
+;=> [1 -2.5 1000.0 true false]
+
+;; :value-fn changes values; returning its key's value unchanged keeps it, and returning
+;; the function itself leaves the entry out.
+(defn drop-secrets [k v] (if (= k :password) drop-secrets v))
+(json/read-str "{\"user\": \"jo\", \"password\": \"hunter2\"}"
+               :key-fn keyword :value-fn drop-secrets)
+;=> {:user "jo"}
+
+;; Options as one map, too.
+(json/read-str "{\"x\": 1}" {:key-fn keyword})
+;=> {:x 1}
+
+;;;; json-error
+(handler-case (json/read-str "{\"a\": }")
+  (json/json-error [c] (error? c)))
+;=> true
+
+;;;; json-error-message
+(handler-case (json/read-str "[1, 2,]")
+  (json/json-error [c] (json/json-error-message c)))
+;=> "not JSON: unexpected character at line 1, column 7"
+
+;;;; json-error-line
+(handler-case (json/read-str "{\n  \"a\": 1,\n  oops\n}")
+  (json/json-error [c] [(json/json-error-line c) (json/json-error-column c)]))
+;=> [3 3]
+
+;;;; json-error-column
+(handler-case (json/read-str "[true, nope]")
+  (json/json-error [c] (json/json-error-column c)))
+;=> 8
+
+;;;; write-str
+(json/write-str {:name "Skein" :tags ["lisp" "games"] :version 1.5 :public true :owner nil})
+;=> "{\"name\":\"Skein\",\"tags\":[\"lisp\",\"games\"],\"version\":1.5,\"public\":true,\"owner\":null}"
+
+;; Keywords and characters become strings; sets and lists, arrays.
+(json/write-str [:ok \x #{1} '(2 3)])
+;=> "[\"ok\",\"x\",[1],[2,3]]"
+
+(println (json/write-str {:a [1 2] :b {:c "d"}} :pretty true))
+;; prints:
+;; {
+;;   "a": [
+;;     1,
+;;     2
+;;   ],
+;;   "b": {
+;;     "c": "d"
+;;   }
+;; }
+;=> nil
+
+(json/write-str "café ☕" :escape-unicode true)
+;=> "\"caf\\u00e9 \\u2615\""
+
+;; :key-fn names the keys.
+(json/write-str {:user-name "jo"} :key-fn (fn [k] (skein.string/replace (name k) "-" "_")))
+;=> "{\"user_name\":\"jo\"}"
+
+;; :value-fn changes the values written, or leaves an entry out.
+(defn hide [k v] (if (= k :token) hide v))
+(json/write-str {:user "jo" :token "abc"} :value-fn hide)
+;=> "{\"user\":\"jo\"}"
+
+;;;; read
+;; One value a line, as JSON Lines and Claude Code's stream-json give them.
+(let [f (io/temp-file)]
+  (io/write-file f "{\"type\": \"start\"}\n{\"type\": \"text\", \"text\": \"hi\"}\n")
+  (with-open [r (io/open-reader f)]
+    [(json/read r :key-fn keyword)
+     (json/read r :key-fn keyword)
+     (json/read r :eof-error? false :eof-value :done)]))
+;=> [{:type "start"} {:type "text", :text "hi"} :done]
+
+;; A value can span lines.
+(let [f (io/temp-file)]
+  (io/write-file f "{\n  \"a\": [1,\n        2]\n}\n")
+  (with-open [r (io/open-reader f)]
+    (json/read r)))
+;=> {"a" [1 2]}
+
+;;;; write
+(let [f (io/temp-file)]
+  (with-open [w (io/open-writer f)]
+    (json/write {:event "saved"} w)
+    (io/write w "\n"))
+  (io/read-file f))
+;=> "{\"event\":\"saved\"}\n"
+
+;;;; reformat
+;; Re-indents JSON text, keeping its keys' order and its numbers as written.
+(println (json/reformat "{\"z\":1,\"a\":[1.50,2e3],\"m\":{}}"))
+;; prints:
+;; {
+;;   "z": 1,
+;;   "a": [
+;;     1.50,
+;;     2e3
+;;   ],
+;;   "m": {}
+;; }
+;=> nil
+
+(json/reformat "{\n  \"a\" : 1\n}" {:indent 0})
+;=> "{\"a\":1}"

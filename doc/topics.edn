@@ -1,0 +1,203 @@
+;; The quick reference's topics (D-111): sections of groups of var names, in the order
+;; the page shows them. A name is a public var of the section's :ns, or ns/name. A public
+;; var that no group names is listed under its namespace's "Other", so the quick reference
+;; always covers the whole library; `./skein run doc/manual.skn --check` checks the names.
+[{:title "Definitions and namespaces" :ns "skein.core"
+  :groups [["Define" ["defn" "defn-" "defmacro" "defonce" "declaim"]]
+           ["Namespaces" ["ns" "in-ns" "load-file" "reload"]]
+           ["Evaluate" ["eval" "read-string" "macroexpand-1" "macroexpand" "macroexpand-all"
+                        "comment"]]
+           ["REPL" ["*1" "*2" "*3" "*e" "*print-length*"]]]}
+
+ {:title "Control flow" :ns "skein.core"
+  :groups [["Branch" ["when" "when-not" "if-not" "if-let" "when-let" "if-some" "when-some"
+                      "when-first" "cond" "condp" "case" "and" "or" "not"]]
+           ["Bind" ["let" "letfn" "binding" "destructure"]]
+           ["Loop" ["loop" "doseq" "dotimes" "while" "for" "run!" "trampoline"]]
+           ["Thread" ["->" "->>" "as->" "some->" "some->>" "cond->" "cond->>" "doto"]]
+           ["Time" ["time"]]]}
+
+ {:title "Numbers" :ns "skein.core"
+  :groups [["Arithmetic" ["+" "-" "*" "/" "inc" "dec" "quot" "rem" "mod" "abs" "max" "min"
+                          "sqrt"]]
+           ["Compare" ["=" "==" "not=" "<" "<=" ">" ">=" "compare" "identical?"]]
+           ["Test" ["zero?" "pos?" "neg?" "even?" "odd?" "number?" "integer?" "int?"
+                    "float?" "double?" "pos-int?" "neg-int?" "nat-int?"]]
+           ["Convert" ["int" "f32" "f64" "char" "parse-long" "parse-double" "parse-boolean"]]
+           ["Bits" ["bit-and" "bit-or" "bit-xor" "bit-not" "bit-and-not" "bit-shift-left"
+                    "bit-shift-right" "unsigned-bit-shift-right" "bit-test" "bit-set"
+                    "bit-clear" "bit-flip"]]
+           ["Random" ["rand" "rand-int" "rand-nth" "shuffle" "random-uuid"]]]}
+
+ {:title "Strings, symbols and printing" :ns "skein.core"
+  :groups [["Strings" ["str" "subs" "format" "string?" "char?" "index-of"]]
+           ["Regex" ["re-pattern" "re-find" "re-matches" "re-seq" "re-matcher" "re-groups"]]
+           ["Names" ["name" "namespace" "keyword" "keyword?" "symbol" "symbol?" "gensym"]]
+           ["Print" ["pr" "prn" "print" "println" "pr-str" "prn-str" "print-str"
+                     "println-str" "with-out-str" "eprint" "eprintln"]]
+           ["Files" ["slurp" "spit"]]]}
+
+ {:title "Collections" :ns "skein.core"
+  :groups [["Make" ["list" "list*" "vector" "vec" "hash-map" "hash-set" "set" "sorted-map"
+                    "sorted-map-by" "sorted-set" "sorted-set-by" "zipmap" "into" "empty"]]
+           ["Use" ["count" "get" "get-in" "contains?" "find" "nth" "peek" "conj" "pop"
+                   "assoc" "assoc-in" "dissoc" "disj" "update" "update-in" "merge"
+                   "merge-with" "select-keys" "keys" "vals" "key" "val" "update-keys"
+                   "update-vals" "subvec" "rseq" "subseq" "rsubseq" "frequencies"
+                   "group-by"]]
+           ["Test" ["coll?" "list?" "vector?" "map?" "set?" "seq?" "sequential?"
+                    "associative?" "counted?" "sorted?" "empty?" "not-empty" "distinct?"
+                    "nil?" "some?" "true?" "false?" "boolean" "boolean?"]]
+           ["Transients" ["transient" "persistent!" "conj!" "assoc!" "dissoc!" "disj!"
+                          "pop!"]]
+           ["Metadata" ["meta" "with-meta" "vary-meta"]]
+           ["Hash" ["hash" "hash-of" "equiv"]]]}
+
+ {:title "Sequences" :ns "skein.core"
+  :groups [["Get" ["seq" "first" "second" "ffirst" "rest" "next" "nnext" "last" "butlast"
+                   "nthrest" "nthnext" "take" "take-last" "take-nth" "take-while" "drop"
+                   "drop-last" "drop-while" "split-at" "split-with"]]
+           ["Change" ["map" "mapv" "map-indexed" "mapcat" "filter" "filterv" "remove"
+                      "keep" "keep-indexed" "distinct" "dedupe" "flatten" "reverse" "sort"
+                      "sort-by" "partition" "partition-all" "partition-by" "interleave"
+                      "interpose" "concat" "cons" "reductions"]]
+           ["Make" ["range" "repeat" "repeatedly" "iterate" "cycle" "lazy-seq" "lazy-cat"
+                    "tree-seq" "sequence"]]
+           ["Reduce" ["reduce" "reduce-kv" "reduced" "reduced?" "unreduced"
+                      "ensure-reduced" "some" "every?" "not-every?" "not-any?" "max-key"
+                      "min-key"]]
+           ["Realize" ["doall" "dorun" "realized?"]]
+           ["Transducers" ["transduce" "eduction" "cat" "completing"]]
+           ["Parallel" ["pmap" "preduce" "pdotimes"]]]}
+
+ {:title "Functions" :ns "skein.core"
+  :groups [["Make" ["fn?" "ifn?" "identity" "constantly" "comp" "partial" "complement"
+                    "juxt" "fnil" "every-pred" "some-fn" "memoize" "apply"]]]}
+
+ {:title "Objects, structs and arrays" :ns "skein.core"
+  :groups [["Classes" ["defclass" "make" "initialize" "with" "slot" "set-slot!"
+                       "update-slot!" "cell" "instance?" "class-of" "class-name"
+                       "class-slots" "class-precedence-list"
+                       "update-instance-for-redefined-class"]]
+           ["Generics" ["defgeneric" "defmethod" "generic-methods" "deref-object" "close"]]
+           ["Structs" ["defstruct" "defsoa" "struct?"]]
+           ["Arrays" ["make-array" "aget" "aset!" "update!" "array?" "view" "as-bytes"]]]}
+
+ {:title "State and concurrency" :ns "skein.core"
+  :groups [["Atoms" ["atom" "atom?" "deref" "reset!" "reset-vals!" "swap!" "swap-vals!"
+                     "compare-and-set!" "add-watch" "remove-watch" "set-validator!"
+                     "get-validator"]]
+           ["Refs (STM)" ["ref" "ref?" "dosync" "ref-set" "alter" "commute" "ensure" "io!"]]
+           ["Volatiles" ["volatile!" "volatile?" "vreset!" "vswap!"]]
+           ["Delays, promises" ["delay" "delay?" "force" "promise" "deliver"]]
+           ["Tasks" ["spawn" "spawn-pinned" "future" "with-nursery" "task?" "done?" "cancel!"
+                     "cancelled?" "check-cancelled" "cancelled" "with-timeout" "timeout"
+                     "sleep" "cpu-count"]]
+           ["Channels" ["chan" "chan?" "<!" ">!" "alts!" "close!" "timeout-chan"]]
+           ["Main thread" ["on-main-thread" "drain-main-thread!"]]]}
+
+ {:title "Conditions and restarts" :ns "skein.core"
+  :groups [["Signal" ["error" "warn" "signal" "make-condition" "ex-info"]]
+           ["Handle" ["try" "handler-case" "handler-bind" "with-open"]]
+           ["Restarts" ["restart-case" "invoke-restart" "find-restart" "compute-restarts"
+                        "restart-name" "restart-report"]]
+           ["Inspect" ["condition?" "error?" "condition-message" "condition-type"
+                       "condition-type-name" "ex-data" "ex-message" "ex-cause"]]
+           ["Define" ["defcondition"]]
+           ["Types" ["arithmetic-error" "arity-error" "index-error" "type-error"
+                     "unbound-var-error" "namespace-error" "not-callable-error"
+                     "stack-overflow" "task-cancelled-error" "transient-error"
+                     "unsupported-operation-error"]]]}
+
+ {:title "Strings" :ns "skein.string"
+  :groups [["Test" ["blank?" "starts-with?" "ends-with?" "includes?"]]
+           ["Search" ["index-of" "last-index-of"]]
+           ["Change" ["upper-case" "lower-case" "capitalize" "trim" "triml" "trimr"
+                      "trim-newline" "reverse" "replace" "replace-first" "escape"]]
+           ["Split, join" ["split" "split-lines" "join"]]
+           ["Build" ["builder" "append!" "build"]]
+           ["Cursors" ["cursor" "end" "end?" "next" "char-at" "slice" "cursor->index"]]]}
+
+ {:title "Math" :ns "skein.math"
+  :groups [["Constants" ["pi" "tau"]]
+           ["Functions" ["sin" "cos" "tan" "asin" "acos" "atan" "atan2" "exp" "log" "pow"
+                         "floor" "ceil" "round" "trunc" "sign"]]
+           ["Scalars" ["clamp" "lerp" "inverse-lerp" "remap" "smoothstep" "wrap"
+                       "approx=" "deg->rad" "rad->deg" "rand-range" "noise"]]
+           ["Vectors" ["vec2" "vec3" "vec4" "vec2-zero" "vec3-zero" "v+" "v-" "v*" "vdiv"
+                       "dot" "cross" "length" "length-sq" "normalize" "distance" "negate"
+                       "angle" "from-angle" "perp" "rotate"]]
+           ["Matrices" ["mat3" "mat4" "mat3-identity" "mat4-identity" "mat3-at" "mat4-at"
+                        "m*" "transpose" "determinant" "inverse" "mat3-translation"
+                        "mat3-rotation" "mat3-scale" "mat4-translation" "mat4-rotation"
+                        "mat4-scale" "perspective" "ortho" "look-at" "transform"
+                        "transform-point" "transform-vector"]]
+           ["Quaternions" ["quat" "quat-identity" "quat-from-axis-angle" "quat-normalize"
+                           "quat-rotate" "conjugate" "slerp"]]]}
+
+ {:title "Files and streams" :ns "skein.io"
+  :groups [["Files" ["read-file" "write-file" "append-file" "read-bytes" "write-bytes"
+                     "file-exists?" "file?" "directory?" "file-size" "modified-time"]]
+           ["Paths" ["path" "parent" "file-name" "extension" "absolute?" "absolute-path"
+                     "resource-dir"]]
+           ["Directories" ["list-dir" "make-dirs" "delete" "delete-tree" "copy-file"
+                           "rename" "walk" "temp-dir" "temp-file" "owner-only!"]]
+           ["Streams" ["open-reader" "open-writer" "open-input" "open-output" "read-line"
+                       "line-seq" "read-text" "read-bytes!" "write" "write-bytes!" "flush"
+                       "stream" "stream-path" "stdin" "stdout" "stderr"]]
+           ["Watch" ["watch" "stop-watch!"]]
+           ["Ignore files" ["ignore-matcher" "ignored?"]]
+           ["Errors" ["io-error" "io-error-message" "io-error-path"]]
+           ["Programs" ["run-process"]]]}
+
+ {:title "Processes" :ns "skein.process"
+  :groups [["Run" ["process" "process?" "subprocess" "pid" "alive?"]]
+           ["Stop" ["signal!" "destroy!" "destroy-tree!"]]]}
+
+ {:title "The system" :ns "skein.system"
+  :groups [["Platform" ["os" "arch" "getenv"]]
+           ["Directories" ["home-dir" "config-dir" "data-dir" "cache-dir"]]
+           ["Open" ["open!"]]]}
+
+ {:title "Networking" :ns "skein.net"
+  :groups [["Client" ["connect" "socket?" "shutdown"]]
+           ["Server" ["listen" "accept" "port" "close-server" "server"]]]}
+
+ {:title "Data formats" :ns "skein.json"
+  :groups [["JSON" ["read-str" "read" "write-str" "write" "reformat"]]
+           ["Errors" ["json-error" "json-error-message" "json-error-line"
+                      "json-error-column"]]
+           ["EDN" ["skein.edn/read-string" "skein.edn/read"]]
+           ["Bytes" ["skein.bytes/utf8" "skein.bytes/utf8-string" "skein.bytes/base64"
+                     "skein.bytes/unbase64" "skein.bytes/hex" "skein.bytes/unhex"]]
+           ["Hashes" ["skein.bytes/sha1" "skein.bytes/sha256" "skein.bytes/md5"]]]}
+
+ {:title "Time" :ns "skein.time"
+  :groups [["Clocks" ["now" "now-ns" "epoch-millis"]]
+           ["Dates" ["utc-time" "local-time" "utc-offset" "format-iso8601"
+                     "parse-iso8601"]]]}
+
+ {:title "Logging" :ns "skein.log"
+  :groups [["Log" ["trace" "debug" "info" "warn" "error" "log" "log*"]]
+           ["Configure" ["set-level!" "level" "enabled?" "set-handler!" "format-entry"
+                         "format-time"]]]}
+
+ {:title "Testing" :ns "skein.test"
+  :groups [["Write" ["deftest" "is" "are" "testing" "use-fixtures"]]
+           ["Run" ["run-tests" "test-ns" "successful?"]]]}
+
+ {:title "Foreign functions" :ns "skein.ffi"
+  :groups [["Define" ["deflibrary" "defcfun" "defcfun-ptr" "defcstruct" "defcunion"
+                      "defcenum" "defcallback" "load-library"]]
+           ["Pointers" ["null" "null?" "ptr?" "ptr+" "address" "alloc" "free" "own" "pin"
+                        "with-foreign" "sizeof"]]
+           ["Memory" ["get" "put!" "field" "put-field!" "c-string" "enum-value"]]
+           ["Handles" ["handle" "handle-value" "free-handle"]]]}
+
+ {:title "Games and jobs" :ns "skein.game"
+  :groups [["Frames" ["run-loop" "with-frame-restarts"]]
+           ["Jobs" ["skein.jobs/job" "skein.jobs/graph"]]]}
+
+ {:title "Live development" :ns "skein.dev"
+  :groups [["Run" ["run-main" "run-repl" "install-swank!" "eval-in" "version"]]
+           ["Swank" ["skein.swank/start-server" "skein.swank/protocol-version"]]]}]

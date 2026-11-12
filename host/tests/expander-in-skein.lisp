@@ -399,10 +399,16 @@ D-095) that Phase 0 can't fetch: the SDL examples and Driftrock's main and draw.
         (search "/examples/driftrock/main.skn" s)
         (search "/examples/driftrock/draw.skn" s))))
 
+(defun native-only-p (path)
+  "True for the programs that only run natively: the manual's generator, its tests and
+its examples (doc/, D-111), which use regular expressions (D-105) and the evaluator."
+  (search "/doc/" (namestring path)))
+
 (test expander-in-skein-matches-phase-0-on-every-file
   ;; The exit criterion of M1.7: the same Core IR as Phase 0 for every .skn file.
   (let ((total 0))
-    (dolist (path (remove-if #'needs-a-dependency-p (repository-skn-files)))
+    (dolist (path (remove-if (lambda (p) (or (needs-a-dependency-p p) (native-only-p p)))
+                             (repository-skn-files)))
       ;; A file whose foreign library is missing (SDL3, say) can't load its requires.
       (handler-case
           (multiple-value-bind (mismatches count) (compare-expanders-on-file path)

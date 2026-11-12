@@ -1,0 +1,108 @@
+(ns skein.process.examples
+  (:require [skein.process :as p]
+            [skein.io :as io]
+            [skein.string :as str]))
+
+;;; Examples for skein.process (D-111). They start Unix programs (cat, sh, sleep, echo),
+;;; which Windows has with Git. The exit statuses of programs ended by a signal are Unix's,
+;;; so those examples aren't run on Windows, nor is :err :out, which isn't supported there yet.
+;;; `./skein run doc/manual.skn --check skein.process` runs them.
+
+;;;; process
+;; Start a program and read its output; @p waits for it to end.
+(let [proc (p/process ["echo" "hello" "world"])
+      out (io/read-text (:out proc))]
+  [out (:exit @proc)])
+;=> ["hello world\n" 0]
+
+;; Talk to it: write to its stdin and read its stdout a line at a time.
+(let [proc (p/process ["cat"])]
+  (io/write (:in proc) "one\n")
+  (io/flush (:in proc))
+  (let [first-line (io/read-line (:out proc))]
+    (io/write (:in proc) "two\n")
+    (close (:in proc))
+    [first-line (io/read-line (:out proc)) (io/read-line (:out proc))]))
+;=> ["one" "two" nil]
+
+;; A string :in is written to its stdin, which is then closed.
+(let [proc (p/process ["sort"] {:in "pear\napple\n"})]
+  (io/read-text (:out proc)))
+;=> "apple\npear\n"
+
+;; :dir, :extra-env, and :err :out to merge the error output into the output (not yet
+;; supported on Windows).
+(let [proc (p/process ["sh" "-c" "echo $GREETING from $(basename $PWD); echo oops >&2"]
+                      {:dir "lib" :extra-env {"GREETING" "hi"} :err :out})]
+  (io/read-text (:out proc)))
+;=> "hi from lib\noops\n"
+;; not run on windows
+
+;; :out to a file; :discard drops a stream.
+(let [f (io/temp-file)]
+  @(p/process ["echo" "saved"] {:out {:file f} :err :discard})
+  (io/read-file f))
+;=> "saved\n"
+
+;; A program that can't be started signals skein.io/io-error.
+(handler-case (p/process ["no-such-program-anywhere"])
+  (io/io-error [c] :not-found))
+;=> :not-found
+
+;;;; process?
+[(p/process? (p/process ["true"])) (p/process? :x)]
+;=> [true false]
+
+;;;; subprocess
+;; The class of what process returns: :cmd, :pid, :in, :out, :err and, once it has
+;; ended, :exit.
+(let [proc @(p/process ["sh" "-c" "exit 3"] {:out :discard :err :discard})]
+  [(instance? p/subprocess proc) (:cmd proc) (:exit proc)])
+;=> [true ["sh" "-c" "exit 3"] 3]
+
+;;;; alive?
+(let [proc (p/process ["sleep" "10"])]
+  (let [before (p/alive? proc)]
+    (p/destroy! proc)
+    @proc
+    [before (p/alive? proc)]))
+;=> [true false]
+
+;;;; pid
+(let [proc (p/process ["true"])]
+  @proc
+  (pos-int? (p/pid proc)))
+;=> true
+
+;;;; signal!
+;; By intent; on Unix a program ended by a signal has the signal's number as its :exit
+;; (on Windows, where :kill and :terminate both end it, 1).
+(let [proc (p/process ["sleep" "10"])]
+  (p/signal! proc :kill)
+  (:exit @proc))
+;=> 9
+;; not run on windows
+
+;;;; destroy!
+(let [proc (p/process ["sleep" "10"])]
+  (p/destroy! proc)
+  (:exit @proc))
+;=> 15
+;; not run on windows
+
+;;;; destroy-tree!
+;; Ends the programs it started too: here sh's sleep.
+(let [proc (p/process ["sh" "-c" "sleep 10; echo late"])]
+  (sleep 0.1)
+  (p/destroy-tree! proc)
+  [(:exit @proc) (io/read-text (:out proc))])
+;=> [15 ""]
+;; not run on windows
+
+;; @p with a time limit gives the timeout value if the program is still running.
+(let [proc (p/process ["sleep" "10"])]
+  (let [result (deref proc 0.05 :still-running)]
+    (p/destroy-tree! proc)
+    @proc
+    result))
+;=> :still-running

@@ -491,11 +491,22 @@ test_gc_verify() {
   echo "skeinc: everything passes with SKEIN_GC_VERIFY=1"
 }
 
+test_manual() {
+  # The manual (D-111): the generator's tests, then every example in doc/examples run and
+  # compared with what it says it prints, and doc/topics.edn and doc/notes checked.
+  "$skeinc" build doc/manual-test.skn --eval -o "build/examples/manual-test$exe" > /dev/null
+  "build/examples/manual-test$exe"
+  echo "skeinc: the manual's generator ok"
+  "$skeinc" build doc/manual.skn --eval -o "build/examples/manual$exe" > /dev/null
+  "build/examples/manual$exe" --check
+  echo "skeinc: the manual's examples ok"
+}
+
 test_compiler() {
   # The groups run side by side, each into build/test-logs/compiler-<group>.log, printed
   # when it finishes; then every program they built runs again under SKEIN_GC_VERIFY.
   mkdir -p build/examples build/test-logs
-  local groups=(self_and_targets projects native_fixtures native_only ring_and_dev)
+  local groups=(self_and_targets projects native_fixtures native_only ring_and_dev manual)
   local g pids=()
   for g in "${groups[@]}"; do
     ( set -e; "test_$g" ) > "build/test-logs/compiler-$g.log" 2>&1 &

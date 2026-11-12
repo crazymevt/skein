@@ -1,0 +1,2197 @@
+(ns skein.core.examples)
+
+;;; Examples for skein.core (D-111), by topic as the quick reference groups it.
+;;; `./skein run doc/manual.skn --check skein.core` runs them.
+
+;;; ------------------------------------------------------------------------------------
+;;; Definitions and namespaces
+
+;;;; defn
+(defn greet
+  "A greeting for name."
+  [name]
+  (str "Hello, " name "!"))
+(greet "Skein")
+;=> "Hello, Skein!"
+
+;; Several arities, and rest arguments after &.
+(defn total
+  ([] 0)
+  ([x] x)
+  ([x & more] (apply + x more)))
+[(total) (total 5) (total 1 2 3)]
+;=> [0 5 6]
+
+;;;; defn-
+;; A private function: other namespaces can't refer to it.
+(defn- helper [x] (* x 10))
+(helper 4)
+;=> 40
+
+;;;; defmacro
+;; A macro receives its arguments unevaluated and returns the code to run.
+(defmacro unless [test & body]
+  `(if ~test nil (do ~@body)))
+(unless false :ran)
+;=> :ran
+
+(macroexpand-1 '(unless done? (go)))
+;=> (if done? nil (do (go)))
+
+;;;; defonce
+;; Evaluating it again (reloading the file) keeps the first value.
+(defonce counter (atom 0))
+(swap! counter inc)
+(defonce counter (atom 100))
+@counter
+;=> 1
+
+;;;; declaim
+;; Declares the types of a function's arguments and result for the compiler, in a
+;; compiled file (DESIGN §12.2).
+(declaim (ftype (fn [f64 f64] f64) hypot))
+;; not run
+
+;;;; ns
+;; The first form of a file: the namespace's name, docstring and what it requires.
+(ns skein.core.examples
+  "The examples of skein.core."
+  (:require [skein.string :as str]))
+(str/upper-case "required")
+;=> "REQUIRED"
+
+;;;; in-ns
+;; Switches the current namespace at the REPL, making it if it doesn't exist.
+(in-ns 'skein.core.examples)
+(str (namespace ::here))
+;=> "skein.core.examples"
+
+;;;; load-file
+(spit "build/manual-example.skn" "(def loaded-value 42) (* loaded-value 2)")
+(load-file "build/manual-example.skn")
+;=> 84
+
+;;;; reload
+;; Loads a namespace's file again, as skein dev does when the file changes.
+(reload 'skein.string)
+(skein.string/trim "  still here  ")
+;=> "still here"
+
+;;;; eval
+(eval '(+ 1 2 3))
+;=> 6
+
+(eval (list 'str "built " "at run time"))
+;=> "built at run time"
+
+;;;; read-string
+(read-string "(+ 1 [2 3] {:a 4})")
+;=> (+ 1 [2 3] {:a 4})
+
+(eval (read-string "(* 6 7)"))
+;=> 42
+
+;;;; macroexpand-1
+(macroexpand-1 '(when ready (start) (wait)))
+;=> (if ready (do (start) (wait)))
+
+;;;; macroexpand
+;; Expands until the head isn't a macro; forms inside aren't expanded.
+(macroexpand '(when-not ok (when a b)))
+;=> (if ok nil (do (when a b)))
+
+;;;; macroexpand-all
+(macroexpand-all '(when-not ok (when a b)))
+;=> (if ok nil (do (if a (do b))))
+
+;;;; comment
+;; Code kept for the REPL, which the file doesn't run.
+(comment
+  (launch-missiles!))
+;=> nil
+
+;;;; *1
+;; At the REPL, the last three values and the last error.
+(+ 1 2)
+;=> 3
+;; not run
+*1
+;=> 3
+;; not run
+
+;;;; *2
+(list *1 *2 *3)
+;; not run
+
+;;;; *3
+(* *3 2)
+;; not run
+
+;;;; *e
+;; After an error at the REPL, the condition, to look at.
+(condition-message *e)
+;; not run
+
+;;;; *print-length*
+(binding [*print-length* 3]
+  (pr-str (range)))
+;=> "(0 1 2 ...)"
+
+;;; ------------------------------------------------------------------------------------
+;;; Control flow
+
+;;;; when
+(when (> 3 2)
+  (println "three is more")
+  :done)
+;; prints:
+;; three is more
+;=> :done
+
+(when false :never)
+;=> nil
+
+;;;; when-not
+(when-not (empty? [1]) :has-elements)
+;=> :has-elements
+
+;;;; if-not
+(if-not (zero? 0) :non-zero :zero)
+;=> :zero
+
+;;;; if-let
+(if-let [x (get {:a 1} :a)]
+  (str "found " x)
+  "missing")
+;=> "found 1"
+
+;; Destructuring the value, when it is true.
+(if-let [[k v] (first {:b 2})] [v k] :empty)
+;=> [2 :b]
+
+;;;; when-let
+(when-let [m (re-find #"\d+" "abc123")]
+  (parse-long m))
+;=> 123
+
+;;;; if-some
+;; false counts as a value; only nil takes the else branch.
+(if-some [x false] [:value x] :nothing)
+;=> [:value false]
+
+;;;; when-some
+(when-some [x (get {:on false} :on)] (str "on is " x))
+;=> "on is false"
+
+;;;; when-first
+(when-first [x [:a :b]] x)
+;=> :a
+
+(when-first [x []] x)
+;=> nil
+
+;;;; cond
+(defn sign-of [n]
+  (cond (neg? n) :negative
+        (zero? n) :zero
+        :else :positive))
+(mapv sign-of [-2 0 7])
+;=> [:negative :zero :positive]
+
+;;;; condp
+(defn kind [x]
+  (condp = x
+    1 :one
+    2 :two
+    :many))
+(mapv kind [1 2 3])
+;=> [:one :two :many]
+
+;; With `:>>`, the test's result goes to a function.
+(condp some [3 4]
+  #{1 2} :>> (fn [x] [:small x])
+  #{3} :>> (fn [x] [:three x]))
+;=> [:three 3]
+
+;;;; case
+(defn describe [x]
+  (case x
+    0 "zero"
+    (1 2 3) "small"
+    :key "a keyword"
+    "something else"))
+(mapv describe [0 2 :key 99])
+;=> ["zero" "small" "a keyword" "something else"]
+
+;;;; and
+(and 1 :a "x")
+;=> "x"
+
+(and 1 nil (println "not evaluated"))
+;=> nil
+
+;;;; or
+(or nil false :fallback)
+;=> :fallback
+
+(or (get {} :port) 8080)
+;=> 8080
+
+;;;; not
+[(not nil) (not false) (not 0) (not "")]
+;=> [true true false false]
+
+;;;; let
+(let [x 2
+      y (* x 10)
+      {:keys [a b]} {:a 1 :b 2}
+      [first-item & others] [:p :q :r]]
+  [x y a b first-item others])
+;=> [2 20 1 2 :p (:q :r)]
+
+;;;; letfn
+(letfn [(even-count? [n] (if (zero? n) true (odd-count? (dec n))))
+        (odd-count? [n] (if (zero? n) false (even-count? (dec n))))]
+  (even-count? 10))
+;=> true
+
+;;;; binding
+(def ^:dynamic *indent* 0)
+(defn line [s] (str (apply str (repeat *indent* " ")) s))
+[(line "a") (binding [*indent* 4] (line "b"))]
+;=> ["a" "    b"]
+
+;;;; destructure
+;; What let and fn turn a destructuring binding vector into (for writing macros).
+(vector? (destructure '[[a b] pair]))
+;=> true
+
+;;;; loop
+(loop [i 0 acc []]
+  (if (< i 4)
+    (recur (inc i) (conj acc (* i i)))
+    acc))
+;=> [0 1 4 9]
+
+;;;; doseq
+(doseq [x [1 2 3]
+        :when (odd? x)]
+  (println "odd:" x))
+;; prints:
+;; odd: 1
+;; odd: 3
+;=> nil
+
+;; Nested bindings run as nested loops.
+(doseq [row [:a :b] col [1 2]]
+  (print row col ""))
+;; prints:
+;; :a 1 :a 2 :b 1 :b 2
+;=> nil
+
+;;;; dotimes
+(dotimes [i 3]
+  (println "tick" i))
+;; prints:
+;; tick 0
+;; tick 1
+;; tick 2
+;=> nil
+
+;;;; while
+(let [n (atom 3)]
+  (while (pos? @n)
+    (print @n "")
+    (swap! n dec)))
+;; prints:
+;; 3 2 1
+;=> nil
+
+;;;; for
+(for [x (range 4) :when (even? x) y [:a :b]]
+  [x y])
+;=> ([0 :a] [0 :b] [2 :a] [2 :b])
+
+(for [x [1 2 3] :let [sq (* x x)] :while (< sq 5)] sq)
+;=> (1 4)
+
+;;;; run!
+(run! println [:x :y])
+;; prints:
+;; :x
+;; :y
+;=> nil
+
+;;;; trampoline
+;; Mutual recursion that doesn't grow the stack: return a function to continue.
+(letfn [(ping [n] (if (zero? n) :done (fn [] (pong (dec n)))))
+        (pong [n] (if (zero? n) :done (fn [] (ping (dec n)))))]
+  (trampoline ping 100000))
+;=> :done
+
+;;;; ->
+(-> {:name "skein"}
+    (assoc :version 1)
+    (update :version inc)
+    :version)
+;=> 2
+
+;;;; ->>
+(->> (range 10)
+     (filter odd?)
+     (map #(* % %))
+     (reduce +))
+;=> 165
+
+;;;; as->
+(as-> [1 2 3] v
+  (conj v 4)
+  (map inc v)
+  (apply + v))
+;=> 14
+
+;;;; some->
+(some-> {:user {:name "jo"}} :user :name skein.string/upper-case)
+;=> "JO"
+
+(some-> {:user nil} :user :name skein.string/upper-case)
+;=> nil
+
+;;;; some->>
+(some->> [1 2 3] (map inc) (filter even?) first)
+;=> 2
+
+;;;; cond->
+(let [n 5]
+  (cond-> []
+    (odd? n) (conj :odd)
+    (> n 10) (conj :big)
+    (pos? n) (conj :positive)))
+;=> [:odd :positive]
+
+;;;; cond->>
+(cond->> (range 6)
+  true (filter even?)
+  false (map -))
+;=> (0 2 4)
+
+;;;; doto
+(let [b (skein.string/builder)]
+  (doto b
+    (skein.string/append! "a")
+    (skein.string/append! "b"))
+  (skein.string/build b))
+;=> "ab"
+
+;;;; time
+;; Prints how long the expression took (the time varies), and returns its value.
+(time (reduce + (range 1000)))
+;=> 499500
+
+;;; ------------------------------------------------------------------------------------
+;;; Numbers
+
+;;;; +
+[(+) (+ 1) (+ 1 2 3) (+ 1 2.5)]
+;=> [0 1 6 3.5]
+
+;; Integers don't overflow: past the fixnum range they become bignums.
+(+ 9223372036854775807 1)
+;=> 9223372036854775808
+
+;;;; -
+[(- 5) (- 10 3 2)]
+;=> [-5 5]
+
+;;;; *
+[(*) (* 6 7) (* 2 0.5)]
+;=> [1 42 1.0]
+
+;;;; /
+;; Always a float; quot divides integers.
+[(/ 7 2) (/ 1.0 4)]
+;=> [3.5 0.25]
+
+;;;; inc
+(inc 41)
+;=> 42
+
+;;;; dec
+(dec 1.5)
+;=> 0.5
+
+;;;; quot
+[(quot 7 2) (quot -7 2)]
+;=> [3 -3]
+
+;;;; rem
+[(rem 7 3) (rem -7 3)]
+;=> [1 -1]
+
+;;;; mod
+;; The result has the divisor's sign, so it wraps indexes around.
+[(mod 7 3) (mod -7 3) (mod -1 5)]
+;=> [1 2 4]
+
+;;;; abs
+[(abs -3) (abs 2.5)]
+;=> [3 2.5]
+
+;;;; max
+(max 3 9 4)
+;=> 9
+
+;;;; min
+(apply min [3 9 4])
+;=> 3
+
+;;;; sqrt
+(sqrt 16)
+;=> 4.0
+
+;;;; =
+[(= 1 1) (= 1 1.0) (= [1 2] '(1 2)) (= {:a 1} {:a 1}) (= "a" "a" "a")]
+;=> [true false true true true]
+
+;;;; ==
+;; Numbers by value, across integers and floats.
+(== 1 1.0)
+;=> true
+
+;;;; not=
+(not= 1 2)
+;=> true
+
+;;;; <
+[(< 1 2 3) (< 1 3 2)]
+;=> [true false]
+
+;;;; <=
+(<= 1 1 2)
+;=> true
+
+;;;; >
+(> 3 2 1)
+;=> true
+
+;;;; >=
+(>= 3 3 1)
+;=> true
+
+;;;; compare
+[(compare 1 2) (compare "b" "a") (compare :a :a) (compare nil 0)]
+;=> [-1 1 0 -1]
+
+(sort compare [[2 1] [1] [1 5]])
+;=> ([1] [1 5] [2 1])
+
+;;;; identical?
+(let [v [1 2]]
+  [(identical? v v) (identical? v [1 2])])
+;=> [true false]
+
+;;;; zero?
+(zero? 0.0)
+;=> true
+
+;;;; pos?
+(filter pos? [-1 0 2])
+;=> (2)
+
+;;;; neg?
+(neg? -0.5)
+;=> true
+
+;;;; even?
+(filter even? (range 7))
+;=> (0 2 4 6)
+
+;;;; odd?
+(odd? 7)
+;=> true
+
+;;;; number?
+[(number? 1) (number? 1.5) (number? "1")]
+;=> [true true false]
+
+;;;; integer?
+[(integer? 3) (integer? 3.0) (integer? 100000000000000000000)]
+;=> [true false true]
+
+;;;; int?
+;; Only integers that fit in 64 bits.
+[(int? 3) (int? 100000000000000000000)]
+;=> [true false]
+
+;;;; float?
+[(float? 1.0) (float? (f32 1)) (float? 1)]
+;=> [true true false]
+
+;;;; double?
+[(double? 1.0) (double? (f32 1))]
+;=> [true false]
+
+;;;; pos-int?
+[(pos-int? 1) (pos-int? 0)]
+;=> [true false]
+
+;;;; neg-int?
+(neg-int? -4)
+;=> true
+
+;;;; nat-int?
+[(nat-int? 0) (nat-int? -1)]
+;=> [true false]
+
+;;;; int
+[(int 3.9) (int -3.9) (int \A)]
+;=> [3 -3 65]
+
+;;;; f32
+;; An f32 prints with an f, so it reads back as one.
+(f32 0.5)
+;=> 0.5f
+
+;;;; f64
+(f64 3)
+;=> 3.0
+
+;;;; char
+(char 97)
+;=> \a
+
+;;;; parse-long
+[(parse-long "-42") (parse-long "4x")]
+;=> [-42 nil]
+
+;;;; parse-double
+[(parse-double "1.5e3") (parse-double "nope")]
+;=> [1500.0 nil]
+
+;;;; parse-boolean
+[(parse-boolean "true") (parse-boolean "false") (parse-boolean "yes")]
+;=> [true false nil]
+
+;;;; bit-and
+(bit-and 0xC 0xA)
+;=> 8
+
+;;;; bit-or
+(bit-or 0xC 0xA)
+;=> 14
+
+;;;; bit-xor
+(bit-xor 0xC 0xA)
+;=> 6
+
+;;;; bit-not
+(bit-not 0)
+;=> -1
+
+;;;; bit-and-not
+(bit-and-not 0xF 0x5)
+;=> 10
+
+;;;; bit-shift-left
+[(bit-shift-left 1 10) (bit-shift-left 1 64)]
+;=> [1024 18446744073709551616]
+
+;;;; bit-shift-right
+[(bit-shift-right 1024 3) (bit-shift-right -16 2)]
+;=> [128 -4]
+
+;;;; unsigned-bit-shift-right
+(unsigned-bit-shift-right -1 60)
+;=> 15
+
+;;;; bit-test
+[(bit-test 0x4 2) (bit-test 0x4 0)]
+;=> [true false]
+
+;;;; bit-set
+(bit-set 0 3)
+;=> 8
+
+;;;; bit-clear
+(bit-clear 0xF 0)
+;=> 14
+
+;;;; bit-flip
+(bit-flip 0xA 1)
+;=> 8
+
+;;;; rand
+(let [x (rand)] (and (>= x 0) (< x 1)))
+;=> true
+
+(let [x (rand 10)] (< x 10))
+;=> true
+
+;;;; rand-int
+(every? (fn [x] (<= 0 x 5)) (repeatedly 100 (fn [] (rand-int 6))))
+;=> true
+
+;;;; rand-nth
+(contains? #{:rock :paper :scissors} (rand-nth [:rock :paper :scissors]))
+;=> true
+
+;;;; shuffle
+(sort (shuffle [3 1 2]))
+;=> (1 2 3)
+
+;;;; random-uuid
+(count (random-uuid))
+;=> 36
+
+(some? (re-matches #".{8}-.{4}-4.{3}-.{4}-.{12}" (random-uuid)))
+;=> true
+
+;;; ------------------------------------------------------------------------------------
+;;; Strings, symbols and printing
+
+;;;; str
+(str "a" 1 \b nil :c [1 2])
+;=> "a1b:c[1 2]"
+
+(str)
+;=> ""
+
+;;;; subs
+[(subs "skein" 1) (subs "skein" 1 3)]
+;=> ["kein" "ke"]
+
+;;;; format
+(format "%s has %d items, %.2f%% done" "list" 3 41.666)
+;=> "list has 3 items, 41.67% done"
+
+(format "[%5s|%-5s|%05d|%x]" "ab" "cd" 42 255)
+;=> "[   ab|cd   |00042|ff]"
+
+;;;; string?
+[(string? "s") (string? \s)]
+;=> [true false]
+
+;;;; char?
+(char? \s)
+;=> true
+
+;;;; index-of
+(index-of [:a :b :c] :c)
+;=> 2
+
+;;;; re-pattern
+(re-find (re-pattern "\\d+") "abc 123")
+;=> "123"
+
+;;;; re-find
+(re-find #"\d+" "abc 123 456")
+;=> "123"
+
+;; With groups, the match and each group.
+(re-find #"(\w+)@(\w+)" "mail jo@example now")
+;=> ["jo@example" "jo" "example"]
+
+;;;; re-matches
+;; The whole string must match.
+[(re-matches #"\d+" "123") (re-matches #"\d+" "123a")]
+;=> ["123" nil]
+
+;;;; re-seq
+(re-seq #"\w+" "the quick brown fox")
+;=> ("the" "quick" "brown" "fox")
+
+;;;; re-matcher
+(let [m (re-matcher #"\d" "a1b2")]
+  [(re-find m) (re-find m) (re-find m)])
+;=> ["1" "2" nil]
+
+;;;; re-groups
+(let [m (re-matcher #"(\w)=(\d)" "a=1 b=2")]
+  (re-find m)
+  (re-groups m))
+;=> ["a=1" "a" "1"]
+
+;;;; name
+[(name :ns/key) (name 'sym) (name "str")]
+;=> ["key" "sym" "str"]
+
+;;;; namespace
+[(namespace :ns/key) (namespace :key)]
+;=> ["ns" nil]
+
+;;;; keyword
+[(keyword "a") (keyword "game" "score")]
+;=> [:a :game/score]
+
+;;;; keyword?
+(keyword? :a)
+;=> true
+
+;;;; symbol
+(symbol "skein.core" "map")
+;=> skein.core/map
+
+;;;; symbol?
+[(symbol? 'a) (symbol? "a")]
+;=> [true false]
+
+;;;; gensym
+(let [g (gensym "tmp")]
+  [(symbol? g) (skein.string/starts-with? (name g) "tmp")])
+;=> [true true]
+
+;;;; pr
+(pr "a" \b :c)
+;; prints:
+;; "a" \b :c
+;=> nil
+
+;;;; prn
+(prn {:name "jo"})
+;; prints:
+;; {:name "jo"}
+;=> nil
+
+;;;; print
+(print "a" \b :c)
+;; prints:
+;; a b :c
+;=> nil
+
+;;;; println
+(println "Hello," "world")
+;; prints:
+;; Hello, world
+;=> nil
+
+;;;; pr-str
+(pr-str "quoted" [1 "two"])
+;=> "\"quoted\" [1 \"two\"]"
+
+;;;; prn-str
+(prn-str :x)
+;=> ":x\n"
+
+;;;; print-str
+(print-str "plain" "text")
+;=> "plain text"
+
+;;;; println-str
+(println-str "line")
+;=> "line\n"
+
+;;;; eprint
+;; Like print, to standard error: for messages that shouldn't mix with a program's output.
+(eprint "warning: " "no config file")
+;; not run
+
+;;;; eprintln
+;; Like println, to standard error. Here it returns nil (its line goes to the error output,
+;; which an example's ;; prints: doesn't show).
+(eprintln "manual example: eprintln writes this line to stderr")
+;=> nil
+
+;;;; with-out-str
+(with-out-str
+  (print "captured ")
+  (println 42))
+;=> "captured 42\n"
+
+;;;; spit
+(spit "build/manual-example.txt" "first\n")
+(spit "build/manual-example.txt" "second\n" :append true)
+(slurp "build/manual-example.txt")
+;=> "first\nsecond\n"
+
+;;;; slurp
+(skein.string/split-lines (slurp "build/manual-example.txt"))
+;=> ["first" "second"]
+
+;;; ------------------------------------------------------------------------------------
+;;; Collections
+
+;;;; list
+(list 1 2 3)
+;=> (1 2 3)
+
+;;;; list*
+(list* 1 2 [3 4])
+;=> (1 2 3 4)
+
+;;;; vector
+(vector 1 :b "c")
+;=> [1 :b "c"]
+
+;;;; vec
+(vec '(1 2 3))
+;=> [1 2 3]
+
+;;;; hash-map
+(get (hash-map :a 1 :b 2) :b)
+;=> 2
+
+;;;; hash-set
+(contains? (hash-set 1 2 2 3) 2)
+;=> true
+
+;;;; set
+(count (set [1 1 2 3 3]))
+;=> 3
+
+;;;; sorted-map
+(sorted-map :c 3 :a 1 :b 2)
+;=> {:a 1, :b 2, :c 3}
+
+;;;; sorted-map-by
+(sorted-map-by > 1 :a 3 :c 2 :b)
+;=> {3 :c, 2 :b, 1 :a}
+
+;;;; sorted-set
+(sorted-set 3 1 2)
+;=> #{1 2 3}
+
+;;;; sorted-set-by
+(sorted-set-by (fn [a b] (compare (count a) (count b))) "ccc" "a" "bb")
+;=> #{"a" "bb" "ccc"}
+
+;;;; zipmap
+(zipmap [:a :b :c] [1 2 3])
+;=> {:a 1, :b 2, :c 3}
+
+;;;; into
+(into [] '(1 2 3))
+;=> [1 2 3]
+
+(into {} [[:a 1] [:b 2]])
+;=> {:a 1, :b 2}
+
+;; Through a transducer.
+(into [] (comp (filter odd?) (map inc)) (range 6))
+;=> [2 4 6]
+
+;;;; empty
+[(empty [1 2]) (empty {:a 1}) (empty '(1))]
+;=> [[] {} ()]
+
+;;;; count
+[(count [1 2 3]) (count {:a 1}) (count "héllo") (count nil)]
+;=> [3 1 5 0]
+
+;;;; get
+[(get {:a 1} :a) (get [10 20] 1) (get "abc" 2) (get #{:x} :x) (get {} :z :default)]
+;=> [1 20 \c :x :default]
+
+;;;; get-in
+(get-in {:user {:langs ["skein" "zig"]}} [:user :langs 1])
+;=> "zig"
+
+;;;; contains?
+;; Whether a key is there: a map's key, even with a nil value, or a set's element.
+[(contains? {:a nil} :a) (contains? #{:x :y} :x)]
+;=> [true true]
+
+;; A vector's keys are its indexes, so this asks whether index 1 exists, and :x isn't
+;; an index. contains? doesn't search values.
+[(contains? [:x :y] 1) (contains? [:x :y] :x)]
+;=> [true false]
+
+;; To find a value in a vector or list, use some with a set.
+[(some #{:x} [:x :y]) (some #{:z} [:x :y])]
+;=> [:x nil]
+
+;;;; find
+(find {:a 1 :b 2} :b)
+;=> [:b 2]
+
+;;;; nth
+[(nth [:a :b :c] 1) (nth '(1 2) 5 :none)]
+;=> [:b :none]
+
+;;;; peek
+[(peek [1 2 3]) (peek '(1 2 3))]
+;=> [3 1]
+
+;;;; conj
+[(conj [1 2] 3 4) (conj '(1 2) 0) (conj {:a 1} [:b 2]) (conj #{1} 2) (conj nil 1)]
+;=> [[1 2 3 4] (0 1 2) {:a 1, :b 2} #{1 2} (1)]
+
+;;;; pop
+[(pop [1 2 3]) (pop '(1 2 3))]
+;=> [[1 2] (2 3)]
+
+;;;; assoc
+[(assoc {:a 1} :b 2 :c 3) (assoc [1 2 3] 1 :x)]
+;=> [{:a 1, :b 2, :c 3} [1 :x 3]]
+
+;;;; assoc-in
+(assoc-in {} [:window :size :width] 800)
+;=> {:window {:size {:width 800}}}
+
+;;;; dissoc
+(dissoc {:a 1 :b 2 :c 3} :a :c)
+;=> {:b 2}
+
+;;;; disj
+(disj #{1 2 3} 2)
+;=> #{1 3}
+
+;;;; update
+(update {:hp 10} :hp - 3)
+;=> {:hp 7}
+
+(update {:tags []} :tags conj :new)
+;=> {:tags [:new]}
+
+;;;; update-in
+(update-in {:player {:score 10}} [:player :score] + 5)
+;=> {:player {:score 15}}
+
+;;;; merge
+(merge {:a 1 :b 2} {:b 20 :c 30} nil)
+;=> {:a 1, :b 20, :c 30}
+
+;;;; merge-with
+(merge-with + {:apples 1 :pears 2} {:apples 5})
+;=> {:apples 6, :pears 2}
+
+;;;; select-keys
+(select-keys {:a 1 :b 2 :c 3} [:a :c :z])
+;=> {:a 1, :c 3}
+
+;;;; keys
+(sort (keys {:b 2 :a 1}))
+;=> (:a :b)
+
+;;;; vals
+(sort (vals {:b 2 :a 1}))
+;=> (1 2)
+
+;;;; key
+(key (first {:k :v}))
+;=> :k
+
+;;;; val
+(val (first {:k :v}))
+;=> :v
+
+;;;; update-keys
+(update-keys {"a" 1 "b" 2} keyword)
+;=> {:a 1, :b 2}
+
+;;;; update-vals
+(update-vals {:a 1 :b 2} inc)
+;=> {:a 2, :b 3}
+
+;;;; subvec
+(subvec [0 1 2 3 4] 1 3)
+;=> [1 2]
+
+;;;; rseq
+(rseq [1 2 3])
+;=> (3 2 1)
+
+;;;; subseq
+(subseq (sorted-set 1 5 10 15) >= 5 < 15)
+;=> (5 10)
+
+;;;; rsubseq
+(rsubseq (sorted-map 1 :a 2 :b 3 :c) > 1)
+;=> ([3 :c] [2 :b])
+
+;;;; frequencies
+(frequencies "abracadabra")
+;=> {\a 5, \b 2, \r 2, \c 1, \d 1}
+
+;;;; group-by
+(group-by count ["a" "bb" "cc" "d"])
+;=> {1 ["a" "d"], 2 ["bb" "cc"]}
+
+;;;; coll?
+[(coll? [1]) (coll? "abc")]
+;=> [true false]
+
+;;;; list?
+[(list? '(1)) (list? [1])]
+;=> [true false]
+
+;;;; vector?
+(vector? [1])
+;=> true
+
+;;;; map?
+(map? {:a 1})
+;=> true
+
+;;;; set?
+(set? #{1})
+;=> true
+
+;;;; seq?
+[(seq? '(1)) (seq? (map inc [1])) (seq? [1])]
+;=> [true true false]
+
+;;;; sequential?
+[(sequential? [1]) (sequential? #{1})]
+;=> [true false]
+
+;;;; associative?
+[(associative? {:a 1}) (associative? [1]) (associative? '(1))]
+;=> [true true false]
+
+;;;; counted?
+[(counted? [1 2]) (counted? (map inc [1 2]))]
+;=> [true false]
+
+;;;; sorted?
+[(sorted? (sorted-set 1)) (sorted? #{1})]
+;=> [true false]
+
+;;;; empty?
+[(empty? []) (empty? nil) (empty? "x")]
+;=> [true true false]
+
+;;;; not-empty
+[(not-empty [1]) (not-empty [])]
+;=> [[1] nil]
+
+;;;; distinct?
+[(distinct? 1 2 3) (distinct? 1 2 1)]
+;=> [true false]
+
+;;;; nil?
+(nil? nil)
+;=> true
+
+;;;; some?
+[(some? 0) (some? false) (some? nil)]
+;=> [true true false]
+
+;;;; true?
+[(true? true) (true? 1)]
+;=> [true false]
+
+;;;; false?
+[(false? false) (false? nil)]
+;=> [true false]
+
+;;;; boolean
+[(boolean nil) (boolean 0) (boolean "")]
+;=> [false true true]
+
+;;;; boolean?
+(boolean? false)
+;=> true
+
+;;;; transient
+;; Build a large collection in place, then freeze it.
+(persistent!
+ (reduce (fn [t x] (conj! t (* x x))) (transient []) (range 5)))
+;=> [0 1 4 9 16]
+
+;;;; persistent!
+(let [t (transient {})]
+  (assoc! t :a 1)
+  (persistent! t))
+;=> {:a 1}
+
+;;;; conj!
+(persistent! (conj! (transient #{}) :x))
+;=> #{:x}
+
+;;;; assoc!
+(persistent! (assoc! (transient [1 2]) 0 :first))
+;=> [:first 2]
+
+;;;; dissoc!
+(persistent! (dissoc! (transient {:a 1 :b 2}) :a))
+;=> {:b 2}
+
+;;;; disj!
+(persistent! (disj! (transient #{1 2}) 1))
+;=> #{2}
+
+;;;; pop!
+(persistent! (pop! (transient [1 2 3])))
+;=> [1 2]
+
+;;;; meta
+(meta (with-meta [1 2] {:source "file"}))
+;=> {:source "file"}
+
+;;;; with-meta
+(let [v (with-meta [1 2] {:tag :point})]
+  [v (= v [1 2]) (:tag (meta v))])
+;=> [[1 2] true :point]
+
+;;;; vary-meta
+(meta (vary-meta (with-meta [] {:n 1}) update :n inc))
+;=> {:n 2}
+
+;;;; hash
+(= (hash [1 2]) (hash '(1 2)))
+;=> true
+
+;;;; hash-of
+(= (hash-of "a") (hash "a"))
+;=> true
+
+;;;; equiv
+;; Specialize equiv (and hash-of) to give a class value equality.
+(defclass money [] (cents :reader cents))
+(defmethod equiv [(a money) (b money)] (= (cents a) (cents b)))
+(defmethod hash-of [(m money)] (hash (cents m)))
+[(= (make money :cents 5) (make money :cents 5))
+ (count (hash-set (make money :cents 5) (make money :cents 5)))]
+;=> [true 1]
+
+;;; ------------------------------------------------------------------------------------
+;;; Sequences
+
+;;;; seq
+[(seq [1 2]) (seq []) (seq "ab") (seq {:a 1})]
+;=> [(1 2) nil (\a \b) ([:a 1])]
+
+;;;; first
+[(first [1 2]) (first nil)]
+;=> [1 nil]
+
+;;;; second
+(second [:a :b :c])
+;=> :b
+
+;;;; ffirst
+(ffirst [[1 2] [3]])
+;=> 1
+
+;;;; rest
+[(rest [1 2 3]) (rest [1])]
+;=> [(2 3) ()]
+
+;;;; next
+[(next [1 2 3]) (next [1])]
+;=> [(2 3) nil]
+
+;;;; nnext
+(nnext [1 2 3 4])
+;=> (3 4)
+
+;;;; last
+(last [1 2 3])
+;=> 3
+
+;;;; butlast
+(butlast [1 2 3])
+;=> (1 2)
+
+;;;; nthrest
+(nthrest (range 5) 2)
+;=> (2 3 4)
+
+;;;; nthnext
+[(nthnext [1 2 3] 1) (nthnext [1 2 3] 5)]
+;=> [(2 3) nil]
+
+;;;; take
+(take 3 (range))
+;=> (0 1 2)
+
+;;;; take-last
+(take-last 2 [1 2 3 4])
+;=> (3 4)
+
+;;;; take-nth
+(take-nth 3 (range 10))
+;=> (0 3 6 9)
+
+;;;; take-while
+(take-while neg? [-2 -1 0 1 -5])
+;=> (-2 -1)
+
+;;;; drop
+(drop 2 [1 2 3 4])
+;=> (3 4)
+
+;;;; drop-last
+[(drop-last [1 2 3]) (drop-last 2 [1 2 3])]
+;=> [(1 2) (1)]
+
+;;;; drop-while
+(drop-while neg? [-2 -1 0 1 -5])
+;=> (0 1 -5)
+
+;;;; split-at
+(split-at 2 [1 2 3 4 5])
+;=> [(1 2) (3 4 5)]
+
+;;;; split-with
+(split-with odd? [1 3 4 5])
+;=> [(1 3) (4 5)]
+
+;;;; map
+(map inc [1 2 3])
+;=> (2 3 4)
+
+;; Several collections in step; it stops at the shortest.
+(map vector [:a :b :c] (range))
+;=> ([:a 0] [:b 1] [:c 2])
+
+;;;; mapv
+(mapv * [1 2 3] [10 20 30])
+;=> [10 40 90]
+
+;;;; map-indexed
+(map-indexed (fn [i x] [i x]) [:a :b])
+;=> ([0 :a] [1 :b])
+
+;;;; mapcat
+(mapcat (fn [x] [x x]) [1 2])
+;=> (1 1 2 2)
+
+;;;; filter
+(filter even? (range 10))
+;=> (0 2 4 6 8)
+
+;;;; filterv
+(filterv string? [1 "a" :b "c"])
+;=> ["a" "c"]
+
+;;;; remove
+(remove nil? [1 nil 2 nil])
+;=> (1 2)
+
+;;;; keep
+(keep (fn [x] (when (odd? x) (* x 10))) (range 5))
+;=> (10 30)
+
+;;;; keep-indexed
+(keep-indexed (fn [i x] (when (even? i) x)) [:a :b :c :d])
+;=> (:a :c)
+
+;;;; distinct
+(distinct [1 2 1 3 2])
+;=> (1 2 3)
+
+;;;; dedupe
+(dedupe [1 1 2 2 2 1])
+;=> (1 2 1)
+
+;;;; flatten
+(flatten [1 [2 [3 4]] '(5)])
+;=> (1 2 3 4 5)
+
+;;;; reverse
+(reverse [1 2 3])
+;=> (3 2 1)
+
+;;;; sort
+(sort [3 1 2])
+;=> (1 2 3)
+
+(sort > [3 1 2])
+;=> (3 2 1)
+
+;;;; sort-by
+(sort-by count ["ccc" "a" "bb"])
+;=> ("a" "bb" "ccc")
+
+(sort-by :age > [{:age 30} {:age 40}])
+;=> ({:age 40} {:age 30})
+
+;;;; partition
+[(partition 2 [1 2 3 4 5]) (partition 2 1 [1 2 3])]
+;=> [((1 2) (3 4)) ((1 2) (2 3))]
+
+;;;; partition-all
+(partition-all 2 [1 2 3 4 5])
+;=> ((1 2) (3 4) (5))
+
+;;;; partition-by
+(partition-by odd? [1 3 2 4 5])
+;=> ((1 3) (2 4) (5))
+
+;;;; interleave
+(interleave [:a :b :c] [1 2 3])
+;=> (:a 1 :b 2 :c 3)
+
+;;;; interpose
+(apply str (interpose ", " ["a" "b" "c"]))
+;=> "a, b, c"
+
+;;;; concat
+(concat [1 2] '(3) nil [4])
+;=> (1 2 3 4)
+
+;;;; cons
+(cons 0 [1 2])
+;=> (0 1 2)
+
+;;;; reductions
+(reductions + [1 2 3 4])
+;=> (1 3 6 10)
+
+;;;; range
+[(range 5) (range 2 5) (range 0 10 3) (take 2 (range))]
+;=> [(0 1 2 3 4) (2 3 4) (0 3 6 9) (0 1)]
+
+;;;; repeat
+[(repeat 3 :x) (take 2 (repeat :y))]
+;=> [(:x :x :x) (:y :y)]
+
+;;;; repeatedly
+(let [n (atom 0)]
+  (repeatedly 3 (fn [] (swap! n inc))))
+;=> (1 2 3)
+
+;;;; iterate
+(take 5 (iterate (fn [x] (* 2 x)) 1))
+;=> (1 2 4 8 16)
+
+;;;; cycle
+(take 5 (cycle [:a :b]))
+;=> (:a :b :a :b :a)
+
+;;;; lazy-seq
+(defn fib-seq
+  ([] (fib-seq 0 1))
+  ([a b] (lazy-seq (cons a (fib-seq b (+ a b))))))
+(take 8 (fib-seq))
+;=> (0 1 1 2 3 5 8 13)
+
+;;;; lazy-cat
+(defn naturals-from [n] (lazy-cat [n] (naturals-from (inc n))))
+(take 3 (naturals-from 7))
+;=> (7 8 9)
+
+;;;; tree-seq
+(tree-seq vector? seq [1 [2 [3]]])
+;=> ([1 [2 [3]]] 1 [2 [3]] 2 [3] 3)
+
+;;;; sequence
+[(sequence []) (sequence (map inc) [1 2])]
+;=> [() (2 3)]
+
+;;;; reduce
+[(reduce + [1 2 3]) (reduce + 10 [1 2 3]) (reduce + [])]
+;=> [6 16 0]
+
+;; reduced stops early.
+(reduce (fn [acc x] (if (> acc 5) (reduced acc) (+ acc x))) (range))
+;=> 6
+
+;;;; reduce-kv
+(reduce-kv (fn [acc k v] (assoc acc v k)) {} {:a 1 :b 2})
+;=> {1 :a, 2 :b}
+
+;;;; reduced
+(reduce (fn [_ x] (if (= x 3) (reduced :found) nil)) [1 2 3 4])
+;=> :found
+
+;;;; reduced?
+(reduced? (reduced 1))
+;=> true
+
+;;;; unreduced
+[(unreduced (reduced 1)) (unreduced 2)]
+;=> [1 2]
+
+;;;; ensure-reduced
+(reduced? (ensure-reduced (reduced 1)))
+;=> true
+
+;;;; some
+[(some even? [1 3 4]) (some #{:b} [:a :b]) (some even? [1 3])]
+;=> [true :b nil]
+
+;;;; every?
+[(every? pos? [1 2]) (every? pos? [])]
+;=> [true true]
+
+;;;; not-every?
+(not-every? pos? [1 -2])
+;=> true
+
+;;;; not-any?
+(not-any? nil? [1 2])
+;=> true
+
+;;;; max-key
+(max-key count "a" "abc" "ab")
+;=> "abc"
+
+;;;; min-key
+(min-key abs -5 3 -1)
+;=> -1
+
+;;;; doall
+(let [seen (atom [])
+      s (map (fn [x] (swap! seen conj x) x) [1 2])]
+  (doall s)
+  @seen)
+;=> [1 2]
+
+;;;; dorun
+(dorun (map println [1 2]))
+;; prints:
+;; 1
+;; 2
+;=> nil
+
+;;;; realized?
+(let [s (map inc [1 2])]
+  [(realized? s) (do (doall s) (realized? s))])
+;=> [false true]
+
+;;;; transduce
+(transduce (map inc) + [1 2 3])
+;=> 9
+
+(transduce (filter odd?) conj [] (range 6))
+;=> [1 3 5]
+
+;;;; eduction
+(reduce + (eduction (map inc) (filter odd?) (range 6)))
+;=> 9
+
+;;;; cat
+(into [] cat [[1 2] [3]])
+;=> [1 2 3]
+
+;;;; completing
+(transduce (map inc) (completing conj (fn [v] (count v))) [] [1 2 3])
+;=> 3
+
+;;;; pmap
+(pmap (fn [x] (* x x)) [1 2 3 4])
+;=> (1 4 9 16)
+
+;;;; preduce
+(preduce + 0 (range 1000))
+;=> 499500
+
+;;;; pdotimes
+(let [a (atom 0)]
+  (pdotimes [i 100] (swap! a + i))
+  @a)
+;=> 4950
+
+;;; ------------------------------------------------------------------------------------
+;;; Functions
+
+;;;; apply
+[(apply + [1 2 3]) (apply max 4 [1 9])]
+;=> [6 9]
+
+;;;; fn?
+[(fn? inc) (fn? :k)]
+;=> [true false]
+
+;;;; ifn?
+[(ifn? :k) (ifn? {}) (ifn? 1)]
+;=> [true true false]
+
+;;;; identity
+(filter identity [1 nil 2 false])
+;=> (1 2)
+
+;;;; constantly
+(map (constantly :x) [1 2])
+;=> (:x :x)
+
+;;;; comp
+((comp inc (fn [x] (* x 2))) 5)
+;=> 11
+
+;;;; partial
+(def add10 (partial + 10))
+(add10 5)
+;=> 15
+
+;;;; complement
+(filter (complement nil?) [1 nil 2])
+;=> (1 2)
+
+;;;; juxt
+((juxt first last count) [1 2 3])
+;=> [1 3 3]
+
+;;;; fnil
+(update {} :count (fnil inc 0))
+;=> {:count 1}
+
+;;;; every-pred
+((every-pred pos? even?) 2 4 6)
+;=> true
+
+;;;; some-fn
+((some-fn :name :id) {:id 7})
+;=> 7
+
+;;;; memoize
+(let [calls (atom 0)
+      slow (memoize (fn [x] (swap! calls inc) (* x x)))]
+  [(slow 4) (slow 4) @calls])
+;=> [16 16 1]
+
+;;; ------------------------------------------------------------------------------------
+;;; Objects, structs and arrays
+
+;;;; defclass
+(defclass shape []
+  (name :init "shape" :reader shape-name))
+(defclass circle [shape]
+  (radius :init 1.0)
+  (hits :cell :atom :init 0))
+(def c (make circle :name "wheel" :radius 2.0))
+[(shape-name c) (:radius c) (slot c :hits)]
+;=> ["wheel" 2.0 0]
+
+;;;; make
+(:radius (make circle))
+;=> 1.0
+
+;; By the class's name too.
+(shape-name (make 'shape))
+;=> "shape"
+
+;;;; initialize
+;; A method runs after make has set the slots.
+(defclass counter-box [] (n :cell :atom :init 0))
+(defmethod initialize :after [(b counter-box)] (set-slot! b :n 10))
+(slot (make counter-box) :n)
+;=> 10
+
+;;;; with
+;; A new instance with immutable slots changed; the original is unchanged.
+(let [c2 (with c :radius 5.0)]
+  [(:radius c) (:radius c2)])
+;=> [2.0 5.0]
+
+;;;; slot
+[(slot c :radius) (slot c :missing :none)]
+;=> [2.0 :none]
+
+;;;; set-slot!
+(set-slot! c :hits 3)
+;=> 3
+
+;;;; update-slot!
+(update-slot! c :hits + 2)
+;=> 5
+
+;;;; cell
+;; The atom behind a cell slot, to watch or pass around.
+(atom? (cell c :hits))
+;=> true
+
+;;;; instance?
+[(instance? shape c) (instance? circle (make shape))]
+;=> [true false]
+
+;;;; class-of
+(class-name (class-of c))
+;=> skein.core.examples/circle
+
+;;;; class-name
+(class-name (class-of "text"))
+;=> string
+
+;;;; class-slots
+(class-slots circle)
+;=> [:name :radius :hits]
+
+;;;; class-precedence-list
+(map class-name (class-precedence-list circle))
+;=> (skein.core.examples/circle skein.core.examples/shape object any)
+
+;;;; update-instance-for-redefined-class
+;; Called on each instance when its class is redefined; a method can fill new slots.
+(defclass note [] (text :init ""))
+(def n1 (make note :text "hi"))
+(defmethod update-instance-for-redefined-class :after [(x note) added discarded old]
+  (when (some #{:words} added)
+    (set-slot! x :words (count (skein.string/split (:text x) " ")))))
+(defclass note [] (text :init "") (words :cell :atom :init 0))
+(:words n1)
+;=> 1
+
+;;;; defgeneric
+(defgeneric area [s] "The area of a shape.")
+(defmethod area [(s circle)] (* 3.0 (:radius s) (:radius s)))
+(area (make circle :radius 1.0))
+;=> 3.0
+
+;;;; defmethod
+;; Dispatch on every argument's class, or on a value with (= value).
+(defgeneric meet [a b])
+(defmethod meet [(a circle) (b circle)] :bounce)
+(defmethod meet [(a circle) (b (= :wall))] :stop)
+(defmethod meet [a b] :pass)
+[(meet c c) (meet c :wall) (meet 1 2)]
+;=> [:bounce :stop :pass]
+
+;; :around methods wrap the rest; call-next-method continues.
+(defmethod meet :around [(a circle) b] [:around (call-next-method)])
+(meet c c)
+;=> [:around :bounce]
+
+;;;; generic-methods
+(pos? (count (generic-methods area)))
+;=> true
+
+;;;; deref-object
+;; Make @ work on instances of a class.
+(defclass lazy-box [] (thunk))
+(defmethod deref-object [(b lazy-box) timeout timeout-value] ((:thunk b)))
+@(make lazy-box :thunk (fn [] :opened))
+;=> :opened
+
+;;;; close
+;; with-open calls it; a class can specialize it.
+(defclass resource [] (log :cell :atom :init []))
+(defmethod close [(r resource)] (update-slot! r :log conj :closed))
+(let [r (make resource)]
+  (with-open [x r] (update-slot! x :log conj :used))
+  (:log r))
+;=> [:used :closed]
+
+;;;; defstruct
+(defstruct point :value (x f64) (y f64))
+(let [p (point 1.0 2.0)]
+  [(:x p) (point-y p) (point? p) (= p (point :x 1.0 :y 2.0))])
+;=> [1.0 2.0 true true]
+
+;; with makes an updated copy.
+(:y (with (point 1.0 2.0) :y 5.0))
+;=> 5.0
+
+;;;; struct?
+[(struct? (point 0.0 0.0)) (struct? {:x 0})]
+;=> [true false]
+
+;;;; defsoa
+;; Parallel arrays, one per field, for many elements.
+(defsoa bodies (mass f64) (speed f64))
+(let [bs (make-bodies 3)]
+  (update! bs 1 :speed + 4.0)
+  [(count bs) (speed bs 1) (mass bs 0)])
+;=> [3 4.0 0.0]
+
+;;;; make-array
+(let [a (make-array f64 4)]
+  (aset! a 0 1.5)
+  [(count a) (aget a 0) (aget a 1)])
+;=> [4 1.5 0.0]
+
+;;;; aget
+(let [a (make-array any 2)]
+  (aset! a 1 :x)
+  (aget a 1))
+;=> :x
+
+;;;; aset!
+(aset! (make-array f64 1) 0 2.0)
+;=> 2.0
+
+;;;; update!
+(let [a (make-array f64 2)]
+  (update! a 0 + 10.0)
+  (aget a 0))
+;=> 10.0
+
+;; A field of an array of structs.
+(let [ps (make-array point 2)]
+  (update! ps 1 :x + 3.0)
+  (:x (aget ps 1)))
+;=> 3.0
+
+;;;; array?
+[(array? (make-array f64 1)) (array? [1])]
+;=> [true false]
+
+;;;; view
+;; A slice that shares the array's memory.
+(let [a (make-array f64 4)
+      v (view a 1 3)]
+  (aset! v 0 7.0)
+  [(count v) (aget a 1)])
+;=> [2 7.0]
+
+;;;; as-bytes
+(count (as-bytes (make-array f32 4)))
+;=> 16
+
+;;; ------------------------------------------------------------------------------------
+;;; State and concurrency
+
+;;;; atom
+(def score (atom 0))
+(swap! score + 10)
+@score
+;=> 10
+
+;; A validator refuses bad values.
+(def level (atom 1 :validator pos?))
+(handler-case (reset! level -1) (error [_] :refused))
+;=> :refused
+
+;;;; atom?
+(atom? score)
+;=> true
+
+;;;; deref
+[@score (deref score)]
+;=> [10 10]
+
+;; With a time limit, for a promise or task.
+(deref (promise) 0.01 :timed-out)
+;=> :timed-out
+
+;;;; reset!
+(reset! score 0)
+;=> 0
+
+;;;; reset-vals!
+(reset-vals! score 5)
+;=> [0 5]
+
+;;;; swap!
+(swap! score * 2)
+;=> 10
+
+;;;; swap-vals!
+(swap-vals! score inc)
+;=> [10 11]
+
+;;;; compare-and-set!
+[(compare-and-set! score 11 12) (compare-and-set! score 11 13) @score]
+;=> [true false 12]
+
+;;;; add-watch
+(def seen (atom []))
+(add-watch score :log (fn [k a old new] (swap! seen conj [old new])))
+(swap! score inc)
+@seen
+;=> [[12 13]]
+
+;;;; remove-watch
+(remove-watch score :log)
+(swap! score inc)
+@seen
+;=> [[12 13]]
+
+;;;; set-validator!
+(set-validator! score (fn [x] (< x 100)))
+(handler-case (reset! score 500) (error [_] @score))
+;=> 14
+
+;;;; get-validator
+(fn? (get-validator score))
+;=> true
+
+;;;; ref
+(def from (ref 100))
+(def to (ref 0))
+(dosync
+  (alter from - 30)
+  (alter to + 30))
+[@from @to]
+;=> [70 30]
+
+;;;; ref?
+(ref? from)
+;=> true
+
+;;;; dosync
+;; Every change in a transaction commits at once, or none does.
+(dosync (ref-set from 0) (ref-set to 100))
+[@from @to]
+;=> [0 100]
+
+;;;; ref-set
+(dosync (ref-set to 1))
+;=> 1
+
+;;;; alter
+(dosync (alter to inc))
+;=> 2
+
+;;;; commute
+(dosync (commute to + 10))
+;=> 12
+
+;;;; ensure
+(dosync (ensure to))
+;=> 12
+
+;;;; io!
+(handler-case (dosync (io! (println "side effect")))
+  (error [_] :refused-in-transaction))
+;=> :refused-in-transaction
+
+;;;; volatile!
+(def v (volatile! 0))
+(vswap! v inc)
+@v
+;=> 1
+
+;;;; volatile?
+(volatile? v)
+;=> true
+
+;;;; vreset!
+(vreset! v 10)
+;=> 10
+
+;;;; vswap!
+(vswap! v + 5)
+;=> 15
+
+;;;; delay
+(def d (delay (println "computing") 42))
+[@d @d]
+;; prints:
+;; computing
+;=> [42 42]
+
+;;;; delay?
+(delay? d)
+;=> true
+
+;;;; force
+[(force d) (force 7)]
+;=> [42 7]
+
+;;;; promise
+(def p (promise))
+(future (deliver p :ready))
+@p
+;=> :ready
+
+;;;; deliver
+(let [q (promise)]
+  (deliver q 1)
+  (deliver q 2)
+  @q)
+;=> 1
+
+;;;; future
+(let [f (future (+ 1 2))]
+  @f)
+;=> 3
+
+;;;; with-nursery
+;; Waits for every task spawned in it.
+(with-nursery [n]
+  (let [a (spawn n (* 6 7))
+        b (spawn n (inc 1))]
+    [@a @b]))
+;=> [42 2]
+
+;;;; spawn
+(with-nursery [n]
+  (mapv deref (mapv (fn [i] (spawn n (* i i))) (range 4))))
+;=> [0 1 4 9]
+
+;;;; task?
+(task? (future 1))
+;=> true
+
+;;;; done?
+(let [f (future 1)]
+  @f
+  (done? f))
+;=> true
+
+;;;; cancel!
+(let [t (future (sleep 10) :finished)]
+  (cancel! t)
+  (handler-case @t (task-cancelled-error [_] :was-cancelled)))
+;=> :was-cancelled
+
+;;;; cancelled?
+(let [t (future (sleep 10))]
+  (cancel! t)
+  (handler-case @t (task-cancelled-error [_] nil))
+  (cancelled? t))
+;=> true
+
+;;;; cancelled
+;; What a cancelled task sees at its next cancellation point. It isn't an error, so
+;; (catch error ...) doesn't stop it.
+(let [seen (promise)
+      t (future (handler-case (sleep 10)
+                  (cancelled [c] (deliver seen (error? c)))))]
+  (sleep 0.01)
+  (cancel! t)
+  @seen)
+;=> false
+
+;;;; check-cancelled
+(let [t (future (loop [i 0] (check-cancelled) (recur (inc i))))]
+  (sleep 0.01)
+  (cancel! t)
+  (handler-case @t (task-cancelled-error [_] :stopped)))
+;=> :stopped
+
+;;;; with-timeout
+(handler-case (with-timeout 0.05 (sleep 5) :done)
+  (timeout [_] :timed-out))
+;=> :timed-out
+
+;;;; timeout
+;; The condition with-timeout signals.
+(handler-case (with-timeout 0.01 (sleep 1))
+  (timeout [c] (condition-type-name (condition-type c))))
+;=> skein.core/timeout
+
+;;;; sleep
+(let [start (skein.time/now)]
+  (sleep 0.02)
+  (>= (- (skein.time/now) start) 0.02))
+;=> true
+
+;;;; cpu-count
+(pos? (cpu-count))
+;=> true
+
+;;;; chan
+(let [ch (chan 2)]
+  (>! ch :a)
+  (>! ch :b)
+  [(<! ch) (<! ch)])
+;=> [:a :b]
+
+;;;; chan?
+(chan? (chan))
+;=> true
+
+;;;; >!
+;; An unbuffered channel: the put waits for a taker.
+(let [ch (chan)]
+  (future (>! ch :hello))
+  (<! ch))
+;=> :hello
+
+;;;; <!
+(let [ch (chan 1)]
+  (close! ch)
+  (<! ch))
+;=> nil
+
+;;;; alts!
+(let [a (chan 1) b (chan 1)]
+  (>! b :from-b)
+  (let [[v ch] (alts! [a b])]
+    [v (= ch b)]))
+;=> [:from-b true]
+
+;;;; close!
+(let [ch (chan 1)]
+  (>! ch 1)
+  (close! ch)
+  [(<! ch) (<! ch) (>! ch 2)])
+;=> [1 nil false]
+
+;;;; timeout-chan
+(let [t (timeout-chan 0.01)]
+  (<! t))
+;=> nil
+
+;;;; on-main-thread
+(on-main-thread (+ 1 1))
+;=> 2
+
+;;;; spawn-pinned
+;; Queues work for the main thread, which a program's loop runs with drain-main-thread!.
+(spawn-pinned :main (println "on the main thread"))
+;; not run
+
+;;;; drain-main-thread!
+(drain-main-thread!)
+;; not run
+
+;;; ------------------------------------------------------------------------------------
+;;; Conditions and restarts
+
+;;;; error
+(handler-case (error "Bad value:" 42)
+  (error [c] (condition-message c)))
+;=> "Bad value: 42"
+
+;;;; warn
+(handler-case (warn "careful") (warning [c] (condition-message c)))
+;=> "careful"
+
+;;;; signal
+;; Unhandled, signal returns nil and the program goes on.
+(signal "just so you know")
+;=> nil
+
+;;;; ex-info
+(handler-case (error (ex-info "Not found" {:id 7}))
+  (error [c] [(ex-message c) (ex-data c)]))
+;=> ["Not found" {:id 7}]
+
+;;;; ex-data
+(ex-data (ex-info "x" {:k 1}))
+;=> {:k 1}
+
+;;;; ex-message
+(ex-message (ex-info "the message" {}))
+;=> "the message"
+
+;;;; ex-cause
+(let [cause (ex-info "inner" {})]
+  (= cause (ex-cause (ex-info "outer" {} cause))))
+;=> true
+
+;;;; try
+(try
+  (/ 1 0)
+  (catch arithmetic-error e :divided-by-zero)
+  (finally (println "cleanup")))
+;; prints:
+;; cleanup
+;=> :divided-by-zero
+
+;;;; handler-case
+(handler-case (nth [] 3)
+  (index-error [c] :out-of-range)
+  (error [c] :other))
+;=> :out-of-range
+
+;;;; handler-bind
+;; Handlers run before unwinding, so they can choose a restart.
+(handler-bind [error (fn [c] (invoke-restart 'use-value 0))]
+  (restart-case (error "no value")
+    (use-value [v] v)))
+;=> 0
+
+;;;; restart-case
+(defn parse-or-ask [s]
+  (restart-case (or (parse-long s) (error "not a number:" s))
+    (use-default [] :report "Use 0" 0)
+    (use-value [v] v)))
+(handler-bind [error (fn [_] (invoke-restart 'use-default))]
+  (parse-or-ask "x"))
+;=> 0
+
+;;;; invoke-restart
+(handler-bind [error (fn [_] (invoke-restart 'use-value 99))]
+  (parse-or-ask "x"))
+;=> 99
+
+;;;; find-restart
+(restart-case (some? (find-restart 'skip))
+  (skip [] nil))
+;=> true
+
+;;;; compute-restarts
+(restart-case (map restart-name (take 2 (compute-restarts)))
+  (inner [] nil))
+;=> (inner)
+
+;;;; restart-name
+(restart-case (restart-name (find-restart 'retry))
+  (retry [] nil))
+;=> retry
+
+;;;; restart-report
+(restart-case (restart-report (find-restart 'retry))
+  (retry [] :report "Try again" nil))
+;=> "Try again"
+
+;;;; defcondition
+(defcondition asset-missing [error]
+  (path :reader asset-path)
+  (:report (fn [c] (str "missing asset " (asset-path c)))))
+(handler-case (error 'asset-missing :path "hero.png")
+  (asset-missing [c] [(asset-path c) (:path c) (condition-message c)]))
+;=> ["hero.png" "hero.png" "missing asset hero.png"]
+
+;;;; make-condition
+;; A condition, without signaling it; error signals it later.
+(let [c (make-condition asset-missing :path "map.dat")]
+  (handler-case (error c) (asset-missing [e] [(identical? c e) (asset-path e)])))
+;=> [true "map.dat"]
+
+;;;; condition?
+(handler-case (error "x") (error [c] (condition? c)))
+;=> true
+
+;;;; error?
+(handler-case (warn "w") (warning [c] (error? c)))
+;=> false
+
+;;;; condition-message
+(handler-case (error "Disk" "full") (error [c] (condition-message c)))
+;=> "Disk full"
+
+;;;; condition-type
+(handler-case (error 'asset-missing :path "a")
+  (error [c] (= asset-missing (condition-type c))))
+;=> true
+
+;;;; condition-type-name
+(condition-type-name asset-missing)
+;=> skein.core.examples/asset-missing
+
+;;;; with-open
+(defclass handle [] (log :cell :atom :init []))
+(defmethod close [(h handle)] (update-slot! h :log conj :closed))
+(let [h (make handle)]
+  (handler-case (with-open [x h] (error "failed inside"))
+    (error [_] nil))
+  (:log h))
+;=> [:closed]
+
+;;;; arithmetic-error
+(handler-case (quot 1 0) (arithmetic-error [_] :caught))
+;=> :caught
+
+;;;; arity-error
+(handler-case ((fn [x] x) 1 2) (arity-error [_] :caught))
+;=> :caught
+
+;;;; index-error
+(handler-case (nth [1] 5) (index-error [_] :caught))
+;=> :caught
+
+;;;; type-error
+(handler-case (+ 1 "2") (type-error [_] :caught))
+;=> :caught
+
+;;;; unbound-var-error
+(def not-yet)
+(handler-case (inc not-yet) (unbound-var-error [_] :caught))
+;=> :caught
+
+;;;; namespace-error
+(handler-case (eval '(no.such.namespace/f)) (error [c] (error? c)))
+;=> true
+
+;;;; not-callable-error
+(handler-case (5 1) (not-callable-error [_] :caught))
+;=> :caught
+
+;;;; stack-overflow
+(defn deep [n] (inc (deep (inc n))))
+(handler-case (deep 0) (stack-overflow [_] :caught))
+;; not run
+
+;;;; task-cancelled-error
+;; What deref of a cancelled task signals.
+(let [t (future (sleep 10))]
+  (cancel! t)
+  (handler-case @t (task-cancelled-error [c] (error? c))))
+;=> true
+
+;;;; transient-error
+(let [t (transient [])]
+  (persistent! t)
+  (handler-case (conj! t 1) (transient-error [_] :caught)))
+;=> :caught
+
+;;;; unsupported-operation-error
+(handler-case (conj "string" \x) (error [c] (error? c)))
+;=> true

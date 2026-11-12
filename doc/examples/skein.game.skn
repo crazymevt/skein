@@ -1,0 +1,41 @@
+(ns skein.game.examples
+  (:require [skein.game :as game]))
+
+;;; Examples for skein.game (D-111).
+;;; `./skein run doc/manual.skn --check skein.game` runs them.
+
+;;;; run-loop
+;; A fixed timestep: update runs at :step, render once per frame. Here three frames.
+(let [frames (atom 0)
+      updates (atom 0)]
+  (game/run-loop {:running? (fn [] (< @frames 3))
+                  :update (fn [dt] (swap! updates inc))
+                  :render (fn [alpha] (swap! frames inc) (sleep 0.02))
+                  :step 0.01})
+  [@frames (pos? @updates)])
+;=> [3 true]
+
+;; A game's loop: input, a fixed update and rendering with interpolation.
+(game/run-loop {:frame (fn [] (handle-events!))
+                :update (fn [dt] (swap! world step dt))
+                :render (fn [alpha] (draw @world alpha))
+                :running? (fn [] (not @quit?))
+                :paused (fn [] (handle-events!))})
+;; not run
+
+;;;; with-frame-restarts
+;; An error in a frame offers retry-frame and skip-frame: in skein dev from the debugger,
+;; here from a handler.
+(handler-bind [error (fn [_] (invoke-restart 'skip-frame))]
+  (game/with-frame-restarts
+    (error "a bug in this frame")
+    :finished))
+;=> nil
+
+;; retry-frame runs the frame again from the start, after the fix is reloaded.
+(let [attempts (atom 0)]
+  (handler-bind [error (fn [_] (invoke-restart 'retry-frame))]
+    (game/with-frame-restarts
+      (when (< (swap! attempts inc) 3) (error "not yet"))
+      [:done @attempts])))
+;=> [:done 3]
