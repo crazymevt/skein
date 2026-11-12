@@ -229,7 +229,7 @@ in skein.core; \"ns/name\" in that namespace. nil if there is none."
       (or (public? ns nm) (public? "skein.core" nm)))))
 
 ;;; ------------------------------------------------------------------------------------
-;;; A small Markdown subset (until M3.13's Markdown library): headings, paragraphs,
+;;; A small Markdown subset (until M3.14's Markdown library): headings, paragraphs,
 ;;; lists, block quotes, fenced code, tables, rules; inline code, links, bold, emphasis.
 
 (defn- inline-text
@@ -912,7 +912,7 @@ no topic names under their namespace's \"Other\"."
        "];\n"))
 
 ;;; ------------------------------------------------------------------------------------
-;;; The entries as data, for the docset (M3.13, D-102) and other tools
+;;; The entries as data, for the docset (M3.14, D-102) and other tools
 
 (defn docstring-markdown
   "A docstring as Markdown: its paragraphs as they are, and the runs of lines indented by

@@ -54,13 +54,14 @@ Work proceeds **one milestone at a time, in order**, unless a milestone says oth
 | M3.6 skein-ui for the IDE | ✅ |
 | M3.7 Skein Studio's core | ✅ |
 | M3.8 Agents | 🟨 |
-| M3.9 Source control | ⬜ |
-| M3.10 C sources in projects | ⬜ |
-| M3.11 SQLite and the Databases view | ⬜ |
-| M3.12 The terminal | ⬜ |
-| M3.13 Markdown and documentation | ⬜ |
-| M3.14 HTTP and the API workbench | ⬜ |
-| M3.15 Shipping Skein Studio | ⬜ |
+| M3.9 Polishing Skein Studio | ⬜ |
+| M3.10 Source control | ⬜ |
+| M3.11 C sources in projects | ⬜ |
+| M3.12 SQLite and the Databases view | ⬜ |
+| M3.13 The terminal | ⬜ |
+| M3.14 Markdown and documentation | ⬜ |
+| M3.15 HTTP and the API workbench | ⬜ |
+| M3.16 Shipping Skein Studio | ⬜ |
 | Manual (a track beside M3.x, D-111) | ✅ |
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
@@ -492,7 +493,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 
 **Goal:** Skein Studio, an IDE for Skein written in Skein (D-102): Lisp Studio's design on skein-ui, editing Skein with Skein's own reader and driving programs through `skein dev`'s Swank, with AI agents, source control, a terminal, databases, Markdown and offline docs; and the libraries it needs, the general ones in Skein's standard library and the specialized ones in repositories of their own. Then the optimization and polish of the earlier outline.
 
-**Order (D-102):** the libraries first, in the order the IDE needs them (M3.1–M3.6); then the IDE's core (M3.7), and its features one milestone each (M3.8–M3.14), each with the library it needs; then shipping it (M3.15). The optimization and polish milestones follow, or come forward when the IDE needs one.
+**Order (D-102):** the libraries first, in the order the IDE needs them (M3.1–M3.6); then the IDE's core (M3.7), and its features one milestone each (M3.8, M3.10–M3.15), each with the library it needs, with a polish of what is built after the agents (M3.9, D-115); then shipping it (M3.16). The optimization and polish milestones follow, or come forward when the IDE needs one.
 
 **Rules for Phase 3**
 - Phase 2's rules still apply.
@@ -588,7 +589,7 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 ### M3.8 Agents
 - Claude Code (stream-json) and Codex (app-server, JSON-RPC over stdio) through their CLIs, with the IDE's tools (evaluate in the program, describe, the problems, the open file), approvals and questions, models and effort, as Lisp Studio has.
 
-- Settled (D-110): `skein-markdown` (CommonMark and GFM's tables into Hiccup for the rich text widget) comes forward from M3.13, in its own repository; the IDE's tools are `skein_eval`, `skein_describe`, `ide_problems`, `ide_active_file`, `ide_open_file` and `repl_transcript`; Lisp Studio's whole agent panel (attachments, images and usage limits too), on the right of the editors with View ▸ Agent (Primary+J).
+- Settled (D-110): `skein-markdown` (CommonMark and GFM's tables into Hiccup for the rich text widget) comes forward from M3.14, in its own repository; the IDE's tools are `skein_eval`, `skein_describe`, `ide_problems`, `ide_active_file`, `ide_open_file` and `repl_transcript`; Lisp Studio's whole agent panel (attachments, images and usage limits too), on the right of the editors with View ▸ Agent (Primary+J).
 - Steps, in order (D-110):
   1. ✅ `skein-markdown`: its repository and CI; CommonMark's blocks and inlines and GFM's tables into Hiccup, checked against the CommonMark spec's examples (the Hiccup rendered to HTML); skein-ui's rich text gaining the elements Markdown needs that it lacks (quotes, rules, line breaks, strikethrough, images).
   2. ✅ The agents' protocols: an adapter each for Claude Code (stream-json) and Codex (app-server JSON-RPC) giving one set of events, run through `skein.process` and `skein.json`; stand-in CLIs, Skein programs that speak each protocol from a script, and tests of both adapters against them.
@@ -599,38 +600,49 @@ Steps 4 and 5 passed in CI: the live-debugging session on macOS and Linux in run
 
 **Exit:** a scripted session with a stand-in CLI that speaks each protocol; the real CLIs tried by Jessie.
 
-### M3.9 Source control
+### M3.9 Polishing Skein Studio
+Skein Studio next to Lisp Studio looks plain, the agent panel most of all, whose conversation is one rich text (D-115, Jessie's: a polish run after the agents). Xeon Studio's chat is the model: native widgets, a row per message.
+  1. skein-ui's cards: containers with rounded corners, a border and padding, on backgrounds of the theme's roles (an accent's soft tint among them), on the headless, Cocoa and GTK backends.
+  2. skein-ui's height for width: a wrapping label, or a rich text, is as tall as its content at the width it's given, so a message can be a widget of its own.
+  3. skein-ui's clickable containers (a click, a hover state, the pointing hand) and icons, in buttons, tabs, tree rows and labels. Where the icons come from is Jessie's choice, before this step.
+  4. The agent panel as Xeon Studio's chat: agents as chips with an avatar and a status dot, and smaller model, effort and autonomy menus; a timeline of rows (an avatar, the name and time, your messages in a bubble, the agent's as Markdown with code colored by the language's lexer), tools as cards that open on their output, with a status dot, requests as cards with a border of the accent and a primary Allow, notices as a centered line, and a sign that the agent is thinking; a welcome with suggested prompts; the composer as a rounded box with a focus ring, the context as chips, attachments, the limits as badges and a primary Send.
+  5. The workbench's chrome, as Lisp Studio's: an activity bar; a toolbar with the project, the program's state and namespace, Run, Stop and the agent; the explorer's header with its actions, and icons for files and folders; icons on the editors' and panels' tabs; the REPL's header with its state and actions; a status bar with the problems, the namespace, line endings, the language and the program.
+  6. Themes: Studio Dark's and Studio Light's contrast, spacing and type sizes kept to a few values, and snapshots of each screen from the scripted session, before and after, on Cocoa and GTK.
+
+**Exit:** snapshots of Skein Studio's screens beside Lisp Studio's that Jessie judges as finished; the scripted session passes on Cocoa and GTK; skein-ui's new features are tested on its three backends.
+
+### M3.10 Source control
 - git through its CLI: the changes and their diffs, staging, committing, branches, pull and push, and the explorer's status colors.
 
 **Exit:** tests against a scratch repository.
 
-### M3.10 C sources in projects
+### M3.11 C sources in projects
 - `skeinc` compiles the C sources a project lists, with `zig cc`, for each target, so a library can ship SQLite's amalgamation or libvterm rather than prebuilt libraries.
 
 **Exit:** a library with C sources builds and packages on the three platforms.
 
-### M3.11 SQLite and the Databases view
+### M3.12 SQLite and the Databases view
 - `skein-sqlite` in its own repository (bindings and an idiomatic layer, with SQLite's amalgamation as its C source); the Databases view: connections, the schema, a query editor and a results grid, editing rows, export.
 
 **Exit:** the library's tests on the three platforms, and the view's in Skein Studio.
 
-### M3.12 The terminal
+### M3.13 The terminal
 - `skein-term` in its own repository: a pseudo-terminal (forkpty, ConPTY) and libvterm's emulator, and a skein-ui widget that draws it; the IDE's terminal panel.
 
 **Exit:** a shell runs in the panel on macOS and Linux, with its tests in CI.
 
-### M3.13 Markdown and documentation
+### M3.14 Markdown and documentation
 - Markdown files in the editor with Source, Split and Preview, the preview from `skein-markdown` (built in M3.8, D-110) in the rich text widget (M3.6); `skein-docset` for Dash docsets, searched and shown in the IDE.
 - A docset for Skein, built from Skein's own sources rather than downloaded (Jessie's): every public var of the standard library with its argument lists, docstring and source location, from the compiler's model of the namespaces (as Swank's documentation and `M-.` use it), and the language reference from DESIGN.md; generated by a tool in this repository and rebuilt with each release, so it matches the Skein it documents. It is a Dash docset (the SQLite index and HTML pages, so Dash and Zeal open it too), with each entry also kept as data beside the pages (name, argument lists, docstring as Markdown, source location), which Skein Studio shows natively. Libraries (skein-ui and the others) can build theirs the same way. The manual (D-111) already writes the entries as data, `build/manual/data/`, and the HTML pages; the docset is built from them.
 
 **Exit:** Markdown files preview as they're edited; Skein's docset is generated from the checkout and covers every public var; docs open from the editor.
 
-### M3.14 HTTP and the API workbench
+### M3.15 HTTP and the API workbench
 - `skein-curl` in its own repository (libcurl: HTTPS, redirects, proxies, streaming bodies); Xeon Studio's API workbench (`.http` collections, environments with secrets, the response view).
 
 **Exit:** tests against a local server on the three platforms.
 
-### M3.15 Shipping Skein Studio
+### M3.16 Shipping Skein Studio
 - Packages for macOS, Linux and Windows (once skein-ui has its Win32 backend, M2.16), with code signing and notarization on macOS (D-069's open question); Xeon Studio's further features (docks, inline results, team chat) as far as Jessie wants them.
 
 **Exit:** Skein Studio installs and runs from its package on each platform, and Jessie uses it to work on Skein.
@@ -642,7 +654,7 @@ A track beside the M3.x milestones, worked on in its own session; it doesn't com
 - Steps, in order:
   1. ✅ The generator, its `make` target and tests; the quick reference covering the whole standard library; `skein.string` complete as the model namespace, with its examples tested.
   2. ✅ Examples and notes for the rest of the standard library, namespace by namespace: every namespace has examples, arguments and values, and see also for each public var.
-  3. ✅ The entries as data beside the pages, which M3.13's docset reuses (D-102's "Later"): `build/manual/data/`, an EDN file per namespace (each var's name, kind, argument lists, docstring as Markdown, arguments and values, notes, see also, examples, source location and page), `index.edn`, and the language reference as `reference.md`.
+  3. ✅ The entries as data beside the pages, which M3.14's docset reuses (D-102's "Later"): `build/manual/data/`, an EDN file per namespace (each var's name, kind, argument lists, docstring as Markdown, arguments and values, notes, see also, examples, source location and page), `index.edn`, and the language reference as `reference.md`.
 
 **Exit:** `make manual` builds the site from the checkout; every public var has an entry; every namespace's examples pass in `make test`.
 
