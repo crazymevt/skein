@@ -150,7 +150,7 @@ host/tools/bootstrap.sh."
 (def complete
   "The namespaces documented completely: every public var with examples, arguments and
 values, and see also."
-  ["skein.string" "skein.core" "skein.io" "skein.math" "skein.process" "skein.json" "skein.edn" "skein.bytes" "skein.system"])
+  ["skein.string" "skein.core" "skein.io" "skein.math" "skein.process" "skein.json" "skein.edn" "skein.bytes" "skein.system" "skein.time"])
 
 (deftest documented-namespaces-are-complete
   (doseq [ns complete
@@ -161,6 +161,15 @@ values, and see also."
     (is (seq (get exs nm)) (str ns "/" nm " has examples"))
     (is (:args (get notes nm)) (str ns "/" nm " has arguments and values"))
     (is (seq (:see-also (get notes nm))) (str ns "/" nm " has see also"))))
+
+(deftest matching-values
+  (is (manual/value-matches? "[1  2]" [1 2]))
+  (testing "a map's keys in another order"
+    (is (manual/value-matches? "{:b 2, :a 1}" {:a 1 :b 2})))
+  (is (not (manual/value-matches? "{:a 2}" {:a 1})))
+  (testing "text that isn't EDN only matches as printed"
+    (is (manual/value-matches? "#<x>" (symbol "#<x>")))
+    (is (not (manual/value-matches? "#<y>" 1)))))
 
 (deftest not-run-steps
   (testing "a step marked not run is shown but not evaluated"

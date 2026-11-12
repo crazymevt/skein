@@ -527,6 +527,14 @@ value and output."
 
 (defn- normalize [s] (str/trim (str/replace (str s) #"\s+" " ")))
 
+(defn value-matches?
+  "True if a value is what an example's ;=> text says: printed the same (whitespace aside),
+or equal to the text read as EDN, so a map's keys may be in another order."
+  [expected value]
+  (or (= (normalize expected) (normalize (pr-str value)))
+      (handler-case (= value (edn/read-string expected))
+        (error [_] false))))
+
 (defn- check-step*
   [path step]
   (let [out (atom nil)
@@ -540,7 +548,7 @@ value and output."
       (:error result)
       (str where ": " (:code step) "\n  signaled: " (:error result))
 
-      (and (:value step) (not= (normalize (:value step)) (normalize (pr-str (:value result)))))
+      (and (:value step) (not (value-matches? (:value step) (:value result))))
       (str where ": " (:code step) "\n  expected: " (:value step)
            "\n  got:      " (pr-str (:value result)))
 
