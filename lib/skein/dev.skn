@@ -17,7 +17,9 @@ reloads source files when they change, and runs -main under a \"Stop the program
 restart."
   (:require [skein.compiler.reader :as reader]
             [skein.compiler.eval :as evaluator]
-            [skein.compiler.module :as module]))
+            [skein.compiler.module :as module]
+            [skein.io :as io]
+            [skein.net :as net]))
 
 (def version
   "Skein's version, as host/skein.asd gives it (keep the two the same)."
@@ -595,20 +597,36 @@ The debugger also offers the restarts of the task's spawner (D-101)."
 ;;; ------------------------------------------------------------------------------------
 ;;; skein dev: the REPL server, the file watcher and the program
 
-(defn- serve-client [conn n]
-  (let [console (make-console (str "client " n) (fn [] (%read-text conn))
-                              (fn [text] (%write-text conn text)) nil)
+(defn- serve-client
+  "Run a console for the client on the socket conn. What the console writes (from any
+fiber) goes through a channel to one writer, the only fiber that writes the socket."
+  [conn n]
+  (let [out (chan 256)
+        written (promise)
+        console (make-console (str "client " n) (fn [] (%stream-read-some (:handle conn)))
+                              (fn [text] (>! out text)) nil)
         console (assoc console :output (fn [text] (write! console text)))]
+    (service (try (loop []
+                    (when-let [text (<! out)]
+                      (io/write conn text)
+                      (io/flush conn)
+                      (recur)))
+                  (catch error e nil)
+                  (finally (close! out) (deliver written true))))
     (write! console "; Skein " version " REPL\n")
     (try (console-loop console)
-         (finally (%tcp-close conn)))))
+         (finally
+           (close! out)
+           ;; This fiber reads the socket, so it closes it, once the writer has stopped.
+           (deref written 5 nil)
+           (close conn)))))
 
 (defn- start-server
   "Serve the REPL on localhost:port; the server, or nil if it can't listen there."
   [port]
-  (when-let [server (%tcp-listen port)]
+  (when-let [server (try (net/listen port) (catch io/io-error e nil))]
     (service (loop [n 1]
-               (when-let [conn (%tcp-accept server)]
+               (when-let [conn (net/accept server)]
                  (service (serve-client conn n))
                  (recur (inc n)))))
     server))
@@ -754,8 +772,8 @@ Returns 0, or 1 if an error stopped the program."
         program-running (atom true)
         status (atom 0)]
     (println (str "; skein dev: reloading changed files"
-                  (if server (str "; REPL on localhost:" (%tcp-port server)) "")
-                  (if swank (str "; Swank on localhost:" (%tcp-port swank)) "")))
+                  (if server (str "; REPL on localhost:" (net/port server)) "")
+                  (if swank (str "; Swank on localhost:" (net/port swank)) "")))
     ;; zig's first module is slow while its cache fills: do that before the first edit.
     (when (module/available?) (service (module/warm-up!)))
     (service (pause-ticker))
@@ -780,8 +798,8 @@ Returns 0, or 1 if an error stopped the program."
           (sleep 0.02)
           (recur)))
       (stop-watcher)
-      (when server (%tcp-close server))
-      (when swank (%tcp-close swank))
+      (when server (net/close-server server))
+      (when swank (net/close-server swank))
       @status)))
 
 (defn- port-setting

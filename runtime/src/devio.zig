@@ -1,11 +1,11 @@
 //! What the REPL and `skein dev` need from the runtime (M2.6, D-081): file modification
-//! dates for the watcher, reading the terminal, and a TCP server on localhost for the REPL
-//! server. Phase 0 does these in CL (host/src/repl/repl.lisp), so it has only stand-ins.
+//! dates for the watcher and reading the terminal. Its REPL and Swank servers use skein.net
+//! (D-106). Phase 0 does these in CL (host/src/repl/repl.lisp), so it has only stand-ins.
 //!
 //! Everything goes through std.Io, on every platform. A call that waits runs as a
-//! `sched.blocking` call, so its worker is handed to other fibers meanwhile. Servers and
-//! connections are small integers naming entries of a table; text is read in chunks, and
-//! a UTF-8 sequence split between two reads is held back until the rest arrives.
+//! `sched.blocking` call, so its worker is handed to other fibers meanwhile. The terminal
+//! is read in chunks, and a UTF-8 sequence split between two reads is held back until the
+//! rest arrives.
 
 const std = @import("std");
 const platform = @import("platform");
@@ -64,66 +64,25 @@ fn absolutePath(path: Value) Value {
 }
 
 // ---------------------------------------------------------------------------------------
-// Streams: the terminal and TCP connections
-
-const Kind = enum { stdin, server, connection };
+// The terminal (skein.net's sockets are streams of files.zig, D-106)
 
 const Entry = struct {
-    kind: Kind,
-    server: net.Server = undefined,
-    stream: net.Stream = undefined,
     /// The start of a UTF-8 sequence that the last read split.
     pending: [4]u8 = undefined,
     pending_len: usize = 0,
     closed: bool = false,
 };
 
-var lock: platform.Mutex = .{};
-var table: std.ArrayList(?*Entry) = .empty;
+var stdin_entry: Entry = .{};
 
-fn add(e: Entry) Value {
-    const p = alloc.create(Entry) catch rt.fatal("out of memory", .{});
-    p.* = e;
-    lock.lock();
-    defer lock.unlock();
-    table.append(alloc, p) catch rt.fatal("out of memory", .{});
-    return Value.fromFixnum(@intCast(table.items.len - 1));
-}
-
-fn entry(h: Value, comptime what: []const u8) *Entry {
-    if (!h.isFixnum()) rt.raise(.type_error, what ++ " needs a handle", .{});
-    lock.lock();
-    defer lock.unlock();
-    const i: usize = @intCast(h.toFixnum());
-    if (i >= table.items.len) rt.raise(.@"error", what ++ ": no such handle", .{});
-    return table.items[i] orelse rt.raise(.@"error", what ++ ": the handle is closed", .{});
-}
-
-var stdin_handle: ?Value = null;
-
-/// The handle of standard input (made once).
-fn stdinHandle() Value {
-    if (stdin_handle) |h| return h;
-    const h = add(.{ .kind = .stdin });
-    stdin_handle = h;
-    return h;
-}
-
-const ReadCall = struct { e: *Entry, buf: []u8, n: usize = 0, failed: bool = false };
+const ReadCall = struct { buf: []u8, n: usize = 0, failed: bool = false };
 
 fn readBlocking(arg: ?*anyopaque) void {
     const c: *ReadCall = @ptrCast(@alignCast(arg));
     var bufs = [_][]u8{c.buf};
-    c.n = switch (c.e.kind) {
-        .stdin => std.Io.File.stdin().readStreaming(io.stdIo(), &bufs) catch {
-            c.failed = true;
-            return;
-        },
-        .connection => c.e.stream.read(io.stdIo(), &bufs) catch {
-            c.failed = true;
-            return;
-        },
-        .server => unreachable,
+    c.n = std.Io.File.stdin().readStreaming(io.stdIo(), &bufs) catch {
+        c.failed = true;
+        return;
     };
 }
 
@@ -143,15 +102,15 @@ fn completeLength(bytes: []const u8) usize {
     return bytes.len;
 }
 
-/// The next text read from the stream: a non-empty string, or nil at its end.
+/// The next text read from the terminal: a non-empty string, or nil at its end.
 fn readText(h: Value) Value {
-    const e = entry(h, "%read-text");
-    if (e.kind == .server) rt.raise(.@"error", "%read-text needs a connection or the terminal", .{});
+    if (h != Value.fromFixnum(0)) rt.raise(.@"error", "%read-text needs the terminal", .{});
+    const e = &stdin_entry;
     var buf: [4096 + 4]u8 = undefined;
     while (true) {
         if (e.closed) return Value.nil;
         @memcpy(buf[0..e.pending_len], e.pending[0..e.pending_len]);
-        var call: ReadCall = .{ .e = e, .buf = buf[e.pending_len..] };
+        var call: ReadCall = .{ .buf = buf[e.pending_len..] };
         sched.blocking(readBlocking, &call);
         if (call.failed or call.n == 0) {
             e.closed = true;
@@ -166,88 +125,6 @@ fn readText(h: Value) Value {
         if (!std.unicode.utf8ValidateSlice(buf[0..keep])) rt.raise(.@"error", "the input isn't UTF-8 text", .{});
         return string.make(buf[0..keep]);
     }
-}
-
-const WriteCall = struct { e: *Entry, text: []const u8, ok: bool = false };
-
-fn writeBlocking(arg: ?*anyopaque) void {
-    const c: *WriteCall = @ptrCast(@alignCast(arg));
-    var buf: [1024]u8 = undefined;
-    var w = net.Stream.Writer.init(c.e.stream, io.stdIo(), &buf);
-    w.interface.writeAll(c.text) catch return;
-    w.interface.flush() catch return;
-    c.ok = true;
-}
-
-/// Write the string to the connection; false if it's closed.
-fn writeText(h: Value, text: Value) Value {
-    const e = entry(h, "%write-text");
-    if (e.kind != .connection) rt.raise(.@"error", "%write-text needs a connection", .{});
-    if (!string.isString(text)) rt.raise(.type_error, "%write-text needs a string", .{});
-    const t = alloc.dupe(u8, string.bytes(text)) catch rt.fatal("out of memory", .{});
-    defer alloc.free(t);
-    var call: WriteCall = .{ .e = e, .text = t };
-    sched.blocking(writeBlocking, &call);
-    return Value.fromBool(call.ok);
-}
-
-// ---------------------------------------------------------------------------------------
-// The server
-
-const ListenCall = struct { port: u16, server: ?net.Server = null };
-
-fn listenBlocking(arg: ?*anyopaque) void {
-    const c: *ListenCall = @ptrCast(@alignCast(arg));
-    const address: net.IpAddress = .{ .ip4 = net.Ip4Address.loopback(c.port) };
-    c.server = address.listen(io.stdIo(), .{ .reuse_address = true }) catch null;
-}
-
-/// A server listening on localhost's `port`, or nil if it can't (the port is taken).
-fn listen(port: Value) Value {
-    if (!port.isFixnum() or port.toFixnum() < 0 or port.toFixnum() > 65535)
-        rt.raise(.type_error, "%tcp-listen needs a port number", .{});
-    var call: ListenCall = .{ .port = @intCast(port.toFixnum()) };
-    sched.blocking(listenBlocking, &call);
-    const s = call.server orelse return Value.nil;
-    return add(.{ .kind = .server, .server = s });
-}
-
-const AcceptCall = struct { e: *Entry, stream: ?net.Stream = null };
-
-fn acceptBlocking(arg: ?*anyopaque) void {
-    const c: *AcceptCall = @ptrCast(@alignCast(arg));
-    c.stream = c.e.server.accept(io.stdIo()) catch null;
-}
-
-/// The next connection to the server, or nil if it's closed.
-fn accept(h: Value) Value {
-    const e = entry(h, "%tcp-accept");
-    if (e.kind != .server) rt.raise(.@"error", "%tcp-accept needs a server", .{});
-    var call: AcceptCall = .{ .e = e };
-    sched.blocking(acceptBlocking, &call);
-    const s = call.stream orelse return Value.nil;
-    return add(.{ .kind = .connection, .stream = s });
-}
-
-/// Close a server or a connection.
-fn close(h: Value) Value {
-    const e = entry(h, "%tcp-close");
-    switch (e.kind) {
-        .server => e.server.deinit(io.stdIo()),
-        .connection => e.stream.close(io.stdIo()),
-        .stdin => return Value.nil,
-    }
-    lock.lock();
-    defer lock.unlock();
-    table.items[@intCast(h.toFixnum())] = null;
-    return Value.nil;
-}
-
-/// The port a server listens on.
-fn serverPort(h: Value) Value {
-    const e = entry(h, "%tcp-port");
-    if (e.kind != .server) rt.raise(.@"error", "%tcp-port needs a server", .{});
-    return Value.fromFixnum(e.server.socket.address.getPort());
 }
 
 // ---------------------------------------------------------------------------------------
@@ -359,25 +236,6 @@ fn loadModule(path: Value, vars: Value) Value {
 }
 
 // ---------------------------------------------------------------------------------------
-// Swank's framing (M2.7, D-082) counts UTF-8 bytes
-
-/// [the first n bytes of the string, the rest], or nil if it has fewer than n bytes.
-fn utf8Split(s: Value, n: Value) Value {
-    if (!string.isString(s)) rt.raise(.type_error, "%utf8-split needs a string", .{});
-    if (!n.isFixnum() or n.toFixnum() < 0) rt.raise(.type_error, "%utf8-split needs a byte count", .{});
-    const k: usize = @intCast(n.toFixnum());
-    const all = string.bytes(s);
-    if (k > all.len) return Value.nil;
-    if (k < all.len and all[k] & 0xC0 == 0x80) rt.raise(.@"error", "%utf8-split: byte {d} is inside a character", .{k});
-    // Copy first: making the strings may move s.
-    const t = alloc.dupe(u8, all) catch rt.fatal("out of memory", .{});
-    defer alloc.free(t);
-    const head = string.make(t[0..k]);
-    const tail = string.make(t[k..]);
-    return coll.vectorOf(&.{ head, tail });
-}
-
-// ---------------------------------------------------------------------------------------
 // skein.core functions (core.zig's table includes these)
 
 const Args = []const Value;
@@ -416,37 +274,12 @@ pub const entries = [_]CoreEntry{
     }.f },
     .{ .name = "%stdin", .min = 0, .max = 0, .impl = struct {
         fn f(_: Args) Value {
-            return stdinHandle();
+            return Value.fromFixnum(0);
         }
     }.f },
     .{ .name = "%read-text", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return readText(a[0]);
-        }
-    }.f },
-    .{ .name = "%write-text", .min = 2, .max = 2, .impl = struct {
-        fn f(a: Args) Value {
-            return writeText(a[0], a[1]);
-        }
-    }.f },
-    .{ .name = "%tcp-listen", .min = 1, .max = 1, .impl = struct {
-        fn f(a: Args) Value {
-            return listen(a[0]);
-        }
-    }.f },
-    .{ .name = "%tcp-accept", .min = 1, .max = 1, .impl = struct {
-        fn f(a: Args) Value {
-            return accept(a[0]);
-        }
-    }.f },
-    .{ .name = "%tcp-port", .min = 1, .max = 1, .impl = struct {
-        fn f(a: Args) Value {
-            return serverPort(a[0]);
-        }
-    }.f },
-    .{ .name = "%tcp-close", .min = 1, .max = 1, .impl = struct {
-        fn f(a: Args) Value {
-            return close(a[0]);
         }
     }.f },
     .{ .name = "%load-module", .min = 2, .max = 2, .impl = struct {
@@ -470,11 +303,6 @@ pub const entries = [_]CoreEntry{
         fn f(a: Args) Value {
             if (!string.isString(a[0])) rt.raise(.type_error, "%utf8-length needs a string", .{});
             return Value.fromFixnum(@intCast(string.bytes(a[0]).len));
-        }
-    }.f },
-    .{ .name = "%utf8-split", .min = 2, .max = 2, .impl = struct {
-        fn f(a: Args) Value {
-            return utf8Split(a[0], a[1]);
         }
     }.f },
 };

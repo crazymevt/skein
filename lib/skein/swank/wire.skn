@@ -1,0 +1,226 @@
+(ns skein.swank.wire
+  "Swank's messages (M2.7, D-082; M3.4, D-106), which skein.swank's server and
+skein.swank.client both speak: a six-digit hexadecimal length (in UTF-8 bytes), then that
+many bytes of Lisp data.
+  (read-message s eof?)   the next message's datum from the skein.io stream s (a socket),
+                          or eof (nil) at its end
+  (write-message! s x)    send x as a message, and flush s
+  (read-data text) (write-data x)   a message's data, both ways
+
+The data is read into Skein values: lists are lists (and () is nil), t and nil are true and
+nil, :keywords are keywords, pkg:name symbols are symbols with a namespace, and names are
+lowercased, as Emacs writes them. Values are written as Emacs Lisp reads them: nil and
+false as nil, true as t, and values with no Lisp syntax as strings of their printed form."
+  (:require [skein.io :as io]))
+
+;;; ------------------------------------------------------------------------------------
+;;; Text helpers
+
+(defn- ascii-case
+  "s with its ASCII letters from first-code to last-code moved by shift."
+  [s first-code last-code shift]
+  (apply str (map (fn [c] (let [i (int c)] (if (<= first-code i last-code) (char (+ i shift)) c)))
+                  s)))
+
+(defn- lower [s] (ascii-case s 65 90 32))
+
+(defn- hex-digit [c]
+  (let [i (int c)]
+    (cond (<= 48 i 57) (- i 48)
+          (<= 97 i 102) (- i 87)
+          (<= 65 i 70) (- i 55)
+          :else nil)))
+
+(defn- parse-hex
+  "The number the hexadecimal digits of s give, or nil if s has another character."
+  [s]
+  (reduce (fn [n c] (let [d (hex-digit c)] (if (and n d) (+ (* n 16) d) nil))) 0 s))
+
+(defn- hex6
+  "n as six lowercase hexadecimal digits."
+  [n]
+  (loop [n n i 0 out ()]
+    (if (= i 6)
+      (apply str out)
+      (recur (quot n 16) (inc i) (cons (nth "0123456789abcdef" (mod n 16)) out)))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Reading Lisp data
+
+(defcondition swank-error [error]
+  "A message that isn't Lisp data Skein can read, or a request Swank can't answer."
+  (message :reader swank-error-message)
+  (:report (fn [c] (str "Swank: " (swank-error-message c)))))
+
+(defn- fail [& parts] (error swank-error :message (apply str parts)))
+
+;; :pos is a cursor (D-019), so reading a message with non-ASCII text takes O(1) a
+;; character.
+
+(defn- peek-at [st]
+  (%string-char-at (:text st) @(:pos st)))
+
+(defn- advance! [st] (swap! (:pos st) (fn [p] (%string-next (:text st) p))))
+
+(defn- blank? [c] (<= (int c) 32))
+
+(defn- delimiter? [c]
+  (or (blank? c) (contains? #{\( \) \[ \] \" \' \;} c)))
+
+(defn- skip-blank! [st]
+  (loop []
+    (when-let [c (peek-at st)]
+      (cond (blank? c) (do (advance! st) (recur))
+            (= c \;) (do (loop [] (when-let [d (peek-at st)]
+                                    (advance! st)
+                                    (when-not (= d \newline) (recur))))
+                         (recur))
+            :else nil))))
+
+(def ^:private read-datum)
+
+(defn- read-items
+  "The data up to the character close, which ends them."
+  [st close]
+  (advance! st)
+  (loop [items []]
+    (skip-blank! st)
+    (let [c (peek-at st)]
+      (cond (nil? c) (fail "the message ends inside a list")
+            (= c close) (do (advance! st) items)
+            :else (recur (conj items (read-datum st)))))))
+
+(defn- read-text-literal
+  "A string, which Emacs writes with \\\" and \\\\ escaped (and \\n and the like)."
+  [st]
+  (advance! st)
+  (let [text (:text st)
+        next-of (fn [i] (%string-next text i))]
+    (loop [i @(:pos st) start i parts []]
+      (when (>= i (:n st)) (fail "the message ends inside a string"))
+      (let [c (%string-char-at text i)]
+        (cond (= c \") (do (reset! (:pos st) (next-of i))
+                           (apply str (conj parts (%string-slice text start i))))
+              (= c \\)
+              (do (when (>= (next-of i) (:n st)) (fail "the message ends inside a string"))
+                  (let [e (%string-char-at text (next-of i))
+                        after (next-of (next-of i))
+                        parts (conj parts (%string-slice text start i))]
+                    (recur after after
+                           (case e
+                             \n (conj parts "\n")
+                             \t (conj parts "\t")
+                             \r (conj parts "\r")
+                             ;; A backslash before a line break continues the line.
+                             \newline parts
+                             (conj parts (str e))))))
+              :else (recur (next-of i) start parts))))))
+
+(defn- token->datum
+  "What a symbol or number token means."
+  [token]
+  (let [colon (loop [i 0] (cond (= i (count token)) nil
+                                (= (nth token i) \:) i
+                                :else (recur (inc i))))]
+    (cond (= colon 0) (keyword (lower (subs token 1)))
+          (= (lower token) "nil") nil
+          (= (lower token) "t") true
+          (parse-long token) (parse-long token)
+          colon (let [pkg (subs token 0 colon)
+                      nm (subs token (if (and (< (inc colon) (count token))
+                                              (= (nth token (inc colon)) \:))
+                                       (+ colon 2)
+                                       (inc colon)))]
+                  (symbol (lower pkg) (lower nm)))
+          :else (symbol (lower token)))))
+
+(defn- read-token [st]
+  (let [start @(:pos st)]
+    (loop []
+      (let [c (peek-at st)]
+        (when (and c (not (delimiter? c))) (advance! st) (recur))))
+    (%string-slice (:text st) start @(:pos st))))
+
+(defn- read-datum* [st]
+  (skip-blank! st)
+  (let [c (peek-at st)]
+    (cond (nil? c) (fail "the message ends where data was expected")
+          (= c \() (let [items (read-items st \))]
+                     (when (seq items) (apply list items)))
+          (= c \[) (read-items st \])
+          (= c \") (read-text-literal st)
+          (= c \') (do (advance! st) (list (symbol "quote") (read-datum st)))
+          (contains? #{\) \]} c) (fail "unexpected `" c "`")
+          :else (let [token (read-token st)]
+                  (when (empty? token) (fail "unexpected `" c "`"))
+                  (token->datum token)))))
+
+(def ^:private read-datum read-datum*)
+
+(defn read-data
+  "The datum the Lisp data text gives (as the namespace's docstring says)."
+  [text]
+  (let [st {:text text :n (%string-end text) :pos (atom 0)}
+        datum (read-datum st)]
+    (skip-blank! st)
+    (when (peek-at st) (fail "more than one datum in a message"))
+    datum))
+
+;;; ------------------------------------------------------------------------------------
+;;; Writing Lisp data
+
+(defn write-data
+  "x written as Emacs Lisp reads it: nil and false as nil, true as t, and other values
+that have no Lisp syntax as strings of their printed form."
+  [x]
+  (cond (or (nil? x) (false? x)) "nil"
+        (true? x) "t"
+        ;; Skein's string escapes are ones Emacs reads.
+        (string? x) (pr-str x)
+        (keyword? x) (str ":" (when (namespace x) (str (namespace x) "/")) (name x))
+        (symbol? x) (if (namespace x) (str (namespace x) ":" (name x)) (name x))
+        (integer? x) (str x)
+        (float? x) (str (f64 x))
+        (char? x) (str (int x))
+        (or (seq? x) (vector? x) (list? x))
+        (if (seq x) (str "(" (apply str (interpose " " (map write-data x))) ")") "nil")
+        :else (pr-str (pr-str x))))
+
+;;; ------------------------------------------------------------------------------------
+;;; Messages
+
+(defn- read-exactly
+  "The next n bytes of the stream s, a u8 array, or nil if it ends first."
+  [s n]
+  (let [buf (make-array u8 n)]
+    (loop [at 0]
+      (if (= at n)
+        buf
+        (when-let [got (io/read-bytes! s buf at (- n at))]
+          (recur (+ at got)))))))
+
+(defn read-message
+  "The datum of the next message from the skein.io stream s, or eof (nil) at its end. A
+length or data that can't be read signals swank-error."
+  ([s] (read-message s nil))
+  ([s eof]
+   (if-let [header (read-exactly s 6)]
+     (let [text (%utf8-string header)
+           n (or (parse-hex text) (fail "bad message length `" text "`"))]
+       (if-let [payload (read-exactly s n)]
+         (read-data (%utf8-string payload))
+         eof))
+     eof)))
+
+(defn frame
+  "The text that sends x as a message: its length, then its data."
+  [x]
+  (let [payload (write-data x)]
+    (str (hex6 (%utf8-length payload)) payload)))
+
+(defn write-message!
+  "Send x as a message on the skein.io stream s (written by one fiber at a time), and
+flush it. Returns nil."
+  [s x]
+  (io/write s (frame x))
+  (io/flush s))

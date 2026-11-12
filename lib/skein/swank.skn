@@ -2,10 +2,8 @@
   "The Swank server of native skein dev (DESIGN §15, M2.7, D-082), which SLIME connects to.
 
 Swank sends messages both ways as a six-digit hexadecimal length (in UTF-8 bytes), then
-that many bytes of an s-expression. Emacs sends Lisp data; here it's read into Skein
-values: lists are lists (and () is nil), t and nil are true and nil, :keywords are
-keywords, pkg:name symbols are symbols with a namespace, and names are lowercased, as
-Emacs writes them. What's sent back is written as Emacs Lisp reads it.
+that many bytes of an s-expression; skein.swank.wire reads Emacs's Lisp data into Skein
+values and writes them back as Emacs Lisp reads them.
 
 A request is (:emacs-rex form package thread id); the answer is (:return (:ok value) id),
 or (:return (:abort message) id). Requests for the REPL thread run in order in one fiber
@@ -21,14 +19,17 @@ names, or the listener's if there is none of that name; what it prints goes to E
 skein dev starts the server: this namespace gives it start-server when it's loaded."
   (:require [skein.dev :as dev]
             [skein.compiler.reader :as reader]
-            [skein.compiler.expander :as expander]))
+            [skein.compiler.expander :as expander]
+            [skein.io :as io]
+            [skein.net :as net]
+            [skein.swank.wire :as wire]))
 
 (def protocol-version
   "The Swank protocol version connection-info reports."
   "2.30")
 
 ;;; ------------------------------------------------------------------------------------
-;;; Text helpers
+;;; Text helpers (the data and its framing are skein.swank.wire's)
 
 (defn- ascii-case
   "s with its ASCII letters from first-code to last-code moved by shift."
@@ -40,172 +41,12 @@ skein dev starts the server: this namespace gives it start-server when it's load
 
 (defn- upper [s] (ascii-case s 97 122 -32))
 
-(defn- hex-digit [c]
-  (let [i (int c)]
-    (cond (<= 48 i 57) (- i 48)
-          (<= 97 i 102) (- i 87)
-          (<= 65 i 70) (- i 55)
-          :else nil)))
-
-(defn- parse-hex
-  "The number the hexadecimal digits of s give, or nil if s has another character."
-  [s]
-  (reduce (fn [n c] (let [d (hex-digit c)] (if (and n d) (+ (* n 16) d) nil))) 0 s))
-
-(defn- hex6
-  "n as six lowercase hexadecimal digits."
-  [n]
-  (loop [n n i 0 out ()]
-    (if (= i 6)
-      (apply str out)
-      (recur (quot n 16) (inc i) (cons (nth "0123456789abcdef" (mod n 16)) out)))))
-
-;;; ------------------------------------------------------------------------------------
-;;; Reading the data Emacs sends
-
-(defcondition swank-error [error]
-  "A message from Emacs that isn't Lisp data the server can read."
-  (message :reader swank-error-message)
-  (:report (fn [c] (str "Swank: " (swank-error-message c)))))
-
-(defn- fail [& parts] (error swank-error :message (apply str parts)))
+(defn- fail [& parts] (error wire/swank-error :message (apply str parts)))
 
 (defn- message-of
   "The message of an error: a swank-error's without the \"Swank: \" its report adds."
   [e]
-  (if (= (condition-type e) swank-error) (swank-error-message e) (condition-message e)))
-
-;; :pos is a cursor (D-019), so reading a message with non-ASCII text takes O(1) a
-;; character.
-
-(defn- peek-at [st]
-  (%string-char-at (:text st) @(:pos st)))
-
-(defn- advance! [st] (swap! (:pos st) (fn [p] (%string-next (:text st) p))))
-
-(defn- blank? [c] (<= (int c) 32))
-
-(defn- delimiter? [c]
-  (or (blank? c) (contains? #{\( \) \[ \] \" \' \;} c)))
-
-(defn- skip-blank! [st]
-  (loop []
-    (when-let [c (peek-at st)]
-      (cond (blank? c) (do (advance! st) (recur))
-            (= c \;) (do (loop [] (when-let [d (peek-at st)]
-                                    (advance! st)
-                                    (when-not (= d \newline) (recur))))
-                         (recur))
-            :else nil))))
-
-(def ^:private read-datum)
-
-(defn- read-items
-  "The data up to the character close, which ends them."
-  [st close]
-  (advance! st)
-  (loop [items []]
-    (skip-blank! st)
-    (let [c (peek-at st)]
-      (cond (nil? c) (fail "the message ends inside a list")
-            (= c close) (do (advance! st) items)
-            :else (recur (conj items (read-datum st)))))))
-
-(defn- read-text-literal
-  "A string, which Emacs writes with \\\" and \\\\ escaped (and \\n and the like)."
-  [st]
-  (advance! st)
-  (let [text (:text st)
-        next-of (fn [i] (%string-next text i))]
-    (loop [i @(:pos st) start i parts []]
-      (when (>= i (:n st)) (fail "the message ends inside a string"))
-      (let [c (%string-char-at text i)]
-        (cond (= c \") (do (reset! (:pos st) (next-of i))
-                           (apply str (conj parts (%string-slice text start i))))
-              (= c \\)
-              (do (when (>= (next-of i) (:n st)) (fail "the message ends inside a string"))
-                  (let [e (%string-char-at text (next-of i))
-                        after (next-of (next-of i))
-                        parts (conj parts (%string-slice text start i))]
-                    (recur after after
-                           (case e
-                             \n (conj parts "\n")
-                             \t (conj parts "\t")
-                             \r (conj parts "\r")
-                             ;; A backslash before a line break continues the line.
-                             \newline parts
-                             (conj parts (str e))))))
-              :else (recur (next-of i) start parts))))))
-
-(defn- token->datum
-  "What a symbol or number token means."
-  [token]
-  (let [colon (loop [i 0] (cond (= i (count token)) nil
-                                (= (nth token i) \:) i
-                                :else (recur (inc i))))]
-    (cond (= colon 0) (keyword (lower (subs token 1)))
-          (= (lower token) "nil") nil
-          (= (lower token) "t") true
-          (parse-long token) (parse-long token)
-          colon (let [pkg (subs token 0 colon)
-                      nm (subs token (if (and (< (inc colon) (count token))
-                                              (= (nth token (inc colon)) \:))
-                                       (+ colon 2)
-                                       (inc colon)))]
-                  (symbol (lower pkg) (lower nm)))
-          :else (symbol (lower token)))))
-
-(defn- read-token [st]
-  (let [start @(:pos st)]
-    (loop []
-      (let [c (peek-at st)]
-        (when (and c (not (delimiter? c))) (advance! st) (recur))))
-    (%string-slice (:text st) start @(:pos st))))
-
-(defn- read-datum* [st]
-  (skip-blank! st)
-  (let [c (peek-at st)]
-    (cond (nil? c) (fail "the message ends where data was expected")
-          (= c \() (let [items (read-items st \))]
-                     (when (seq items) (apply list items)))
-          (= c \[) (read-items st \])
-          (= c \") (read-text-literal st)
-          (= c \') (do (advance! st) (list (symbol "quote") (read-datum st)))
-          (contains? #{\) \]} c) (fail "unexpected `" c "`")
-          :else (let [token (read-token st)]
-                  (when (empty? token) (fail "unexpected `" c "`"))
-                  (token->datum token)))))
-
-(def ^:private read-datum read-datum*)
-
-(defn read-data
-  "The datum the Lisp data text gives (as the namespace docstring says)."
-  [text]
-  (let [st {:text text :n (%string-end text) :pos (atom 0)}
-        datum (read-datum st)]
-    (skip-blank! st)
-    (when (peek-at st) (fail "more than one datum in a message"))
-    datum))
-
-;;; ------------------------------------------------------------------------------------
-;;; Writing data for Emacs
-
-(defn write-data
-  "x written as Emacs Lisp reads it: nil and false as nil, true as t, and other values
-that have no Lisp syntax as strings of their printed form."
-  [x]
-  (cond (or (nil? x) (false? x)) "nil"
-        (true? x) "t"
-        ;; Skein's string escapes are ones Emacs reads.
-        (string? x) (pr-str x)
-        (keyword? x) (str ":" (when (namespace x) (str (namespace x) "/")) (name x))
-        (symbol? x) (if (namespace x) (str (namespace x) ":" (name x)) (name x))
-        (integer? x) (str x)
-        (float? x) (str (f64 x))
-        (char? x) (str (int x))
-        (or (seq? x) (vector? x) (list? x))
-        (if (seq x) (str "(" (apply str (interpose " " (map write-data x))) ")") "nil")
-        :else (pr-str (pr-str x))))
+  (if (= (condition-type e) wire/swank-error) (wire/swank-error-message e) (condition-message e)))
 
 ;;; ------------------------------------------------------------------------------------
 ;;; Connections
@@ -215,42 +56,17 @@ that have no Lisp syntax as strings of their printed form."
   [c message]
   (>! (:out c) message))
 
-(defn- take-bytes!
-  "The next n bytes from the connection, as a string, or nil when it ends first."
-  [c n]
-  (loop []
-    (let [p @(:pending c)]
-      (if (>= (:bytes p) n)
-        (let [[head tail] (%utf8-split (apply str (:chunks p)) n)]
-          (reset! (:pending c) {:chunks (if (empty? tail) [] [tail]) :bytes (- (:bytes p) n)})
-          head)
-        (when-let [text (%read-text (:socket c))]
-          (reset! (:pending c) {:chunks (conj (:chunks p) text)
-                                :bytes (+ (:bytes p) (%utf8-length text))})
-          (recur))))))
-
-(defn- read-message
-  "The next message from Emacs, or ::end when the connection ends."
-  [c]
-  (if-let [header (take-bytes! c 6)]
-    (let [n (or (parse-hex header) (fail "bad message length `" header "`"))]
-      (if-let [payload (take-bytes! c n)] (read-data payload) ::end))
-    ::end))
-
-(defn- frame
-  "The text that sends the message: its length, then the data."
-  [message]
-  (let [payload (write-data message)]
-    (str (hex6 (%utf8-length payload)) payload)))
-
 (defn- writer
   "Send the connection's messages until it's closed or can't be written to."
   [c]
-  (loop []
-    (when-let [m (<! (:out c))]
-      (if (%write-text (:socket c) (frame m))
-        (recur)
-        (close! (:out c))))))
+  (try (loop []
+         (when-let [m (<! (:out c))]
+           (wire/write-message! (:socket c) m)
+           (recur)))
+       (catch error e nil)
+       (finally
+         (close! (:out c))
+         (deliver (:written c) true))))
 
 (defn- output-fn
   "The *out* function that sends what code prints to Emacs."
@@ -937,7 +753,7 @@ swank-repl:)."
   "True for an error reading or compiling code, or in a request itself (a swank-error):
 no code of the program ran."
   [e]
-  (contains? #{reader/read-error expander/compile-error swank-error} (condition-type e)))
+  (contains? #{reader/read-error expander/compile-error wire/swank-error} (condition-type e)))
 
 (defn- answer*
   "Handle the request form and send its answer. An error in it opens SLDB, in this fiber;
@@ -951,8 +767,8 @@ its abort restart answers (:abort message)."
     (if-not handler
       ;; Not an error in the code being developed: no debugger.
       (reply (list :abort (if (and (seq? form) (symbol? (first form)))
-                            (str "Skein's Swank server has no " (write-data (first form)))
-                            (str "not a request: " (write-data form)))))
+                            (str "Skein's Swank server has no " (wire/write-data (first form)))
+                            (str "not a request: " (wire/write-data form)))))
       (binding [*pending* (conj *pending* id)]
         (try
           (reply
@@ -1000,7 +816,8 @@ its abort restart answers (:abort message)."
            ;; is thread 1.
            :threads (atom {1 listener})
            :next-thread (atom 1)
-           :pending (atom {:chunks [] :bytes 0})
+           ;; Delivered when the writer has stopped, so the socket can be closed.
+           :written (promise)
            :ns (atom (dev/starting-namespace))
            ;; {:history [values] :place i :parts [...] :content [...]}
            :inspector (atom {})}]
@@ -1012,7 +829,7 @@ its abort restart answers (:abort message)."
                   (answer c form pkg id)
                   (recur)))))
     (try (loop []
-           (let [message (read-message c)]
+           (let [message (wire/read-message socket ::end)]
              (when-not (= message ::end)
                (dispatch c message)
                (recur))))
@@ -1022,15 +839,17 @@ its abort restart answers (:abort message)."
            ;; Fibers in the debugger see their inboxes close and leave it.
            (doseq [[_ inbox] @(:threads c)] (close! inbox))
            (close! (:out c))
-           (%tcp-close socket)))))
+           ;; This fiber reads the socket, so it closes it, once the writer has stopped.
+           (deref (:written c) 5 nil)
+           (close socket)))))
 
 (defn start-server
   "Serve Swank on localhost:port (0 for any free port); the server, or nil if it can't
 listen there."
   [port]
-  (when-let [server (%tcp-listen port)]
+  (when-let [server (try (net/listen port) (catch io/io-error e nil))]
     (dev/service (loop []
-                   (when-let [socket (%tcp-accept server)]
+                   (when-let [socket (net/accept server)]
                      (dev/service (serve socket))
                      (recur))))
     server))

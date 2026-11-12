@@ -431,6 +431,46 @@ fn readRest(h: Value) Value {
     return utf8(text.items, "read-text");
 }
 
+/// The length of the longest prefix of `bytes` that doesn't end inside a UTF-8 sequence.
+fn completeLength(bytes: []const u8) usize {
+    var i = bytes.len;
+    var back: usize = 0;
+    while (i > 0 and back < 4) {
+        i -= 1;
+        back += 1;
+        const b = bytes[i];
+        if (b & 0xC0 != 0x80) {
+            const need: usize = if (b < 0x80) 1 else if (b >> 5 == 0b110) 2 else if (b >> 4 == 0b1110) 3 else if (b >> 3 == 0b11110) 4 else 1;
+            return if (back >= need) bytes.len else i;
+        }
+    }
+    return bytes.len;
+}
+
+/// The text that has arrived (a non-empty string), waiting for some; nil at the end. A
+/// character split between two reads waits for its rest (skein dev's REPL server reads a
+/// client this way, D-106).
+fn readSome(h: Value) Value {
+    const s = streamOf(h);
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(alloc);
+    _ = takeCarry(s, &text);
+    while (true) {
+        const keep = completeLength(text.items);
+        if (keep > 0) {
+            s.carry.appendSlice(alloc, text.items[keep..]) catch rt.fatal("out of memory", .{});
+            return utf8(text.items[0..keep], "read");
+        }
+        if (!fill(s, &text)) {
+            checkFailed(s);
+            // What's left of a split character at the end isn't text.
+            return Value.nil;
+        }
+        text.appendSlice(alloc, s.buf[s.start..s.end]) catch rt.fatal("out of memory", .{});
+        s.start = s.end;
+    }
+}
+
 /// Read up to n bytes into array from index start; how many, or nil at the end.
 fn readInto(h: Value, array: Value, start: Value, n: Value) Value {
     const s = streamOf(h);
@@ -635,6 +675,11 @@ pub const entries = [_]Entry{
     .{ .name = "%stream-read-line", .min = 1, .max = 1, .impl = struct {
         fn f(a: Args) Value {
             return readLine(a[0]);
+        }
+    }.f },
+    .{ .name = "%stream-read-some", .min = 1, .max = 1, .impl = struct {
+        fn f(a: Args) Value {
+            return readSome(a[0]);
         }
     }.f },
     .{ .name = "%stream-read-rest", .min = 1, .max = 1, .impl = struct {

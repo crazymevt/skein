@@ -367,10 +367,10 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%make-runtime-var" "%set-runtime-var-dynamic!" "%eval-run" "%install-debugger!"
     "%backtrace"
     ;; The REPL and skein dev (M2.6, D-081; runtime/src/devio.zig)
-    "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen" "%tcp-accept" "%tcp-port"
-    "%tcp-close" "%set-output-var!" "%exit" "%main-thread?" "%run-attached"
+    "%file-mtime" "%stdin" "%read-text" "%set-output-var!" "%exit" "%main-thread?"
+    "%run-attached"
     ;; Swank (M2.7, D-082)
-    "%utf8-length" "%utf8-split" "%absolute-path"
+    "%utf8-length" "%absolute-path"
     ;; Supervisors (M2.8, D-088), and the spawner's restarts in a task's debugger (D-101)
     "%install-task-runner!" "%task-spawner-restarts" "%choose-spawner-restart!"
     ;; Processes (M3.1, D-103)
@@ -402,7 +402,8 @@ When *MV* is true, they also leave NODE's multiple values in the thread's regist
     "%sorted-seq-from" "%sorted-compare" "%sorted-empty" "meta" "with-meta" "ex-info" "ex-data"
     "ex-cause" "ex-message" "%stat" "%delete-path" "%rename-path" "%read-bytes" "%write-bytes"
     "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes" "%stream-write"
-    "%stream-flush" "%stream-close" "%epoch-millis" "%utc-offset" "%write-stderr"
+    "%stream-read-some" "%stream-flush" "%stream-close" "%epoch-millis" "%utc-offset"
+    "%write-stderr"
     ;; Conditions and restarts (M1.5)
     "error" "signal" "warn" "make-condition" "condition?" "error?" "condition-message"
     "condition-type" "condition-type-name" "invoke-restart" "find-restart" "compute-restarts"

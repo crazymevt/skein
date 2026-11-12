@@ -158,9 +158,8 @@ received to that form's metadata (as data), for %syntax-meta.")
                                         (declare (ignore args))
                                         (skein-error 'skein-error nil "~A is native only"
                                                      ,name))))))
-  (native-only "%file-mtime" "%stdin" "%read-text" "%write-text" "%tcp-listen"
-               "%tcp-accept" "%tcp-port" "%tcp-close" "%exit" "%main-thread?"
-               "%run-attached" "%utf8-length" "%utf8-split" "%absolute-path" "%load-module"
+  (native-only "%file-mtime" "%stdin" "%read-text" "%exit" "%main-thread?"
+               "%run-attached" "%utf8-length" "%absolute-path" "%load-module"
                ;; STM (M2.10, D-092)
                "ref" "ref?" "%dosync" "%in-transaction?" "ref-set" "alter" "commute"
                "ensure"
@@ -168,7 +167,7 @@ received to that form's metadata (as data), for %syntax-meta.")
                ;; D-093)
                "%stat" "%delete-path" "%rename-path" "%read-bytes" "%write-bytes"
                "%open-stream" "%stream-read-line" "%stream-read-rest" "%stream-read-bytes"
-               "%stream-write" "%stream-flush" "%stream-close"
+               "%stream-write" "%stream-flush" "%stream-close" "%stream-read-some"
                ;; By-value structs (M2.13, D-096): the C backend's, which runs natively
                "%ctype-layout"))
 
